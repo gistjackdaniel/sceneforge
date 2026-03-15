@@ -1,0 +1,15 @@
+{
+  "zones": [
+    "livingroom",
+    "window_side",
+    "doorway"
+  ],
+  "cameraAnchors": [
+    "wide",
+    "over_shoulder"
+  ],
+  "actorMarks": [
+    "A",
+    "B"
+  ]
+}

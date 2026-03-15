@@ -1,0 +1,13 @@
+#usda 1.0
+(
+    defaultPrim = "ApartmentLivingroom"
+)
+
+def Xform "ApartmentLivingroom"
+{
+    def Scope "Semantics"
+    {
+        string room = "livingroom"
+        string timeOfDay = "late_afternoon"
+    }
+}
