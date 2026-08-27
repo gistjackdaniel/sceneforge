@@ -1,0 +1,58 @@
+---
+description: SceneForge 에디터 UI 패널, UX 플로우, 사용자-facing 표시 규칙
+globs: apps/editor/src/panels/**,apps/editor/src/app/**,apps/editor/src/state/**,apps/editor/src/components/**,apps/editor/src/presentation/**
+alwaysApply: false
+---
+
+# SceneForge Editor UI
+
+기준 문서: [sceneforge_PRD.md](sceneforge_PRD.md) §9–§10, §17
+
+## 패널 역할
+
+| 패널 | 역할 |
+|------|------|
+| Timeline | 1급 작업 공간. Empty clip, linked world, Shared/Instance/Local 배지, proxy/final cache, rerender needed |
+| World Generation | 이미지·prompt·trajectory 입력, 생성 job status, artifact path, memory coverage |
+| Stage (Viewport) | 3DGS/mesh preview, production overlay, placement/rig/camera/light 조작 → Command → 노드 persist |
+| Graph | 현재 컷 서브그래프. World/Shot/Dependency 뷰 전환. 고급 모드에서만 전체 카탈로그 |
+| Inspector | 파라미터 편집, 참조 배지, Reveal References / Break Link / Make Local / Override Value |
+| Library | Asset(월드·캐릭터·룩·프리셋) + project/sequence scope 노드 — shared/instance로 다른 컷 연결 |
+| Chat | 자연어 → Command 번역 (타임라인·스테이지 다음 진입점). 입력은 런타임 검증 |
+
+## UX 플로우 (UI가 지원해야 할 시나리오)
+
+**월드 생성:** 이미지 + trajectory → `ImageToWorldNode` 실행(connector) → `WorldAsset` 등록, artifact·coverage 표시
+
+**컷 촬영:** Stage에서 배우/소품/카메라/조명 배치 → `StageRenderPassNode` → `GenerativeRefinementNode` → `TimelineClip` + cache 연결
+
+**부분 재렌더:** shared 노드 수정 → affected clips + rerender 범위 **승인 전** 표시 → 승인 → proxy/final queue
+
+**3패널 동기화:** Clip 선택 → 해당 Clip Graph 열림 → Viewer가 resolved state 표시 → Camera가 선택 프레임으로 이동
+
+## 보여줄 것 / 숨길 것
+
+**보여줄 것**
+- 컷이 공유 중인 월드·캐릭터·룩
+- Shared/Instance/Local 상태
+- 변경 시 영향받는 컷, memory coverage %
+- proxy/final cache 상태
+
+**숨길 것**
+- 캐시 키, dependency hash, scheduler, DiT 내부, memory injection 방식
+
+문장형 상태 예시를 UI에 활용한다:
+- "이 컷은 CafeWorld_v03, Hero_v02, WarmNightLook을 공유 중입니다."
+- "카메라 경로의 78%는 기존 SpatialMemory로 커버됩니다."
+- "조명 노드를 수정하면 3개 컷이 다시 렌더링됩니다."
+
+## 구현 규칙
+
+- **모든 상태 변경은 Command 경유** — UI Component가 Domain Store를 직접 수정하지 않는다 (`object.position.x = 10` ❌, `commandBus.execute({ type: "UPDATE_NODE_PARAMS", ... })` ✅).
+- Stage 조작은 placement/rig/`CameraPathNode`로 persist — UI 전용 state만 두지 않는다. Project 재로드 시 복원 불가능한 상태를 React state에만 저장하지 않는다.
+- Timeline 스크럽 시 `CameraPathNode`, `StageRenderPassNode`, `RenderCacheEntry` 동기화.
+- 복제 UI는 `링크 / 인스턴스 / 독립 복사` 3분리 — 하나의 "복제" 버튼으로 합치지 않는다.
+- Undo/Redo는 Command 단위.
+- Graph Editor 기본 뷰는 현재 컷 핵심 서브그래프만.
+- Import Video Clip UI는 Future — MVP에 추가하지 않는다.
+- 패널 view state는 `state/editorStore.tsx`에서 project graph와 동기화 (목표: application/presentation 분리, PRD §15).

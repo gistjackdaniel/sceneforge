@@ -1,0 +1,61 @@
+---
+description: 유지보수·확장성·보안 중심 코딩 표준 (DRY, 검증, 에러 처리, 테스트)
+alwaysApply: true
+---
+
+# Engineering Standards
+
+시니어 소프트웨어 엔지니어 관점: **유지보수성, 확장성, 보안**을 우선한다. 아키텍처 규칙은 [sceneforge_PRD.md](sceneforge_PRD.md) §20을 따른다.
+
+## DRY & KISS
+
+- 중복 로직은 공통 모듈로 추출한다 — 현 `apps/editor/src/core/`, 목표 `domain/`·`application/` (PRD §15 매핑).
+- UI 전용 state와 도메인 state를 이중으로 두지 않는다 — 노드/그래프/Asset이 source of truth. Project 재로드 시 복원할 수 없는 상태를 UI에만 저장하지 않는다.
+- MVP 범위 밖 추상화·플러그인 레이어는 만들지 않는다 (PRD §16 MVP Boundary, §18 Phase 순서 준수).
+
+## Command & State
+
+- 모든 상태 변경은 Command를 거친다. UI Component가 Domain Store를 직접 수정하지 않는다.
+- 파일 경로 대신 ID로 참조한다. Node params에는 직렬화 가능한 값만 저장한다.
+- 비동기 작업(connector 실행, render job)은 취소 가능해야 한다 (`AbortSignal`).
+
+## Security-First
+
+- 외부 입력(JSON import, connector 응답, IPC, chat 명령)은 런타임 검증한다. TypeScript `as` 단독 캐스팅 금지.
+- Zod(또는 동등 스키마)로 `deserializeProject`, connector payload, 사용자 입력을 검증한다.
+- 사용자-facing 에러는 일반 메시지 — stack trace, DB/서버 원문, 내부 artifact 경로 노출 금지.
+
+```typescript
+// ❌ BAD — JSON.parse + as
+const parsed = JSON.parse(raw) as ProjectEnvelope;
+
+// ✅ GOOD — schema parse, safe client message
+const parsed = projectEnvelopeSchema.parse(JSON.parse(raw));
+```
+
+## Persistence
+
+- 대용량 바이너리를 JSON에 넣지 않는다 — ID, URI, hash, metadata만 저장.
+- Project 저장은 atomic write. 모든 최상위 문서에 schema version 포함.
+- Asset·Node ID는 파일 경로가 변경되어도 유지한다.
+
+## Documentation
+
+- 코드는 이름·타입으로 의도를 드러낸다. obvious한 주석은 피한다.
+- domain public 함수·connector interface에는 JSDoc — invalidation 범위, downstream 영향, side effect 명시.
+
+## Error Handling
+
+- 빈 `catch`, silent fail 금지. 실패는 로그 + 호출자/UX에 전달 가능한 도메인 에러로 변환.
+- connector job / render queue 실패는 `status: failed` + 구조화 로그. 재시도 가능·불가능 구분.
+- connector adapter(현 `core/lyra/`)에서 외부 예외를 도메인 에러로 변환 — UI·IPC에 raw error 전달하지 않는다. Connector 실패가 Project State를 손상시키면 안 된다.
+
+## Testing
+
+- 순수 domain 로직에 unit test 우선:
+  - dependency 전파 (`core/clipgraph/dependency.ts`, `core/dependency/`) — downstream만 dirty
+  - cache invalidation (`core/cache/invalidation.ts`) — 연결 안 된 clip cache 유지
+  - serialization (`core/project/serialization.ts`) — schema version, round-trip, ID 유지
+  - cache key — UI 위치·표시 이름 변경이 캐시를 무효화하지 않음
+- connector, Electron IPC, Stage 렌더는 mock/stub.
+- PRD §21 Acceptance Tests를 회귀 기준으로 사용한다. UI smoke는 MVP 이후.

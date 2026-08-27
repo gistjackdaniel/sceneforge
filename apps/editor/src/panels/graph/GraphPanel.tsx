@@ -1,3 +1,7 @@
+import { ReferenceBadge } from "../../components/ReferenceBadge";
+import { CacheStatusBadge } from "../../components/CacheStatusBadge";
+import { buildImpactSentence, getAffectedClips } from "../../core/dependency";
+import { edgeSourceId, edgeTargetId } from "../../core/nodes/types";
 import { useEditorStore } from "../../state/editorStore";
 
 export const GraphPanel = () => {
@@ -8,6 +12,11 @@ export const GraphPanel = () => {
 
   const clip = project.clips[ui.selectedClipId];
   const graph = project.clipGraphs[clip.clipGraphId];
+  const focusNodeId = ui.highlightedNodeIds[0] ?? ui.selectedNodeId;
+  const focusNode = project.nodes[focusNodeId];
+  const affectedClips = focusNode
+    ? getAffectedClips(project.clips, project.dependencyMap, focusNode.id)
+    : [];
 
   return (
     <section className="panel graph-panel">
@@ -23,13 +32,24 @@ export const GraphPanel = () => {
         </div>
       </div>
 
+      {focusNode && (
+        <div className="impact-banner">
+          <strong>{focusNode.name}</strong>
+          <span>{buildImpactSentence(focusNode.name, affectedClips.map((item) => item.name))}</span>
+        </div>
+      )}
+
       <div className="graph-grid">
         <div className="graph-column">
           <h3>Nodes</h3>
           <div className="graph-list">
             {graph.nodeIds.map((nodeId) => {
               const node = project.nodes[nodeId];
+              if (!node) {
+                return null;
+              }
               const referenceIds = project.dependencyMap.referencesByNodeId[node.id] ?? [];
+              const nodeAffected = getAffectedClips(project.clips, project.dependencyMap, node.id);
               return (
                 <button
                   key={node.id}
@@ -40,9 +60,11 @@ export const GraphPanel = () => {
                 >
                   <strong>{node.name}</strong>
                   <span>{node.kind}</span>
+                  <span>{node.status}</span>
                   <span>{node.category}</span>
-                  <span>reference: {node.referenceType}</span>
+                  <ReferenceBadge referenceType={node.referenceType} />
                   <span>refs: {referenceIds.length}</span>
+                  {nodeAffected.length > 0 && <span>affected clips: {nodeAffected.length}</span>}
                 </button>
               );
             })}
@@ -56,7 +78,8 @@ export const GraphPanel = () => {
               <div key={edge.id} className="edge-card">
                 <strong>{edge.label}</strong>
                 <span>
-                  {project.nodes[edge.source]?.name} → {project.nodes[edge.target]?.name}
+                  {project.nodes[edgeSourceId(edge)]?.name} →{" "}
+                  {project.nodes[edgeTargetId(edge)]?.name}
                 </span>
               </div>
             ))}
@@ -80,6 +103,23 @@ export const GraphPanel = () => {
             ))}
           </div>
         </div>
+
+        {affectedClips.length > 0 && (
+          <div className="graph-column">
+            <h3>Affected Clips</h3>
+            <div className="graph-list">
+              {affectedClips.map((affectedClip) => (
+                <div key={affectedClip.id} className="edge-card">
+                  <strong>{affectedClip.name}</strong>
+                  <CacheStatusBadge status={affectedClip.cacheStatus} />
+                  <span>
+                    hash: {project.dependencyMap.cacheHashesByClipId[affectedClip.id] ?? "-"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );

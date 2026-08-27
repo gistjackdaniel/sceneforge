@@ -1,8 +1,18 @@
+import { useCallback, useMemo, useState } from "react";
 import { useEditorStore } from "../../state/editorStore";
+import {
+  StageViewport,
+  type StageCameraPose,
+  type StageObjectTransform,
+} from "./StageViewport";
+import { resolveShotState } from "../../domain/worlds/layers";
+import { cameraPathParamsFromNode, cameraPoseAtFrame } from "../../domain/graph/cameraPath";
 
-const WORLD_MODES = ["referenced", "image_based", "structured_3d", "3dgs", "4dgs"] as const;
+interface StagePanelProps {
+  compact?: boolean;
+}
 
-export const StagePanel = () => {
+export const StagePanel = ({ compact = false }: StagePanelProps) => {
   const {
     state: { project, ui },
     dispatch,
@@ -10,122 +20,157 @@ export const StagePanel = () => {
 
   const clip = project.clips[ui.selectedClipId];
   const world = clip.linkedWorldId ? project.worlds[clip.linkedWorldId] : undefined;
-  const graph = project.clipGraphs[clip.clipGraphId];
-  const proxyCache = clip.proxyCacheId ? project.caches[clip.proxyCacheId] : undefined;
+  const activeSequence = project.sequences[project.activeSequenceId];
+  const [captureSignal, setCaptureSignal] = useState(0);
+  const overlayNode = project.nodes[`node-${clip.id}-overlay`];
+  const showOverlay = ui.showWorldOverlay && overlayNode?.parameters.visible !== false;
+
+  const resolved = useMemo(
+    () =>
+      resolveShotState({
+        world,
+        sequence: activeSequence,
+        clip,
+        cameraFrame: activeSequence.playhead,
+      }),
+    [world, activeSequence, clip],
+  );
+
+  const cameraNode = clip.cameraPathNodeId ? project.nodes[clip.cameraPathNodeId] : undefined;
+  const cameraPose = useMemo((): StageCameraPose | undefined => {
+    if (!cameraNode) {
+      return undefined;
+    }
+    const pose = cameraPoseAtFrame(cameraPathParamsFromNode(cameraNode.parameters), activeSequence.playhead);
+    if (!pose) {
+      return undefined;
+    }
+    return {
+      position: pose.position,
+      rotation: [pose.rotation[0], pose.rotation[1], pose.rotation[2]],
+      focalLength: pose.focalLengthMm,
+    };
+  }, [cameraNode, activeSequence.playhead]);
+
+  const handleTransformChange = useCallback(
+    (objectId: string, transform: StageObjectTransform) => {
+      if (transform.kind === "actor") {
+        dispatch({
+          type: "set-actor-placement",
+          clipId: clip.id,
+          mark: objectId,
+          position: transform.position,
+          rotation: transform.rotation,
+        });
+        return;
+      }
+      if (transform.kind === "prop") {
+        dispatch({
+          type: "set-prop-placement",
+          clipId: clip.id,
+          prop: objectId,
+          position: transform.position,
+          rotation: transform.rotation,
+        });
+        return;
+      }
+      dispatch({
+        type: "set-light-transform",
+        clipId: clip.id,
+        lightId: objectId,
+        position: transform.position,
+        rotation: transform.rotation,
+      });
+    },
+    [clip.id, dispatch],
+  );
+
+  const handleCapturePose = useCallback(
+    (payload: { camera: StageCameraPose; objects: StageObjectTransform[] }) => {
+      dispatch({
+        type: "capture-keyframe",
+        clipId: clip.id,
+        pose: payload,
+      });
+    },
+    [clip.id, dispatch],
+  );
 
   return (
-    <section className="panel stage-panel">
-      <div className="panel-header">
-        <div>
-          <p className="eyebrow">World Module / Stage Viewer</p>
-          <h2>Stage</h2>
+    <section className={`panel stage-panel ${compact ? "stage-panel-compact" : ""}`}>
+      {!compact && (
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">World Module / Stage Viewer</p>
+            <h2>Stage</h2>
+          </div>
         </div>
-        <div className="button-row">
-          <button onClick={() => dispatch({ type: "capture-keyframe", clipId: clip.id })}>
-            Capture Keyframe
-          </button>
-          <button onClick={() => dispatch({ type: "render-proxy", clipId: clip.id })}>
-            Refresh Preview
-          </button>
-        </div>
+      )}
+
+      <div className={compact ? "stage-compact-layout" : "stage-layout"}>
+        <StageViewport
+          worldName={world?.name}
+          previewPath={world?.previewPath ?? world?.surfaceMeshPath}
+          showOverlay={showOverlay}
+          cameraPose={cameraPose}
+          onTransformChange={handleTransformChange}
+          onCapturePose={handleCapturePose}
+          captureSignal={captureSignal}
+        />
+
+        {!compact && (
+          <div className="stage-controls">
+            <p className="muted">
+              playhead: {activeSequence.playhead}f · mode: {clip.worldMode ?? "unassigned"}
+              {resolved.layers.length > 1 ? ` · layers: ${resolved.layers.map((layer) => layer.scope).join(" → ")}` : ""}
+            </p>
+          </div>
+        )}
       </div>
 
-      <div className="stage-layout">
-        <div className="stage-canvas">
-          <div className="viewport-overlay">
-            <span>{world?.name ?? "No world linked"}</span>
-            <span>mode: {clip.worldMode ?? "unassigned"}</span>
-            <span>playhead: {project.sequences[project.activeSequenceId].playhead}f</span>
-          </div>
-          <div className="viewport-body">
-            <h3>{world?.name ?? "World Pending"}</h3>
-            <p>{world?.description ?? "Generate World 또는 Reference World를 선택하세요."}</p>
-            <ul>
-              {(world?.elements ?? []).map((element) => (
-                <li key={element.id}>
-                  <strong>{element.name}</strong> <span>{element.kind}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
+      <div className="stage-toolbar">
+        <div className="button-row wrap">
+          <button type="button" onClick={() => setCaptureSignal((value) => value + 1)}>
+            Capture Keyframe
+          </button>
+          <button type="button" onClick={() => dispatch({ type: "toggle-world-overlay" })}>
+            {showOverlay ? "Hide Overlay" : "Show Overlay"}
+          </button>
+          <button type="button" onClick={() => dispatch({ type: "run-stage-pass", clipId: clip.id })}>
+            Stage Pass
+          </button>
+          <button
+            type="button"
+            onClick={() => dispatch({ type: "set-actor-placement", clipId: clip.id, mark: "actor_mark_a" })}
+          >
+            Place Actor
+          </button>
+          <button
+            type="button"
+            onClick={() => dispatch({ type: "set-prop-placement", clipId: clip.id, prop: "hero_chair" })}
+          >
+            Add Prop
+          </button>
         </div>
-
-        <div className="stage-controls">
-          <div className="control-group">
-            <h3>World Mode</h3>
-            {Object.values(project.worlds).map((candidateWorld) => (
-              <div key={candidateWorld.id} className="stack compact">
-                <strong>{candidateWorld.name}</strong>
-                <div className="button-row wrap">
-                  {WORLD_MODES.map((mode) => (
-                    <button
-                      key={mode}
-                      onClick={() =>
-                        dispatch({
-                          type: "set-world",
-                          clipId: clip.id,
-                          worldId: candidateWorld.id,
-                          worldMode: mode,
-                        })
-                      }
-                    >
-                      {mode}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="control-group">
-            <h3>CraftableCinematic</h3>
-            <div className="button-row wrap">
-              <button onClick={() => dispatch({ type: "set-camera-rig", clipId: clip.id, rig: "dolly" })}>
-                Dolly
-              </button>
-              <button onClick={() => dispatch({ type: "set-camera-rig", clipId: clip.id, rig: "handheld" })}>
-                Handheld
-              </button>
-              <button onClick={() => dispatch({ type: "set-camera-rig", clipId: clip.id, rig: "crane" })}>
-                Crane
-              </button>
-              <button onClick={() => dispatch({ type: "set-lighting-rig", clipId: clip.id, rig: "3-point" })}>
-                3-Point Light
-              </button>
-              <button onClick={() => dispatch({ type: "set-lighting-rig", clipId: clip.id, rig: "sunset" })}>
-                Sunset Light
-              </button>
-              <button onClick={() => dispatch({ type: "set-lighting-rig", clipId: clip.id, rig: "neon" })}>
-                Neon Light
-              </button>
-            </div>
-            <div className="button-row wrap">
-              <button onClick={() => dispatch({ type: "apply-shot-preset", clipId: clip.id, preset: "WS" })}>
-                WS
-              </button>
-              <button onClick={() => dispatch({ type: "apply-shot-preset", clipId: clip.id, preset: "MS" })}>
-                MS
-              </button>
-              <button onClick={() => dispatch({ type: "apply-shot-preset", clipId: clip.id, preset: "CU" })}>
-                CU
-              </button>
-              <button onClick={() => dispatch({ type: "apply-shot-preset", clipId: clip.id, preset: "OTS" })}>
-                OTS
-              </button>
-            </div>
-          </div>
-
-          <div className="control-group">
-            <h3>Preview / Cache</h3>
-            <p>{proxyCache?.previewText ?? "proxy preview not generated yet"}</p>
-            <div className="preview-stack">
-              {graph.previewFrames.map((frame) => (
-                <div key={frame} className="preview-frame">
-                  {frame}
-                </div>
-              ))}
-            </div>
-          </div>
+        <div className="button-row wrap shot-presets">
+          <button type="button" onClick={() => dispatch({ type: "apply-shot-preset", clipId: clip.id, preset: "WS" })}>
+            WS
+          </button>
+          <button type="button" onClick={() => dispatch({ type: "apply-shot-preset", clipId: clip.id, preset: "MS" })}>
+            MS
+          </button>
+          <button type="button" onClick={() => dispatch({ type: "apply-shot-preset", clipId: clip.id, preset: "CU" })}>
+            CU
+          </button>
+          <button type="button" onClick={() => dispatch({ type: "apply-shot-preset", clipId: clip.id, preset: "OTS" })}>
+            OTS
+          </button>
+          <button type="button" onClick={() => dispatch({ type: "set-lighting-rig", clipId: clip.id, rig: "3-point" })}>
+            Light
+          </button>
+          <button type="button" onClick={() => dispatch({ type: "set-camera-rig", clipId: clip.id, rig: "dolly" })}>
+            Camera
+          </button>
         </div>
       </div>
     </section>

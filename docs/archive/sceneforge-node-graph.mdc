@@ -1,0 +1,109 @@
+---
+description: SceneForge 노드 그래프, 데이터 모델, 참조, 캐시 invalidation 규칙
+globs: apps/editor/src/core/**,apps/editor/src/domain/**,apps/editor/src/application/**,apps/editor/src/infrastructure/**
+alwaysApply: false
+---
+
+# SceneForge Node Graph
+
+기준 문서: [sceneforge_PRD.md](sceneforge_PRD.md) §2–§12
+
+노드는 계산 단위가 아니라 **제작 객체 + 제작 관계 + 제작 의도 + 캐시 의존성**이다.
+
+## Asset ≠ Node (PRD §3)
+
+- **Asset** = 재사용 가능한 데이터 (`AssetRecord`: contentHash, version, parentVersionId). 월드·생성 영상·캐릭터는 Asset이다.
+- **Node** = Asset과 파라미터로 결과를 계산하는 연산 단위 (`GraphNode`: ports, `NodeStatus = clean|dirty|running|failed|disabled`, contentHash).
+- `TimelineClip`은 노드가 아니라 Graph의 entry point, `RenderCacheEntry`는 캐시 엔트리다.
+- 생성 결과는 항상 Asset으로 등록하고 `ModelExecutionRecord`(input asset IDs, conditions, connector ID, model version, seed, params)를 함께 저장한다.
+
+## Scope & Reference (1급 필드)
+
+| Scope | 용도 |
+|-------|------|
+| `project` | Master World, 캐릭터, 룩, 기본 카메라·Render Preset |
+| `sequence` | 조명, 무드, 세트 드레싱, 카메라 리그 |
+| `clip` | 카메라 경로, 액션, 로컬 수정, 렌더 결과 |
+
+| ReferenceType | 개념 (PRD §5) | 의미 |
+|---------------|--------------|------|
+| `shared` | Hard Link | 여러 컷이 동일 Node를 직접 참조. 수정 시 모두 영향 |
+| `instance` | Instance | 원본 참조 + `overridePatch`로 일부만 override |
+| `local` | Copy | 값 복제 후 원본과 연결 없음 |
+
+enum을 rename하지 않는다. UI 배지는 `Shared / Instance / Local`, 복제 액션은 `링크 / 인스턴스 / 독립 복사`로 3분리.
+
+Scope 규칙: Clip Node를 다른 Clip에서 쓰면 승격 제안(ID 유지). 외부 참조가 있는 Node를 clip scope로 하향하지 않는다.
+
+## Graph 기본 규칙 (PRD §4.3)
+
+- DAG 기본 — 순환 참조는 저장 전 차단(`validateAcyclic`), 실행 순서는 위상 정렬.
+- Node 출력은 입력 hash + params hash로 식별. UI 위치·표시 이름은 캐시 키에 넣지 않는다.
+- Node 삭제 전 참조 위치 검사 — 자동 cascade delete 금지.
+- Node params에는 직렬화 가능한 값만 저장.
+- Dirty 전파는 `DirtyEvent`(reason: params_changed | input_changed | asset_version_changed | implementation_changed | manual_invalidate) → `DependencyService.markDirty` → downstream만 dirty → affected clips 계산.
+
+## 노드 카탈로그 (PRD §7 표준 taxonomy)
+
+- **Source**: `TextSourceNode`, `ImageSourceNode`, `AssetReferenceNode`, `WorldReferenceNode` (`VideoSourceNode`는 Future)
+- **Condition**: `DepthConditionNode`, `CameraConditionNode`, `ReferenceConditionNode`, `ConditionBundleNode` 등
+- **Scene**: `PlacementNode`, `ActorPlacementNode`, `TransformNode`, `ConstraintNode`, `MaterialOverrideNode`
+- **Cinematic**: `CameraRigNode`, `CameraPathNode`, `LensNode`, `LightingRigNode`, `ObjectTrajectoryNode`, `ActionBlockNode`, `ShotPresetNode`
+- **Render/Post**: `ImageToWorldNode`, `StageRenderPassNode`, `GenerativeRefinementNode`, `VideoGenerationNode`, `RenderSettingsNode`, `ColorGradeNode`
+
+모델 이름 기반 노드 금지 (`LyraNode` ❌). Camera Motion과 Object Motion은 동일 노드에 저장하지 않는다.
+
+### 구명칭 → 표준 명칭 매핑 (PRD §7.2 — 새 코드는 표준 명칭만 사용)
+
+| 구명칭 | 통합 후 |
+|--------|---------|
+| `CameraTrajectoryNode` | `CameraPathNode` |
+| `WorldGenerateNode` | `ImageToWorldNode` (모델은 Connector 설정) |
+| `WorldAssetNode` | `WorldAsset`(Asset) + `WorldReferenceNode` |
+| `GeneratedSegmentNode` | `AssetRecord(type: "video")` |
+| `SpatialMemoryNode` | `WorldAsset` memory layer (artifact) |
+| `MemoryRetrieveNode` / `CorrespondenceNode` | Lyra connector 내부 단계 — Core Graph 비노출 |
+| `PropPlacementNode` | `PlacementNode` |
+| `TimelineClipNode` | `TimelineClip` (Timeline 도메인 객체) |
+| `RenderCacheNode` | `RenderCacheEntry` |
+| `PromptNode` | `TextSourceNode` |
+
+## 세 가지 그래프
+
+**World Generation**
+```text
+ImageSourceNode -> CameraPathNode -> ImageToWorldNode(connector: Lyra 2.0)
+  -> WorldAsset (video segment + SpatialMemory + 3DGS/mesh, Asset으로 등록)
+```
+
+**Shot Production**
+```text
+WorldReferenceNode -> [placements, rigs, lens, lighting] -> StageRenderPassNode
+  -> GenerativeRefinementNode -> Clip Cache (TimelineClip이 참조)
+```
+
+**Dependency / Timeline** — shared 노드 → used-by clips, 변경 시 downstream만 invalid + affected list 승인 UX
+
+## Cache (PRD §11)
+
+계층: `L0 Viewport / L1 Node Output / L2 Proxy / L3 Final`. Lyra 특화 캐시(generated_segment, spatial_memory, stage_render_pass)는 L1 `CacheKind`.
+
+Cache Key = nodeType + implementation version + paramsHash + inputHashes + assetVersionHashes (+ backend version). UI 위치·패널 상태·표시 이름·임시 timestamp 포함 금지.
+
+| 변경 | invalid 대상 |
+|------|-------------|
+| `WorldAsset` content | 해당 월드 참조 컷의 stage + render cache |
+| SpatialMemory 갱신 | retrieve result, coverage score |
+| `CameraPathNode` | generated segment, stage pass, render cache (downstream) |
+| `LightingRigNode` | 참조 컷 render cache + affected list 표시 |
+| `GenerativeRefinementNode` | refinement/final render만 (구조 cache 유지) |
+| Node UI 위치·표시 이름·Asset tag | 무효화 없음 |
+
+렌더 우선순위: 플레이헤드 주변 > visible range > affected clips > background queue. `RenderJob`은 취소·재시도 가능해야 한다.
+
+## 구현 체크
+
+- node→clip usage index 유지 (`core/dependency/`, `core/clipgraph/dependency.ts`)
+- invalidation은 downstream만 — 전체 flush 금지 (`core/cache/invalidation.ts`)
+- 생성 모델은 `ModelConnector` 인터페이스(validate/estimate/execute + AbortSignal) 뒤에 격리 — 모델 전용 옵션은 `backendOptions`에만
+- 상태 변경은 Command 경유, dependency graph를 UI가 직접 수정하지 않는다

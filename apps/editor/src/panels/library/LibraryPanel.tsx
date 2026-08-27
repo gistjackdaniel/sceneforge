@@ -1,7 +1,7 @@
-import type { ReferenceType } from "../../core/references/types";
+import { REFERENCE_LABELS, type ReferenceType } from "../../core/references/types";
 import { useEditorStore } from "../../state/editorStore";
 
-const referenceTypes: ReferenceType[] = ["hard_link", "instance", "copy"];
+const referenceTypes: ReferenceType[] = ["shared", "instance", "local"];
 
 export const LibraryPanel = () => {
   const {
@@ -39,7 +39,7 @@ export const LibraryPanel = () => {
                       })
                     }
                   >
-                    Add as {referenceType}
+                    Add as {REFERENCE_LABELS[referenceType]}
                   </button>
                 ))}
               </div>

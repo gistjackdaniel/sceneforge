@@ -1,12 +1,16 @@
+import { computeClipCacheDependencyHash } from "../dependency/cacheDependency";
+import { indexSharedNodeClipUsage } from "../dependency/usageIndex";
 import type { DependencyMap } from "./types";
 import type { NodeBase } from "../nodes/types";
 import type { TimelineClip } from "../project/types";
 import type { NodeReference } from "../references/types";
+import type { ClipGraph } from "./types";
 
 export const buildDependencyMap = (
   nodes: Record<string, NodeBase>,
-  clipNodeIdsByClipId: Record<string, string[]>,
+  clips: Record<string, TimelineClip>,
   references: Record<string, NodeReference>,
+  clipGraphs: Record<string, ClipGraph>,
 ): DependencyMap => {
   const downstreamByNodeId: Record<string, string[]> = {};
   const clipsByNodeId: Record<string, string[]> = {};
@@ -16,27 +20,41 @@ export const buildDependencyMap = (
     downstreamByNodeId[node.id] = [...node.downstreamNodeIds];
   });
 
-  Object.entries(clipNodeIdsByClipId).forEach(([clipId, nodeIds]) => {
-    nodeIds.forEach((nodeId) => {
+  Object.values(clipGraphs).forEach((graph) => {
+    graph.nodeIds.forEach((nodeId) => {
       if (!clipsByNodeId[nodeId]) {
         clipsByNodeId[nodeId] = [];
       }
-      clipsByNodeId[nodeId].push(clipId);
+      if (!clipsByNodeId[nodeId].includes(graph.clipId)) {
+        clipsByNodeId[nodeId].push(graph.clipId);
+      }
     });
   });
 
   Object.values(references).forEach((reference) => {
-    referencesByNodeId[reference.sourceNodeId] = [
-      ...(referencesByNodeId[reference.sourceNodeId] ?? []),
-      reference.id,
-    ];
-    referencesByNodeId[reference.targetNodeId] = [
-      ...(referencesByNodeId[reference.targetNodeId] ?? []),
-      reference.id,
-    ];
+    if (!referencesByNodeId[reference.sourceNodeId]) {
+      referencesByNodeId[reference.sourceNodeId] = [];
+    }
+    if (!referencesByNodeId[reference.targetNodeId]) {
+      referencesByNodeId[reference.targetNodeId] = [];
+    }
+    referencesByNodeId[reference.sourceNodeId].push(reference.id);
+    referencesByNodeId[reference.targetNodeId].push(reference.id);
   });
 
-  return { downstreamByNodeId, clipsByNodeId, referencesByNodeId };
+  const indexedClipsByNodeId = indexSharedNodeClipUsage(references, clipGraphs, clipsByNodeId);
+
+  const cacheHashesByClipId: Record<string, string> = {};
+  Object.values(clips).forEach((clip) => {
+    cacheHashesByClipId[clip.id] = computeClipCacheDependencyHash(clip.id, clipGraphs, nodes);
+  });
+
+  return {
+    downstreamByNodeId,
+    clipsByNodeId: indexedClipsByNodeId,
+    referencesByNodeId,
+    cacheHashesByClipId,
+  };
 };
 
 export const buildClipNodeIndex = (clips: Record<string, TimelineClip>) =>

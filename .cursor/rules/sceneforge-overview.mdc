@@ -1,0 +1,66 @@
+---
+description: SceneForge 제품 정의, 철학, 구현 우선순위, 비기능 요구사항
+alwaysApply: true
+---
+
+# SceneForge Overview
+
+기준 문서: [sceneforge_PRD.md](sceneforge_PRD.md) — 구 문서(blueprint, node_graph_architecture, 구현 계획)를 통합한 단일 기준. 충돌 시 PRD가 우선한다.
+
+## 한 줄 정의
+
+SceneForge는 **지속적으로 유지되는 월드 상태를 여러 컷이 공유하고, 월드·자산·카메라·조명·동작을 노드 그래프로 관리하며, 변경된 부분만 다시 생성하는 AI 영상 제작 IDE**다.
+
+```text
+Input -> Persistent World -> Reusable Graph -> Timeline -> Incremental Render
+```
+
+생성 모델은 교체 가능한 backend다. Lyra 2.0은 첫 번째 Connector 구현체(`image_to_world`)이며 Core Domain이 아니다.
+
+## 핵심 철학 (코드에 반영할 것)
+
+1. **진입점은 timeline** — script나 노드 카탈로그가 아니다.
+2. **그래프는 백엔드 구조** — 사용자가 노드를 직접 조립하는 UI가 아니다. 제작 상태·의존성을 설명한다.
+3. **WorldAsset-first** — 생성 결과를 `WorldAsset`(Asset)으로 패키징. 생성 모델 내부는 노출하지 않는다.
+4. **부분 재렌더링** — shared 노드 수정 시 affected clip list를 **먼저** 보여주고, 승인 후 proxy/final queue에 넣는다.
+5. **recipe > artifact** — 재현 가능한 recipe와 dependency graph가 1급 객체다.
+6. **Asset ≠ Node** — Asset은 재사용 가능한 데이터, Node는 Asset과 파라미터로 결과를 계산하는 연산 단위.
+7. **모든 상태 변경은 Command 경유** — UI가 Domain Store를 직접 수정하지 않는다.
+
+## 구현 우선순위 (PRD §18 — 벗어나지 말 것)
+
+생성 모델 연동보다 **월드·그래프·참조·캐시 구조를 먼저 구현한다.** Lyra 실연동 전까지 stub connector와 샘플 `WorldAsset`으로 개발한다.
+
+1. Phase 1 Domain Foundation — AssetRecord, WorldAssetManifest, GraphNode/Edge, 참조, 저장/복원
+2. Phase 2 Graph Runtime — 위상 정렬, DirtyEvent 전파, content hash, Command/Event 버스
+3. Phase 3 World & Stage Viewer — viewport 조작 → Command → 노드 persist, World Layer/Override
+4. Phase 4 Timeline Integration — frame 기반 clip, Variant(override layer), 3패널 동기화
+5. Phase 5 Rendering — ModelConnector 인터페이스, RenderJob 큐, 취소·재시도, 승인 UX
+6. Phase 6 Generative World Adapter — Lyra 2.0 cloud connector 실연동, ModelExecutionRecord
+7. Future — VideoSource, 동적 재구성, 고급 graph editor
+
+## 디렉터리 규칙 (PRD §15)
+
+목표 구조는 `apps/editor/src/` 아래 4계층이다. 기존 `core/`, `panels/` 코드는 PRD §15 매핑 표에 따라 점진 이동한다.
+
+```text
+domain/          assets, worlds, graph, timeline, rendering (순수 — React/Electron/SDK 의존 금지)
+application/     commands, queries, services
+infrastructure/  persistence, cache, connectors(lyra), renderers
+presentation/    timeline, graph, viewport, world-generation, inspector, library, chat
+```
+
+- 의존성 방향: `presentation → application → domain`, `infrastructure → domain interface 구현`
+- 생성 모델 연동은 반드시 connector adapter로 분리한다 (현 `core/lyra/`, 목표 `infrastructure/connectors/lyra/`).
+- `VideoSourceNode`는 Future — MVP에 넣지 않는다.
+
+## 금지 사항 (PRD §20.3 Anti-Patterns)
+
+- DiT/token layout/correspondence injection 등 모델 내부 구조를 UI·Core Graph에 노출
+- 컷 전체 공유 — 공유 단위는 **개별 노드**
+- shared 노드 수정 시 승인 없이 전체 rerender
+- proxy/final cache 혼합
+- 하나의 Clip을 위해 Master World 복제 — Shared World Reference + Sequence/Clip Override 사용
+- 모델 이름 기반 Node Type (`LyraNode` 등) — task 기반 이름(`ImageToWorldNode`) + Connector 설정
+- Rendered Video를 Source of Truth로 사용
+- 생성 결과만 저장 — input asset IDs, conditions, connector ID, model version, seed 등 `ModelExecutionRecord` 필수
