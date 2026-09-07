@@ -6,6 +6,8 @@ import { collectAllEdges } from "../../domain/graph/dirty";
 import { computeNodeContentHash } from "../../domain/graph/cacheKey";
 import { clipStartFrame, clipDurationFrames, withClipTiming } from "../../domain/timeline/timing";
 import { createClipVariant, setActiveVariant } from "../../domain/timeline/variants";
+import { linkWorldToClip } from "../services/worldLinking";
+import { applyCameraRigToProject } from "../services/cameraCraft";
 import type { CommandResult, DomainCommand, DomainEvent } from "./types";
 
 const event = (type: DomainEvent["type"], payload: Record<string, unknown>, timestamp: string): DomainEvent => ({
@@ -34,6 +36,156 @@ export const applyCommand = (
   });
 
   switch (command.type) {
+    case "CREATE_NODE": {
+      if (project.nodes[command.node.id]) {
+        return fail("Node already exists.");
+      }
+      const node = {
+        ...command.node,
+        params: command.node.parameters,
+        updatedAt: timestamp,
+      };
+      node.contentHash = computeNodeContentHash(node);
+      let nextProject: Project = {
+        ...project,
+        nodes: { ...project.nodes, [node.id]: node },
+      };
+      if (command.clipGraphId) {
+        const graph = nextProject.clipGraphs[command.clipGraphId];
+        if (!graph) {
+          return fail("Clip graph not found.");
+        }
+        nextProject = {
+          ...nextProject,
+          clipGraphs: {
+            ...nextProject.clipGraphs,
+            [graph.id]: {
+              ...graph,
+              nodeIds: graph.nodeIds.includes(node.id) ? graph.nodeIds : [...graph.nodeIds, node.id],
+            },
+          },
+        };
+      }
+      return {
+        project: nextProject,
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "DELETE_NODE", nodeId: node.id },
+          events: [event("NodeCreated", { nodeId: node.id }, timestamp)],
+        },
+      };
+    }
+    case "DELETE_NODE": {
+      const node = project.nodes[command.nodeId];
+      if (!node) {
+        return fail("Node not found.");
+      }
+      const clipGraphId = Object.values(project.clipGraphs).find((graph) =>
+        graph.nodeIds.includes(node.id),
+      )?.id;
+      const nodes = { ...project.nodes };
+      delete nodes[node.id];
+      const clipGraphs = Object.fromEntries(
+        Object.entries(project.clipGraphs).map(([id, graph]) => [
+          id,
+          {
+            ...graph,
+            nodeIds: graph.nodeIds.filter((nodeId) => nodeId !== node.id),
+            edges: graph.edges.filter(
+              (edge) => edge.sourceNodeId !== node.id && edge.targetNodeId !== node.id,
+            ),
+          },
+        ]),
+      );
+      return {
+        project: { ...project, nodes, clipGraphs },
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "CREATE_NODE", node, clipGraphId },
+          events: [event("NodeDeleted", { nodeId: node.id }, timestamp)],
+        },
+      };
+    }
+    case "LINK_CLIP_WORLD": {
+      const clip = project.clips[command.clipId];
+      if (!clip) {
+        return fail("현재 선택된 클립이 없습니다.");
+      }
+      const previousWorldId = clip.linkedWorldId ?? null;
+      if (command.worldId === null) {
+        const refs = Object.values(project.clipGraphs[clip.clipGraphId]?.nodeIds ?? [])
+          .map((id) => project.nodes[id])
+          .filter((node) => node?.kind === "WorldReferenceNode");
+        const nodes = { ...project.nodes };
+        refs.forEach((node) => {
+          if (!node) {
+            return;
+          }
+          delete nodes[node.id];
+        });
+        const graph = project.clipGraphs[clip.clipGraphId];
+        const refIds = new Set(refs.map((node) => node?.id));
+        const nextProject: Project = {
+          ...project,
+          clips: {
+            ...project.clips,
+            [clip.id]: { ...clip, linkedWorldId: undefined, worldMode: undefined },
+          },
+          nodes,
+          clipGraphs: graph
+            ? {
+                ...project.clipGraphs,
+                [graph.id]: {
+                  ...graph,
+                  nodeIds: graph.nodeIds.filter((id) => !refIds.has(id)),
+                  edges: graph.edges.filter(
+                    (edge) => !refIds.has(edge.sourceNodeId) && !refIds.has(edge.targetNodeId),
+                  ),
+                },
+              }
+            : project.clipGraphs,
+        };
+        return {
+          project: nextProject,
+          result: {
+            ok: true,
+            command,
+            inverse: previousWorldId
+              ? { type: "LINK_CLIP_WORLD", clipId: command.clipId, worldId: previousWorldId }
+              : undefined,
+            events: [event("NodeParamsChanged", { clipId: clip.id, worldId: null }, timestamp)],
+          },
+        };
+      }
+      const linked = linkWorldToClip(project, {
+        clipId: command.clipId,
+        worldId: command.worldId,
+        timestamp,
+      });
+      if (linked.reason) {
+        return fail(linked.reason);
+      }
+      if (linked.alreadyLinked) {
+        return {
+          project,
+          result: { ok: true, command, events: [] },
+        };
+      }
+      return {
+        project: linked.project,
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "LINK_CLIP_WORLD", clipId: command.clipId, worldId: previousWorldId },
+          events: [
+            event("NodeParamsChanged", { nodeId: linked.nodeId, worldId: command.worldId }, timestamp),
+            event("NodeMarkedDirty", { nodeId: linked.nodeId }, timestamp),
+          ],
+        },
+      };
+    }
     case "UPDATE_NODE_PARAMS": {
       const node = project.nodes[command.nodeId];
       if (!node) {
@@ -309,6 +461,92 @@ export const applyCommand = (
           ok: true,
           command,
           events: [event("CacheInvalidated", { nodeId: command.nodeId, affectedClipIds: dirty.affectedClipIds }, timestamp)],
+        },
+      };
+    }
+    case "APPLY_CAMERA_RIG": {
+      if (command.restore) {
+        const { rigNodeId, pathNodeId, rigParameters, pathParameters, createdRig } = command.restore;
+        let nodes = { ...project.nodes };
+        if (createdRig) {
+          delete nodes[rigNodeId];
+        } else if (rigParameters && nodes[rigNodeId]) {
+          nodes[rigNodeId] = {
+            ...nodes[rigNodeId],
+            parameters: rigParameters,
+            params: rigParameters,
+            updatedAt: timestamp,
+          };
+          nodes[rigNodeId].contentHash = computeNodeContentHash(nodes[rigNodeId]);
+        }
+        if (pathParameters && nodes[pathNodeId]) {
+          nodes[pathNodeId] = {
+            ...nodes[pathNodeId],
+            parameters: pathParameters,
+            params: pathParameters,
+            updatedAt: timestamp,
+          };
+          nodes[pathNodeId].contentHash = computeNodeContentHash(nodes[pathNodeId]);
+        }
+        const clipGraphs = createdRig
+          ? Object.fromEntries(
+              Object.entries(project.clipGraphs).map(([id, graph]) => [
+                id,
+                { ...graph, nodeIds: graph.nodeIds.filter((nodeId) => nodeId !== rigNodeId) },
+              ]),
+            )
+          : project.clipGraphs;
+        return {
+          project: { ...project, nodes, clipGraphs },
+          result: {
+            ok: true,
+            command,
+            events: [event("NodeParamsChanged", { nodeId: pathNodeId, preset: command.preset }, timestamp)],
+          },
+        };
+      }
+      const clip = project.clips[command.clipId];
+      const pathNodeId = clip ? (clip.cameraPathNodeId ?? clip.cameraTrajectoryNodeId ?? `node-${clip.id}-trajectory`) : "";
+      const rigNodeId = clip ? `node-${clip.id}-camera` : "";
+      const previousPath = pathNodeId ? project.nodes[pathNodeId]?.parameters : undefined;
+      const previousRig = rigNodeId ? project.nodes[rigNodeId]?.parameters : undefined;
+      const createdRig = Boolean(clip) && !project.nodes[rigNodeId];
+      const applied = applyCameraRigToProject(project, {
+        clipId: command.clipId,
+        preset: command.preset,
+        durationFrames: command.durationFrames,
+        startPosition: command.startPosition,
+        startRotation: command.startRotation,
+        focalLengthMm: command.focalLengthMm,
+        timestamp,
+      });
+      if ("reason" in applied) {
+        return fail(applied.reason);
+      }
+      return {
+        project: applied.project,
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "APPLY_CAMERA_RIG",
+            clipId: command.clipId,
+            preset: command.preset,
+            durationFrames: command.durationFrames,
+            startPosition: command.startPosition,
+            startRotation: command.startRotation,
+            restore: {
+              rigParameters: previousRig ?? null,
+              pathParameters: previousPath,
+              createdRig,
+              rigNodeId: applied.rigNodeId,
+              pathNodeId: applied.pathNodeId,
+            },
+          },
+          events: [
+            event("NodeParamsChanged", { nodeId: applied.rigNodeId, preset: command.preset }, timestamp),
+            event("NodeMarkedDirty", { nodeId: applied.pathNodeId }, timestamp),
+          ],
         },
       };
     }

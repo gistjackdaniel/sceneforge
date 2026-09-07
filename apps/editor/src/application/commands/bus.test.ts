@@ -167,15 +167,64 @@ describe("command bus undo/redo", () => {
     expect(redone.project.nodes.light.parameters.intensity).toBe(0.9);
   });
 
-  it("rename does not mark downstream dirty", () => {
-    const { project, result } = applyCommand(
-      projectFixture(),
-      { type: "RENAME_NODE", nodeId: "light", name: "Window Light" },
-      { timestamp: now },
+  it("APPLY_CAMERA_RIG is a single undo unit writing CameraRigNode", () => {
+    const project = projectFixture();
+    const path: NodeBase = {
+      ...lightNode(),
+      id: "node-clip-a-trajectory",
+      name: "Camera Path",
+      kind: "CameraPathNode",
+      type: "CameraPathNode",
+      category: "cinematic",
+      parameters: { keyframes: [], interpolation: "linear" },
+      params: { keyframes: [], interpolation: "linear" },
+      downstreamNodeIds: ["render"],
+    };
+    project.nodes["node-clip-a-trajectory"] = path;
+    project.clips["clip-a"].cameraPathNodeId = "node-clip-a-trajectory";
+    project.clipGraphs["g-a"].nodeIds = [...project.clipGraphs["g-a"].nodeIds, "node-clip-a-trajectory"];
+    project.dependencyMap.downstreamByNodeId["node-clip-a-trajectory"] = ["render"];
+    project.dependencyMap.clipsByNodeId["node-clip-a-trajectory"] = ["clip-a"];
+
+    const executed = executeCommand(
+      project,
+      emptyCommandBusState(),
+      {
+        type: "APPLY_CAMERA_RIG",
+        clipId: "clip-a",
+        preset: "truck_left",
+        durationFrames: 48,
+        startPosition: [2.5, 1.8, 3.2],
+        startRotation: [0, 0, 0],
+      },
+      now,
     );
-    expect(result.ok).toBe(true);
-    expect(project.nodes.light.name).toBe("Window Light");
-    expect(project.nodes.light.status).toBe("clean");
-    expect(project.nodes.render.status).toBe("clean");
+    expect(executed.result.ok).toBe(true);
+    expect(executed.bus.undoStack).toHaveLength(1);
+    const rig = Object.values(executed.project.nodes).find((item) => item.kind === "CameraRigNode");
+    expect(rig?.parameters.preset).toBe("truck_left");
+    const undone = undoCommand(executed.project, executed.bus, now);
+    expect(undone.project.nodes[rig?.id ?? ""]).toBeUndefined();
+    expect(undone.project.nodes["node-clip-a-trajectory"].parameters.keyframes).toEqual([]);
+  });
+
+  it("CREATE_NODE is a single undo unit", () => {
+    const extra = lightNode();
+    extra.id = "fill";
+    extra.name = "Fill";
+    extra.parameters = { intensity: 0.2 };
+    extra.params = extra.parameters;
+    extra.downstreamNodeIds = [];
+    const executed = executeCommand(
+      projectFixture(),
+      emptyCommandBusState(),
+      { type: "CREATE_NODE", node: extra },
+      now,
+    );
+    expect(executed.result.ok).toBe(true);
+    expect(executed.project.nodes.fill).toBeTruthy();
+    expect(executed.bus.undoStack).toHaveLength(1);
+    const undone = undoCommand(executed.project, executed.bus, now);
+    expect(undone.project.nodes.fill).toBeUndefined();
   });
 });

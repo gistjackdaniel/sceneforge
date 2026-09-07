@@ -8,6 +8,12 @@ import type {
 import { validateRenderRequest } from "../../../domain/rendering/request";
 import { lyraAdapter } from "../../../core/lyra";
 import type { LyraAdapter } from "../../../core/lyra/types";
+import { LYRA_DIRECTION_CAPABILITIES } from "../../../core/lyra/capabilities";
+import {
+  defaultDirectionChannelControls,
+  fullDirectionInvalidation,
+} from "../../../domain/direction";
+import { negotiateDirectionCapabilities } from "../../../domain/rendering/capabilities";
 
 export class ConnectorCancelledError extends Error {
   constructor(message = "Connector execution cancelled") {
@@ -35,6 +41,7 @@ const throwIfAborted = (signal?: AbortSignal) => {
 export const createLyraModelConnector = (adapter: LyraAdapter = lyraAdapter): ModelConnector => ({
   id: "lyra-2.0",
   supportedTasks: () => ["image_to_world", "world_to_video"],
+  capabilities: () => LYRA_DIRECTION_CAPABILITIES,
   validate(request: RenderRequest): ValidationResult {
     const base = validateRenderRequest(request);
     if (!["image_to_world", "world_to_video"].includes(request.task)) {
@@ -55,6 +62,15 @@ export const createLyraModelConnector = (adapter: LyraAdapter = lyraAdapter): Mo
     try {
       if (request.task === "world_to_video") {
         const clipId = String(request.backendOptions.clipId ?? "clip");
+        const capabilityNegotiation = negotiateDirectionCapabilities(
+          defaultDirectionChannelControls(),
+          LYRA_DIRECTION_CAPABILITIES,
+          {
+            performanceSourceTypes: [],
+            hasFrameAccurateCues: false,
+            hasEditedAudio: false,
+          },
+        );
         const job = await adapter.submitVideoRenderJob({
           clipId,
           prompt: request.conditions.find((condition) => condition.type === "text")?.payload?.text as
@@ -71,6 +87,46 @@ export const createLyraModelConnector = (adapter: LyraAdapter = lyraAdapter): Mo
             surfaceMeshPath: String(request.backendOptions.surfaceMeshPath ?? ""),
           },
           memoryCoverage: Number(request.backendOptions.memoryCoverage ?? 0),
+          rerenderScope: {
+            mode: "full",
+            invalidations: fullDirectionInvalidation(),
+          },
+          directionContract: {
+            version: 2,
+            separationPolicy: "shot_and_performance",
+            capabilityNegotiation,
+            shot: {
+              source: "3d_previs",
+              cameraPathNodeId: String(request.backendOptions.cameraPathNodeId ?? "path"),
+              keyframes: [],
+              lens: {
+                focalLengthMm: Number(request.backendOptions.focalLengthMm ?? 35),
+              },
+              stagingAnchors: [],
+              allowedSignals: [
+                "composition",
+                "camera_motion",
+                "lens",
+                "spatial_staging",
+                "eyeline",
+                "screen_direction",
+                "action_boundaries",
+              ],
+              ignoredCharacterSignals: [
+                "body_mechanics",
+                "contact",
+                "facial_performance",
+                "cloth_motion",
+                "previs_interpolation",
+              ],
+            },
+            performance: {
+              source: "external_performance",
+              planNodeId: String(request.backendOptions.performancePlanNodeId ?? "performance-plan"),
+              sources: [],
+              cues: [],
+            },
+          },
         });
         let current = job;
         while (current.status === "queued" || current.status === "running") {

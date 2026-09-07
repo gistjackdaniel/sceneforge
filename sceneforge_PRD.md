@@ -1186,6 +1186,19 @@ infrastructure → domain interface 구현
 
 **숨길 것**: DiT 내부 구조, token layout, correspondence injection, 내부 캐시 키, scheduler, low-level dependency hash.
 
+### 17.1 유저 저니
+
+패널 목록이 아니라 샷 작성 순서가 기본 UX다. 상세 플로우는 `docs/user-flows/`를 따른다.
+
+| 저니 | 순서 | 문서 |
+|------|------|------|
+| 한 샷 작성 | World → Stage → Camera → Performance → Render | `docs/user-flows/shot-authoring.md` |
+| 월드·다음 컷 | 생성/연결 → Add Clip(월드 참조 상속) → 컷별 카메라 | `docs/user-flows/world-and-sequence.md` |
+| 공유 수정 | Shared 변경 → 영향 컷 승인 → 부분 proxy | 위와 동일 |
+| 리뷰·교환 | 재생 → 채널 재렌더 또는 OTIO/XML/EDL | `docs/user-flows/review-and-editorial.md` |
+
+상태 판정은 `domain/workflow/shotWorkflow.ts`가 단일 소스다. Render와 Assistant 렌더 칩은 같은 blocker를 사용한다.
+
 ---
 
 ## 18. Implementation Roadmap
@@ -1337,6 +1350,77 @@ Phase 1–6 도메인·커맨드·커넥터 골격은 구현됨. vitest 42 passe
 
 - [x] 입력 이미지를 Asset으로 등록하고, 생성 결과를 World Asset으로 저장한다.
 - [x] 기존 생성 결과를 재사용할 수 있고, 생성 모델을 다시 호출하지 않아도 Project가 복원된다.
+
+### Phase 7 — Shot / Performance Direction Contract — 수직 슬라이스 완료
+
+**핵심 원칙:** 3D 프리비즈는 구도·카메라·렌즈·공간 배치·시선·스크린 방향·동작 경계만 전달한다. 러프 3D 캐릭터 애니메이션은 최종 퍼포먼스 레퍼런스로 사용하지 않는다.
+
+**구현 대상:** `PerformancePlanNode`, Direction Panel, CAM/AUD/PERF timeline tracks, explicit render direction contract
+
+**작업**
+
+- [x] 클립별 `PerformancePlanNode` 생성과 기존 프로젝트 자동 마이그레이션
+- [x] 텍스트·라이브 액션·모션 캡처·2D 키 애니메이션 퍼포먼스 소스
+- [x] 편집 오디오 URI·오프셋·길이·트랜스크립트와 프레임 단위 dialogue/reaction/action/hold 큐
+- [x] Camera Path·Lens·Look-at·라인 오브 액션·보호 카메라 측·스크린 방향을 Shot Direction으로 직렬화
+- [x] 3D 캡처의 캐릭터 궤적 제거, Actor Placement는 정적 스테이징 앵커로만 전달
+- [x] 바디 메카닉·컨택·표정·의상·프리비즈 보간을 `ignoredCharacterSignals`로 명시
+- [x] 범위를 벗어난 퍼포먼스·오디오 큐의 렌더 사전 차단
+- [x] Timeline의 CAM/AUD/PERF 분리 표시와 Direction 편집 화면
+
+**완료 조건**
+
+- [x] 정확한 카메라 데이터와 외부 퍼포먼스·오디오 데이터가 서로 다른 입력 스트림으로 전달된다.
+- [x] 러프 3D 캐릭터 애니메이션이 최종 영상 렌더 입력에 섞이지 않는다.
+- [x] 대사와 리액션 타이밍을 프레임 단위로 검증할 수 있다.
+
+**후속 단계**
+
+- [x] 모델별 camera/structure/body/face/audio capability negotiation과 명시적 downgrade 기록
+- [x] 채널별 Lock / Strength / Mask와 채널·프레임 범위 기반 부분 재생성 캐시
+- [x] OpenTimelineIO `.otio` 오디오·마커·SceneForge metadata 무손실 왕복
+- [x] Premiere XML(FCP 7 `xmeml`) / CMX 3600 EDL adapter — 통합 Import/Export와 기존 Direction Plan 보존
+- [x] 배치 좌표 기반 180도 규칙 자동 검증과 위반 프레임 표시
+- [x] 모캡·라이브 액션 승인/거절, 컨택·발 미끄러짐·트래킹 신뢰도 품질 게이트
+- [x] 다중 캐릭터 actor/target, dialogue/reaction 선행 큐와 overlap 정책
+
+**2026-09-01 후속 수직 슬라이스**
+
+- Connector가 채널별 `unsupported/prompt/reference/exact` 지원 수준과 Lock/Strength/Mask 지원 여부를 선언한다.
+- 렌더 계약 v2가 요청 제어와 실제 적용 제어, 거절된 퍼포먼스 소스, 프레임 정확도·편집 오디오 downgrade를 함께 기록한다.
+- Performance/Audio 변경은 최종 캐시에 채널별 프레임 구간으로 누적되고 다음 렌더의 `rerenderScope`로 전달된다.
+- 두 Actor Placement의 XZ 배치로 라인 오브 액션을 계산하고 모든 Camera Path keyframe의 보호 측을 검사한다. 축 넘기는 차단하지 않고 명시적으로 경고한다.
+- 거절된 live-action/mocap 소스는 렌더를 차단하며, 낮은 트래킹·컨택 신뢰도와 높은 발 미끄러짐은 사전 경고한다.
+- OpenTimelineIO의 Timeline/Track/Clip/Marker/ExternalReference 구조를 사용하고 `metadata.sceneforge` namespace로 전체 Direction Plan을 보존한다.
+- Premiere XML은 sequence marker, 편집 오디오 clip, frame rate를 교환한다. SceneForge가 내보낸 XML은 cue와 plan metadata를 포함해 재가져오기 품질을 높인다.
+- CMX 3600 EDL은 record timecode를 action range로 가져오며, SceneForge cue/audio comment가 있으면 actor·source·reaction 관계까지 복원한다.
+- 일반 XML/EDL 가져오기는 현재 Performance Source와 Channel Control을 유지하고 타이밍만 교체한다. 전체 무손실 교환의 기준 형식은 계속 OTIO다.
+
+시장·기술 근거와 상세 로드맵은 `docs/research/2026-08-31-shot-performance-control-landscape.md`를 따른다.
+
+### Phase 8 — Guided Shot Workflow — 수직 슬라이스 완료
+
+**핵심 원칙:** 사용자는 노드 그래프 상태를 해석하지 않고도 `World → Stage → Camera → Performance → Render` 순서와 다음 행동을 이해할 수 있어야 한다. 완료 상태는 수동 체크가 아니라 현재 클립 데이터에서 파생한다.
+
+**작업**
+
+- [x] 상단 Shot Workflow와 단계별 Done/Next/Waiting/Optional/Ready 상태
+- [x] World, Stage, Camera, Performance, Render의 단일 readiness evaluator
+- [x] 단계 클릭 시 실제 작업 화면과 Build/Record 모드로 직접 이동
+- [x] 카메라 키가 없는 샷과 유효하지 않은 Direction Plan의 렌더 사전 차단
+- [x] 대사 큐가 있는 경우 편집 오디오 가이드 필수화
+- [x] 환경 전용 샷과 generic acting을 Optional로 명시하고 불필요한 차단 방지
+- [x] 구현되지 않은 상단 Library/Assets 링크를 제거하고 Editor/Worlds/Direction/Render에 실제 동작 연결
+- [x] Playback에 첫 blocker와 해결 행동 표시
+
+**완료 조건**
+
+- [x] 초기 샘플 프로젝트에서 Camera가 다음 단계로 표시되고 클릭하면 Viewport Record로 이동한다.
+- [x] 필수 blocker가 있으면 Render 버튼이 비활성화되고 이유가 함께 보인다.
+- [x] 필수 계약이 충족되면 Render가 다음 단계가 된다.
+- [x] 상단 Workflow와 Playback이 동일한 readiness 결과를 사용한다.
+
+상세 플로우와 수용 시나리오는 `docs/user-flows/`를 따른다.
 
 ### Future
 

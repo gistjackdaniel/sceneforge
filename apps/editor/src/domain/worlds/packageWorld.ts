@@ -110,7 +110,13 @@ export const packageWorldFromExecution = (input: {
 
   const nextWorld: WorldAsset = {
     ...world,
-    sourceAssetIds: Array.from(new Set([...world.sourceAssetIds, worldAsset.id])),
+    sourceAssetIds: Array.from(
+      new Set([
+        ...world.sourceAssetIds,
+        worldAsset.id,
+        ...input.execution.inputAssetIds.filter((id) => assets[id]?.type === "image"),
+      ]),
+    ),
     generatedBy: { ...input.execution, outputAssetIds: outputIds },
   };
 

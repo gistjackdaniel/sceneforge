@@ -15,6 +15,7 @@ import {
   loadAndMigrateProject,
   migrateLoadedProject,
   resolveNodesToRemoveWithClip,
+  linkWorldToClip,
 } from "../application/services";
 import { serializeProject, writeAtomicLocalStorage } from "../infrastructure/persistence";
 import { invalidateCachesForNodeChange } from "../core/cache/invalidation";
@@ -50,21 +51,25 @@ import {
 } from "../core/render/queue";
 import { createStageRenderPassStub } from "../core/render/stageRenderPass";
 import { runGenerativeRefinementStub } from "../core/render/refinementStub";
-import {
-  registerWorldAssetPair,
-  registerWorldFromLyraOutput,
-} from "../core/world/artifactRegistry";
 import type { WorldAsset, WorldMode } from "../core/world/types";
 import { assetFromWorld } from "../domain/assets";
-import { normalizeWorldAsset } from "../domain/worlds";
+import { sampleViewportWorlds } from "../domain/worlds";
 import { applyDirtyEventToNodes } from "../domain/graph/dependencyService";
 import { collectAllEdges, markDirty } from "../domain/graph/dirty";
 import { computeNodeContentHash } from "../domain/graph/cacheKey";
 import {
   cameraPathParamsFromNode,
+  deleteCameraKeyframe,
+  interpolateCameraPose,
+  isFrameInsideClip,
+  keyframeAtExactFrame,
+  trimKeyframesToDuration,
   upsertCameraKeyframe,
 } from "../domain/graph/cameraPath";
-import { clipStartFrame, withClipTiming } from "../domain/timeline/timing";
+import { clipDurationFrames, clipStartFrame, withClipTiming } from "../domain/timeline/timing";
+import { normalizeLegacyRig, type CameraRigPreset } from "../domain/graph/cameraRig";
+import { defaultLensParams, lensNodeIdForClip, lensParamsFromNode } from "../domain/graph/lens";
+import { validateLookAtElement } from "../application/services/cameraCraft";
 import { createClipVariant, ensureClipVariants, setActiveVariant } from "../domain/timeline/variants";
 import { validateClipTemporalNodes } from "../domain/timeline/temporalValidation";
 import {
@@ -76,23 +81,51 @@ import {
   type DomainCommand,
 } from "../application/commands";
 import {
-  applyTrajectoryToCameraPath,
   persistWorldGeneration,
   registerSourceImageAsset,
 } from "../application/services/worldGeneration";
+import { parseWorldGenerationArtifacts } from "../application/services/worldGenerationRequest";
+import {
+  buildCameraKeyframePatch,
+  buildPlacementParams,
+  cameraPathNodeIdForClip as cameraPathNodeIdFromClip,
+  eulerToQuaternionApprox,
+  quaternionToEulerApprox,
+  nodeKindForObject,
+  placementNodeIdForElement,
+  type ViewportObjectKind,
+} from "../application/services/viewportCommit";
+import { createNodeBase } from "../application/services/nodeFactory";
+import type { OverlayKind } from "../domain/worlds/viewportRepresentation";
+import {
+  DEFAULT_OUTPUT_ASPECT,
+  parseOutputAspectPreset,
+  type OutputAspectPreset,
+} from "../domain/rendering";
+import { parseViewportWorkspace, type ViewportWorkspace } from "./viewportWorkspace";
 import {
   cancelRenderJob,
   createEmptyJobQueue,
   type RenderJobQueue,
 } from "../domain/rendering/jobQueue";
+import {
+  createPerformancePlanNode,
+  diffPerformancePlanDirectionInvalidations,
+  performancePlanFromNode,
+  performancePlanNodeIdForClip,
+  validatePerformancePlan,
+  type PerformancePlanParams,
+} from "../domain/performance";
+import type { DirectionChannelInvalidation } from "../domain/direction";
+import { evaluateShotWorkflow } from "../domain/workflow";
 
 const STORAGE_KEY = "sceneforge-editor-state-v3";
 
 /** User-facing left panel tabs. Graph/Library/Inspector are backend-only structures. */
-export type PanelTab = "viewport" | "world-generation";
+export type PanelTab = "viewport" | "world-generation" | "direction";
 
 const normalizePanelTab = (value: unknown): PanelTab =>
-  value === "world-generation" ? "world-generation" : "viewport";
+  value === "world-generation" || value === "direction" ? value : "viewport";
 
 export interface AssistantMessage {
   id: string;
@@ -114,9 +147,19 @@ interface EditorUiState {
   videoRenderJob?: LyraVideoRenderJobState;
   worldGenDraft: {
     imageName: string;
+    imageAssetId: string;
+    imageThumbnailUri: string;
     prompt: string;
     trajectoryLabel: string;
+    seed: string;
   };
+  worldGenJob?: WorldGenJobView;
+  previewWorldId?: string;
+  viewportTool: ViewportTool;
+  viewportWorkspace: ViewportWorkspace;
+  outputAspect: OutputAspectPreset;
+  viewportOverlays: Record<OverlayKind, boolean>;
+  cameraViz: CameraVizState;
   pendingRerender?: {
     nodeId: string;
     affectedClipIds: string[];
@@ -127,6 +170,50 @@ interface EditorUiState {
   showWorldOverlay: boolean;
   domainJobQueue: RenderJobQueue;
 }
+
+export type ViewportTool = "navigate" | "select" | "translate" | "rotate" | "scale" | "camera";
+export type { ViewportWorkspace } from "./viewportWorkspace";
+
+export interface CameraVizState {
+  frustum: boolean;
+  path: boolean;
+  lookAtLine: boolean;
+  keyframeMarkers: boolean;
+}
+
+const defaultCameraViz = (): CameraVizState => ({
+  frustum: true,
+  path: true,
+  lookAtLine: true,
+  keyframeMarkers: true,
+});
+
+export type WorldGenJobStatus =
+  | "idle"
+  | "validating"
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface WorldGenJobView {
+  requestId: string;
+  status: WorldGenJobStatus;
+  progress: number;
+  message: string;
+  error?: string;
+  worldId?: string;
+  executionId?: string;
+}
+
+const defaultViewportOverlays = (): Record<OverlayKind, boolean> => ({
+  actorMarks: true,
+  cameraAnchors: true,
+  lightSockets: true,
+  propSockets: true,
+  walkableZones: true,
+});
 
 export interface EditorState {
   project: Project;
@@ -145,7 +232,7 @@ type EditorAction =
   | { type: "trim-clip"; clipId: string; duration: number }
   | { type: "set-world"; clipId: string; worldId: string; worldMode: WorldMode }
   | { type: "apply-shot-preset"; clipId: string; preset: "WS" | "MS" | "CU" | "OTS" }
-  | { type: "set-camera-rig"; clipId: string; rig: "dolly" | "handheld" | "crane" | "orbit" | "shoulder" }
+  | { type: "set-camera-rig"; clipId: string; rig: CameraRigPreset | "dolly" | "handheld" | "crane" | "orbit" | "shoulder" }
   | { type: "set-lighting-rig"; clipId: string; rig: "3-point" | "sunset" | "neon" | "interior practical" }
   | { type: "capture-keyframe"; clipId: string; pose?: {
       camera: {
@@ -161,6 +248,7 @@ type EditorAction =
       }>;
     } }
   | { type: "update-node-parameter"; nodeId: string; key: string; value: unknown }
+  | { type: "set-performance-plan"; clipId: string; plan: PerformancePlanParams }
   | { type: "set-reference-type"; referenceId: string; referenceType: ReferenceType }
   | { type: "add-library-reference"; clipId: string; libraryNodeId: string; referenceType: ReferenceType }
   | { type: "break-link"; referenceId: string }
@@ -177,7 +265,36 @@ type EditorAction =
       type: "set-world-gen-draft";
       draft: Partial<EditorUiState["worldGenDraft"]>;
     }
-  | { type: "complete-world-generation"; clipId: string; job: LyraJobState }
+  | { type: "set-world-gen-job"; job?: WorldGenJobView }
+  | {
+      type: "register-source-image";
+      input: { id: string; name: string; uri: string; thumbnailUri?: string };
+    }
+  | { type: "clear-source-image" }
+  | { type: "preview-world"; worldId?: string }
+  | { type: "complete-world-generation"; job: LyraJobState; imageAssetId: string }
+  | { type: "set-viewport-tool"; tool: ViewportTool }
+  | { type: "set-viewport-workspace"; workspace: ViewportWorkspace }
+  | { type: "set-output-aspect"; aspect: OutputAspectPreset }
+  | { type: "set-viewport-overlays"; overlays: Partial<Record<OverlayKind, boolean>> }
+  | { type: "set-camera-viz"; viz: Partial<CameraVizState> }
+  | {
+      type: "update-lens";
+      clipId: string;
+      patch: Partial<{ focalLengthMm: number; focusDistanceM: number; aperture: number; sensorPreset: "full-frame" | "super35" | "micro-four-thirds" }>;
+    }
+  | { type: "set-look-at"; clipId: string; elementId?: string; trackingStrength?: number }
+  | { type: "delete-camera-keyframe"; clipId: string; frame: number }
+  | { type: "trim-camera-keyframes"; clipId: string }
+  | {
+      type: "commit-object-transform";
+      clipId: string;
+      worldElementId: string;
+      kind: ViewportObjectKind;
+      position: [number, number, number];
+      rotation: [number, number, number];
+      scale?: [number, number, number];
+    }
   | { type: "run-stage-pass"; clipId: string }
   | { type: "set-actor-placement"; clipId: string; mark: string; position?: [number, number, number]; rotation?: [number, number, number] }
   | { type: "set-prop-placement"; clipId: string; prop: string; position?: [number, number, number]; rotation?: [number, number, number] }
@@ -194,7 +311,7 @@ type EditorAction =
   | { type: "create-variant"; clipId: string; name?: string }
   | { type: "set-active-variant"; clipId: string; variantId: string }
   | { type: "toggle-world-overlay" }
-  | { type: "add-camera-keyframe"; clipId: string; frame: number; position: [number, number, number]; rotation: [number, number, number, number]; focalLengthMm: number }
+  | { type: "add-camera-keyframe"; clipId: string; frame: number; position: [number, number, number]; rotation: [number, number, number, number]; focalLengthMm: number; focusDistanceM?: number; aperture?: number }
   | { type: "cancel-domain-job"; jobId: string }
   | { type: "trim-clip-frames"; clipId: string; durationFrames: number }
   | { type: "load"; state: EditorState };
@@ -217,55 +334,6 @@ const createMetrics = (): PerformanceMetrics => ({
   nodeReuseRate: 0.64,
   cacheHitRate: 0.71,
 });
-
-const createExampleWorld = (): WorldAsset =>
-  normalizeWorldAsset({
-    id: "world-apartment-livingroom",
-    name: "Apartment Livingroom",
-    description: "예제 로케이션. single-location previs용 거실 월드.",
-    usdPath: "worlds/apartment_livingroom/world.usda",
-    semanticsPath: "worlds/apartment_livingroom/semantics.json",
-    navmeshPath: "worlds/apartment_livingroom/navmesh.bin",
-    previewPath: "worlds/apartment_livingroom/preview.glb",
-    proxyKind: "usd",
-    representation: "usd_stage",
-    rootUri: "worlds/apartment_livingroom",
-    previewUri: "worlds/apartment_livingroom/preview.glb",
-    semanticTags: ["interior", "apartment", "livingroom"],
-    props: ["sofa", "coffee table", "lamp", "window", "doorway"],
-    elements: [
-      {
-        id: "elem-room-living",
-        name: "Living Room Zone",
-        kind: "room",
-        description: "메인 대화 장면 구역",
-      },
-      {
-        id: "elem-actor-mark-a",
-        name: "Actor Mark A",
-        kind: "actor_mark",
-        description: "주연 배우 기본 스탠딩 위치",
-      },
-      {
-        id: "elem-camera-anchor-wide",
-        name: "Camera Anchor Wide",
-        kind: "camera_anchor",
-        description: "와이드 샷 기본 카메라 앵커",
-      },
-      {
-        id: "elem-light-socket-window",
-        name: "Window Light Socket",
-        kind: "light_socket",
-        description: "창문 역광 라이트 소켓",
-      },
-      {
-        id: "elem-material-window",
-        name: "Window Glass Material",
-        kind: "material_slot",
-        description: "유리 색상 오버라이드 슬롯",
-      },
-    ],
-  });
 
 const createLibraryNodes = (): NodeBase[] => [
   createNode(
@@ -359,6 +427,7 @@ const createClipNodes = (clipId: string, worldId?: string): NodeBase[] => [
     visible: true,
     elementKinds: ["actor_mark", "camera_anchor", "light_socket"],
   }),
+  createPerformancePlanNode(clipId, now()),
 ];
 
 const makeEdge = (
@@ -395,6 +464,15 @@ const createClipEdges = (clipId: string): GraphEdge[] => [
     `node-${clipId}-render`,
     "contains",
   ),
+  {
+    ...makeEdge(
+      `edge-${clipId}-performance-to-render`,
+      performancePlanNodeIdForClip(clipId),
+      `node-${clipId}-render`,
+      "performance direction",
+    ),
+    sourcePort: "direction",
+  },
 ];
 
 const createCacheEntry = (
@@ -414,7 +492,8 @@ const createCacheEntry = (
 });
 
 const createInitialProject = (): Project => {
-  const world = createExampleWorld();
+  const sampleWorlds = sampleViewportWorlds();
+  const world = sampleWorlds[0];
   const libraryNodes = createLibraryNodes();
   const clipId = "clip-001";
   const graphId = "graph-001";
@@ -436,6 +515,7 @@ const createInitialProject = (): Project => {
     linkedWorldId: world.id,
     clipGraphId: graphId,
     cameraPathNodeId: cameraPathNodeIdForClip(clipId),
+    performancePlanNodeId: performancePlanNodeIdForClip(clipId),
     cameraTrajectoryNodeId: cameraPathNodeIdForClip(clipId),
     graphSnapshotId: graphId,
     cacheStatus: "invalid",
@@ -489,13 +569,18 @@ const createInitialProject = (): Project => {
     },
   };
 
-  const worldAsset = assetFromWorld(world);
-  const seededWorld = {
-    ...world,
-    sourceAssetIds: world.sourceAssetIds.includes(worldAsset.id)
-      ? world.sourceAssetIds
-      : [...world.sourceAssetIds, worldAsset.id],
-  };
+  const seeded = sampleWorlds.map((item) => {
+    const asset = assetFromWorld(item);
+    return {
+      world: {
+        ...item,
+        sourceAssetIds: item.sourceAssetIds.includes(asset.id) ? item.sourceAssetIds : [...item.sourceAssetIds, asset.id],
+      },
+      asset,
+    };
+  });
+  const worlds = Object.fromEntries(seeded.map((item) => [item.world.id, item.world]));
+  const worldAssets = Object.fromEntries(seeded.map((item) => [item.asset.id, item.asset]));
 
   const project: Project = {
     id: "project-sceneforge-editor",
@@ -515,8 +600,8 @@ const createInitialProject = (): Project => {
       referencesByNodeId: {},
       cacheHashesByClipId: {},
     },
-    worlds: { [seededWorld.id]: seededWorld },
-    assets: { [worldAsset.id]: worldAsset },
+    worlds,
+    assets: worldAssets,
     caches: { [proxyCache.id]: proxyCache },
     connectors: { [connector.id]: connector },
     libraryNodeIds: libraryNodes.map((node) => node.id),
@@ -537,15 +622,23 @@ const createInitialState = (): EditorState => {
       playback: "stopped",
       workflowLog: [
         "Timeline-first editor shell initialized.",
-        "Apartment Livingroom world loaded as reference.",
+        "Color-block mesh / splat / point-cloud sample worlds loaded.",
       ],
       assistantMessages: [],
       highlightedNodeIds: [],
       worldGenDraft: {
         imageName: "",
+        imageAssetId: "",
+        imageThumbnailUri: "",
         prompt: "",
-        trajectoryLabel: "default orbit",
+        trajectoryLabel: "generation-explore",
+        seed: "",
       },
+      viewportTool: "navigate",
+      viewportWorkspace: "build",
+      outputAspect: DEFAULT_OUTPUT_ASPECT,
+      viewportOverlays: defaultViewportOverlays(),
+      cameraViz: defaultCameraViz(),
       renderQueue: createEmptyRenderQueue(),
       commandBus: emptyCommandBusState(),
       showWorldOverlay: true,
@@ -566,7 +659,11 @@ const cloneNode = (node: NodeBase, overrides?: Record<string, unknown>): NodeBas
   downstreamNodeIds: [...node.downstreamNodeIds],
 });
 
-const invalidateCachesForNode = (project: Project, nodeId: string): Project => {
+const invalidateCachesForNode = (
+  project: Project,
+  nodeId: string,
+  directionInvalidations?: DirectionChannelInvalidation[],
+): Project => {
   const node = project.nodes[nodeId];
   if (!node) {
     return project;
@@ -601,6 +698,7 @@ const invalidateCachesForNode = (project: Project, nodeId: string): Project => {
     project.dependencyMap,
     node,
     timestamp,
+    directionInvalidations,
   );
   const clips = Object.fromEntries(
     Object.entries(project.clips).map(([id, clip]) => [
@@ -620,7 +718,12 @@ const invalidateCachesForNode = (project: Project, nodeId: string): Project => {
   };
 };
 
-const runDomainCommand = (state: EditorState, command: DomainCommand, logMessage?: string): EditorState => {
+const runDomainCommand = (
+  state: EditorState,
+  command: DomainCommand,
+  logMessage?: string | false,
+  directionInvalidations?: DirectionChannelInvalidation[],
+): EditorState => {
   const executed = executeCommand(state.project, state.ui.commandBus, command, now());
   if (!executed.result.ok) {
     return {
@@ -629,21 +732,30 @@ const runDomainCommand = (state: EditorState, command: DomainCommand, logMessage
     };
   }
   let project = updateProjectMetadata(executed.project);
-  const sourceNodeId =
+  let sourceNodeId =
     "nodeId" in command && typeof command.nodeId === "string"
       ? command.nodeId
       : command.type === "OVERRIDE_VALUE"
         ? project.references[command.referenceId]?.sourceNodeId
         : undefined;
+  if (!sourceNodeId) {
+    const marked = executed.result.events.find((item) => item.type === "NodeMarkedDirty");
+    if (typeof marked?.payload.nodeId === "string") {
+      sourceNodeId = marked.payload.nodeId;
+    }
+  }
   if (sourceNodeId && executed.result.events.some((item) => item.type === "NodeMarkedDirty")) {
-    project = invalidateCachesForNode(project, sourceNodeId);
+    project = invalidateCachesForNode(project, sourceNodeId, directionInvalidations);
   }
   return {
     project,
-    ui: appendWorkflowLog(
-      { ...state.ui, commandBus: executed.bus },
-      logMessage ?? `${command.type} applied.`,
-    ),
+    ui:
+      logMessage === false
+        ? { ...state.ui, commandBus: executed.bus }
+        : appendWorkflowLog(
+            { ...state.ui, commandBus: executed.bus },
+            logMessage ?? `${command.type} applied.`,
+          ),
   };
 };
 
@@ -734,7 +846,12 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
     case "add-empty-clip": {
       const clipId = makeId("clip");
       const graphId = makeId("graph");
-      const clipNodes = createClipNodes(clipId);
+      const sourceClip = project.clips[state.ui.selectedClipId];
+      const inheritWorldId =
+        sourceClip?.linkedWorldId && project.worlds[sourceClip.linkedWorldId]
+          ? sourceClip.linkedWorldId
+          : undefined;
+      const clipNodes = createClipNodes(clipId, inheritWorldId);
       const nodes = { ...project.nodes };
       clipNodes.forEach((node) => {
         nodes[node.id] = node;
@@ -751,8 +868,11 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         sourceInFrame: 0,
         playbackRate: 1,
         sourceType: "empty",
+        linkedWorldId: inheritWorldId,
+        worldMode: inheritWorldId ? "referenced" : undefined,
         clipGraphId: graphId,
         cameraPathNodeId: cameraPathNodeIdForClip(clipId),
+        performancePlanNodeId: performancePlanNodeIdForClip(clipId),
         cameraTrajectoryNodeId: cameraPathNodeIdForClip(clipId),
         graphSnapshotId: graphId,
         cacheStatus: "invalid",
@@ -773,7 +893,7 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
           keyframeNodeIds: [],
         },
       };
-      const nextProject = updateProjectMetadata({
+      let nextProject: Project = {
         ...project,
         clips: { ...project.clips, [clipId]: clip },
         clipGraphs,
@@ -786,12 +906,23 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
             visibleRange: [activeSequence.visibleRange[0], clip.end + 24],
           },
         },
-      });
+      };
+      if (inheritWorldId) {
+        nextProject = linkWorldToClip(nextProject, {
+          clipId,
+          worldId: inheritWorldId,
+          timestamp: now(),
+        }).project;
+      }
+      nextProject = updateProjectMetadata(nextProject);
+      const worldName = inheritWorldId ? nextProject.worlds[inheritWorldId]?.name : undefined;
       return {
         project: nextProject,
         ui: appendWorkflowLog(
           { ...state.ui, selectedClipId: clipId, selectedNodeId: `node-${clipId}-clip` },
-          `${clip.name} created with local ClipGraph stub.`,
+          inheritWorldId
+            ? `${clip.name} created and linked to shared world ${worldName ?? inheritWorldId}.`
+            : `${clip.name} created with local ClipGraph stub.`,
         ),
       };
     }
@@ -949,6 +1080,12 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
     }
     case "select-clip": {
       const clip = project.clips[action.clipId];
+      if (!clip) {
+        return {
+          ...state,
+          ui: appendWorkflowLog(state.ui, "선택한 클립을 찾을 수 없습니다."),
+        };
+      }
       const cameraNodeId = clip.cameraPathNodeId ?? `node-${clip.id}-trajectory`;
       return {
         ...state,
@@ -956,6 +1093,7 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
           ...state.ui,
           selectedClipId: action.clipId,
           selectedNodeId: `node-${clip.id}-clip`,
+          previewWorldId: undefined,
           highlightedNodeIds: [cameraNodeId, `node-${clip.id}-clip`].filter((id) => project.nodes[id]),
         },
       };
@@ -996,84 +1134,24 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
     }
     case "set-world": {
       const clip = project.clips[action.clipId];
-      const clipRootNodeId = `node-${clip.id}-clip`;
-      const clipRootNode = project.nodes[clipRootNodeId];
-      const worldRefNodeId = `node-${clip.id}-worldref`;
+      if (!clip) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
+      }
       const world = project.worlds[action.worldId];
-      const nodes = {
-        ...project.nodes,
-        [clipRootNodeId]: {
-          ...clipRootNode,
-          parameters: {
-            ...clipRootNode.parameters,
-            linkedWorldId: world.id,
-            worldMode: action.worldMode,
-          },
-          updatedAt: now(),
+      if (!world) {
+        return {
+          ...state,
+          ui: appendWorkflowLog(state.ui, "연결된 월드를 찾을 수 없습니다."),
+        };
+      }
+      return runDomainCommand(
+        {
+          ...state,
+          ui: { ...state.ui, previewWorldId: world.id, panelTab: "viewport" },
         },
-        [worldRefNodeId]: project.nodes[worldRefNodeId]
-          ? {
-              ...project.nodes[worldRefNodeId],
-              parameters: {
-                ...project.nodes[worldRefNodeId].parameters,
-                worldId: world.id,
-                worldMode: action.worldMode,
-                proxyKind: world.proxyKind,
-              },
-              updatedAt: now(),
-            }
-          : {
-              ...createNode(worldRefNodeId, "World Reference", "WorldReferenceNode", "scene", {
-                worldId: world.id,
-                worldMode: action.worldMode,
-                proxyKind: world.proxyKind,
-              }),
-              downstreamNodeIds: [`node-${clip.id}-render`],
-            },
-      };
-      const graph = project.clipGraphs[clip.clipGraphId];
-      const nextNodeIds = graph.nodeIds.includes(worldRefNodeId)
-        ? graph.nodeIds
-        : [...graph.nodeIds, worldRefNodeId];
-      const nextEdges = graph.edges.some((edge) => edgeSourceId(edge) === worldRefNodeId)
-        ? graph.edges
-        : [
-            ...graph.edges,
-            makeEdge(makeId("edge-world"), worldRefNodeId, `node-${clip.id}-render`, "references"),
-          ];
-      const nextProject = updateProjectMetadata(
-        invalidateCachesForNode(
-          {
-            ...project,
-            clips: {
-              ...project.clips,
-              [clip.id]: {
-                ...clip,
-                linkedWorldId: world.id,
-                worldMode: action.worldMode,
-              },
-            },
-            nodes,
-            clipGraphs: {
-              ...project.clipGraphs,
-              [graph.id]: {
-                ...graph,
-                nodeIds: nextNodeIds,
-                edges: nextEdges,
-                previewFrames: [`${world.name} attached`, ...graph.previewFrames],
-              },
-            },
-          },
-          worldRefNodeId,
-        ),
+        { type: "LINK_CLIP_WORLD", clipId: clip.id, worldId: world.id },
+        `${clip.name} linked to ${world.name}.`,
       );
-      return {
-        project: nextProject,
-        ui: appendWorkflowLog(
-          { ...state.ui, selectedNodeId: worldRefNodeId },
-          `${clip.name} linked to ${world.name} (${action.worldMode}).`,
-        ),
-      };
     }
     case "apply-shot-preset": {
       const nodeId = `node-${action.clipId}-shot`;
@@ -1123,44 +1201,32 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
       };
     }
     case "set-camera-rig": {
-      const nodeId = `node-${action.clipId}-camera`;
-      const graph = project.clipGraphs[project.clips[action.clipId].clipGraphId];
-      const nodes = {
-        ...project.nodes,
-        [nodeId]: {
-          ...createNode(nodeId, "Camera Rig", "CameraRigNode", "cinematic", {
-            rig: action.rig,
-            speed: action.rig === "handheld" ? 1.2 : 0.8,
-          }),
-          downstreamNodeIds: [`node-${action.clipId}-render`],
+      const clip = project.clips[action.clipId];
+      if (!clip) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
+      }
+      const preset = normalizeLegacyRig(action.rig);
+      const pathNode = project.nodes[cameraPathNodeIdFromClip(clip)];
+      const sequence = project.sequences[project.activeSequenceId];
+      const localFrame = Math.max(0, (sequence?.playhead ?? 0) - clipStartFrame(clip));
+      const pose = pathNode
+        ? interpolateCameraPose(cameraPathParamsFromNode(pathNode.parameters), localFrame)
+        : undefined;
+      const lensNode = project.nodes[lensNodeIdForClip(clip.id)];
+      const lens = lensParamsFromNode(lensNode?.parameters ?? {});
+      return runDomainCommand(
+        state,
+        {
+          type: "APPLY_CAMERA_RIG",
+          clipId: clip.id,
+          preset,
+          durationFrames: Math.max(2, clipDurationFrames(clip)),
+          startPosition: pose?.position ?? [2.5, 1.8, 3.2],
+          startRotation: pose ? quaternionToEulerApprox(pose.rotation) : [0, 0, 0],
+          focalLengthMm: lens.focalLengthMm,
         },
-      };
-      const nextProject = updateProjectMetadata(
-        invalidateCachesForNode(
-          {
-            ...project,
-            nodes,
-            clipGraphs: {
-              ...project.clipGraphs,
-              [graph.id]: {
-                ...graph,
-                nodeIds: graph.nodeIds.includes(nodeId) ? graph.nodeIds : [...graph.nodeIds, nodeId],
-                edges: graph.edges.some((edge) => edgeSourceId(edge) === nodeId)
-                  ? graph.edges
-                  : [
-                      ...graph.edges,
-                      makeEdge(makeId("edge-camera"), nodeId, `node-${action.clipId}-render`, "captures"),
-                    ],
-              },
-            },
-          },
-          nodeId,
-        ),
+        `Camera rig ${preset} applied to CameraRigNode.`,
       );
-      return {
-        project: nextProject,
-        ui: appendWorkflowLog({ ...state.ui, selectedNodeId: nodeId }, `Camera rig ${action.rig} set.`),
-      };
     }
     case "set-lighting-rig": {
       const nodeId = `node-${action.clipId}-light`;
@@ -1217,16 +1283,20 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         objects: action.pose?.objects ?? [],
       });
       keyframeNode.downstreamNodeIds = [`node-${clip.id}-render`];
+      const localFrame = Math.max(0, activeSequence.playhead - clipStartFrame(clip));
       const cameraNodeId = clip.cameraPathNodeId ?? cameraPathNodeIdForClip(clip.id);
       const cameraNode = project.nodes[cameraNodeId];
       const cameraParams = cameraPathParamsFromNode(cameraNode?.parameters ?? {});
       const rotation = action.pose?.camera.rotation ?? [0, 0, 0];
-      const nextCameraParams = upsertCameraKeyframe(cameraParams, {
-        frame: activeSequence.playhead,
-        position: action.pose?.camera.position ?? [2.5, 1.8, 3.2],
-        rotation: [rotation[0], rotation[1], rotation[2], 1],
-        focalLengthMm: action.pose?.camera.focalLength ?? 35,
-      });
+      const nextCameraParams =
+        cameraNode && isFrameInsideClip(localFrame, clipDurationFrames(clip))
+          ? upsertCameraKeyframe(cameraParams, {
+              frame: localFrame,
+              position: action.pose?.camera.position ?? [2.5, 1.8, 3.2],
+              rotation: eulerToQuaternionApprox(rotation),
+              focalLengthMm: action.pose?.camera.focalLength ?? 35,
+            })
+          : cameraParams;
       const nodes = {
         ...project.nodes,
         [keyframeId]: keyframeNode,
@@ -1302,6 +1372,31 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
           `${impact}${needsApproval ? " 승인 후 부분 재렌더링 큐에 추가됩니다." : ""}`,
         ),
       };
+    }
+    case "set-performance-plan": {
+      const clip = project.clips[action.clipId];
+      if (!clip) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "Performance plan clip was not found.") };
+      }
+      const nodeId = clip.performancePlanNodeId ?? performancePlanNodeIdForClip(clip.id);
+      const node = project.nodes[nodeId];
+      if (!node || node.kind !== "PerformancePlanNode") {
+        return {
+          ...state,
+          ui: appendWorkflowLog(state.ui, "Performance direction node is missing. Reload the project to migrate it."),
+        };
+      }
+      const previousPlan = performancePlanFromNode(node.parameters);
+      const directionInvalidations = diffPerformancePlanDirectionInvalidations(
+        previousPlan,
+        action.plan,
+      );
+      return runDomainCommand(
+        state,
+        { type: "UPDATE_NODE_PARAMS", nodeId, patch: { ...action.plan } },
+        false,
+        directionInvalidations,
+      );
     }
     case "set-reference-type": {
       const reference = project.references[action.referenceId];
@@ -1521,201 +1616,274 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
           worldGenDraft: { ...state.ui.worldGenDraft, ...action.draft },
         },
       };
-    case "complete-world-generation": {
+    case "set-world-gen-job":
+      return {
+        ...state,
+        ui: { ...state.ui, worldGenJob: action.job },
+      };
+    case "register-source-image": {
+      const assets = registerSourceImageAsset(project.assets ?? {}, action.input);
+      return {
+        project: updateProjectMetadata({ ...project, assets }),
+        ui: {
+          ...state.ui,
+          worldGenDraft: {
+            ...state.ui.worldGenDraft,
+            imageName: action.input.name,
+            imageAssetId: action.input.id,
+            imageThumbnailUri: action.input.thumbnailUri ?? action.input.uri,
+          },
+        },
+      };
+    }
+    case "clear-source-image":
+      return {
+        ...state,
+        ui: {
+          ...state.ui,
+          worldGenDraft: {
+            ...state.ui.worldGenDraft,
+            imageName: "",
+            imageAssetId: "",
+            imageThumbnailUri: "",
+          },
+        },
+      };
+    case "preview-world":
+      return {
+        ...state,
+        ui: {
+          ...state.ui,
+          previewWorldId: action.worldId,
+          panelTab: action.worldId ? "viewport" : state.ui.panelTab,
+        },
+      };
+    case "set-viewport-tool":
+      return { ...state, ui: { ...state.ui, viewportTool: action.tool } };
+    case "set-viewport-workspace":
+      return {
+        ...state,
+        ui: {
+          ...state.ui,
+          viewportWorkspace: action.workspace,
+          viewportTool: action.workspace === "record" ? "camera" : "navigate",
+        },
+      };
+    case "set-output-aspect":
+      return { ...state, ui: { ...state.ui, outputAspect: parseOutputAspectPreset(action.aspect) } };
+    case "set-viewport-overlays":
+      return {
+        ...state,
+        ui: {
+          ...state.ui,
+          viewportOverlays: { ...state.ui.viewportOverlays, ...action.overlays },
+        },
+      };
+    case "set-camera-viz":
+      return {
+        ...state,
+        ui: {
+          ...state.ui,
+          cameraViz: { ...state.ui.cameraViz, ...action.viz },
+        },
+      };
+    case "update-lens": {
       const clip = project.clips[action.clipId];
-      const graph = project.clipGraphs[clip.clipGraphId];
-      const output = action.job.output;
-      if (!output) {
+      if (!clip) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
+      }
+      const nodeId = lensNodeIdForClip(clip.id);
+      const existing = project.nodes[nodeId];
+      const nextParams = { ...defaultLensParams(), ...(existing ? lensParamsFromNode(existing.parameters) : {}), ...action.patch };
+      if (!existing) {
+        const created = createNodeBase({
+          id: nodeId,
+          name: "Lens",
+          kind: "LensNode",
+          category: "cinematic",
+          parameters: nextParams,
+          timestamp: now(),
+          downstreamNodeIds: [`node-${clip.id}-render`],
+        });
+        return runDomainCommand(
+          state,
+          { type: "CREATE_NODE", node: created, clipGraphId: clip.clipGraphId },
+          `LensNode created (${nextParams.focalLengthMm}mm).`,
+        );
+      }
+      return runDomainCommand(
+        state,
+        { type: "UPDATE_NODE_PARAMS", nodeId, patch: nextParams },
+        `LensNode updated (${nextParams.focalLengthMm}mm / f${nextParams.aperture ?? "—"}).`,
+      );
+    }
+    case "set-look-at": {
+      const clip = project.clips[action.clipId];
+      if (!clip) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
+      }
+      const world = clip.linkedWorldId ? project.worlds[clip.linkedWorldId] : undefined;
+      const checked = validateLookAtElement(action.elementId, world?.elements ?? []);
+      if (!checked.ok) {
+        return { ...state, ui: appendWorkflowLog(state.ui, checked.reason) };
+      }
+      const nodeId = cameraPathNodeIdFromClip(clip);
+      const node = project.nodes[nodeId];
+      if (!node) {
+        return state;
+      }
+      const current = cameraPathParamsFromNode(node.parameters);
+      return runDomainCommand(
+        state,
+        {
+          type: "UPDATE_NODE_PARAMS",
+          nodeId,
+          patch: {
+            ...current,
+            lookAtTargetElementId: action.elementId || undefined,
+            trackingStrength: action.trackingStrength ?? current.trackingStrength ?? current.stabilization,
+          },
+        },
+        action.elementId ? `Look-at target ${action.elementId}.` : "Look-at target cleared.",
+      );
+    }
+    case "commit-object-transform": {
+      const clip = project.clips[action.clipId];
+      if (!clip) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
+      }
+      if (action.kind === "camera") {
+        if (state.ui.viewportWorkspace !== "build") {
+          return state;
+        }
+        const nodeId = cameraPathNodeIdFromClip(clip);
+        const node = project.nodes[nodeId];
+        if (!node) {
+          return state;
+        }
+        const sequence = project.sequences[project.activeSequenceId];
+        const localFrame = Math.max(0, (sequence?.playhead ?? 0) - clipStartFrame(clip));
+        if (!isFrameInsideClip(localFrame, clipDurationFrames(clip))) {
+          return { ...state, ui: appendWorkflowLog(state.ui, "Keyframe is outside clip duration.") };
+        }
+        const lens = lensParamsFromNode(project.nodes[lensNodeIdForClip(clip.id)]?.parameters ?? {});
+        const patch = buildCameraKeyframePatch(node.parameters, {
+          frame: localFrame,
+          position: action.position,
+          rotation: eulerToQuaternionApprox(action.rotation),
+          focalLengthMm: lens.focalLengthMm,
+        });
+        return runDomainCommand(
+          state,
+          { type: "UPDATE_NODE_PARAMS", nodeId, patch: { ...patch } },
+          `Camera pose saved at ${localFrame}f.`,
+        );
+      }
+      const nodeId = placementNodeIdForElement(clip.id, action.worldElementId);
+      const params = buildPlacementParams({
+        worldElementId: action.worldElementId,
+        kind: action.kind,
+        position: action.position,
+        rotation: action.rotation,
+        scale: action.scale,
+        layer: "clip",
+      });
+      const existing = project.nodes[nodeId];
+      if (!existing) {
+        const created = createNodeBase({
+          id: nodeId,
+          name: `${action.kind} ${action.worldElementId}`,
+          kind: nodeKindForObject(action.kind),
+          category: "cinematic",
+          parameters: params,
+          timestamp: now(),
+          downstreamNodeIds: [`node-${clip.id}-render`],
+        });
+        const nextState = runDomainCommand(
+          state,
+          { type: "CREATE_NODE", node: created, clipGraphId: clip.clipGraphId },
+          `Placement for ${action.worldElementId} created.`,
+        );
+        return {
+          ...nextState,
+          project: invalidateCachesForNode(nextState.project, nodeId),
+        };
+      }
+      return runDomainCommand(
+        state,
+        { type: "UPDATE_NODE_PARAMS", nodeId, patch: params },
+        `Placement ${action.worldElementId} updated.`,
+      );
+    }
+    case "complete-world-generation": {
+      const parsed = parseWorldGenerationArtifacts(action.job.output);
+      if (!parsed.ok) {
         return {
           ...state,
-          ui: appendWorkflowLog(state.ui, "World generation failed: no output artifacts."),
+          ui: appendWorkflowLog(
+            {
+              ...state.ui,
+              lyraJob: action.job,
+              worldGenJob: {
+                requestId: action.job.jobId,
+                status: "failed",
+                progress: 0,
+                message: "커넥터 응답을 해석할 수 없습니다.",
+                error: parsed.issues[0],
+              },
+            },
+            "커넥터 응답을 해석할 수 없습니다. 프로젝트는 변경되지 않았습니다.",
+          ),
         };
       }
-
-      const worldId = makeId("world");
-      const imageNodeId = makeId("node-image");
-      const promptNodeId = makeId("node-prompt");
-      const trajectoryNodeId =
-        clip.cameraPathNodeId ?? clip.cameraTrajectoryNodeId ?? cameraPathNodeIdForClip(clip.id);
-      const worldGenerateNodeId = makeId("node-worldgen");
-      const segmentNodeId = makeId("node-segment");
-      const memoryNodeId = makeId("node-memory");
-      const worldRefNodeId = makeId("node-worldref");
 
       const draft = state.ui.worldGenDraft;
-      const nodes: Record<string, NodeBase> = {
-        ...project.nodes,
-        [imageNodeId]: createNode(imageNodeId, "Image Source", "ImageSourceNode", "source", {
-          path: `uploads/${draft.imageName || "source.png"}`,
-          name: draft.imageName || "source.png",
-          assetId: `asset-image-${action.job.jobId}`,
-        }),
-        [promptNodeId]: createNode(promptNodeId, "Prompt", "TextSourceNode", "source", {
-          text: draft.prompt,
-        }),
-        [worldGenerateNodeId]: createNode(
-          worldGenerateNodeId,
-          "Image To World",
-          "ImageToWorldNode",
-          "scene",
-          { connectorId: "lyra-2.0", jobId: action.job.jobId, status: action.job.status },
-        ),
-        [segmentNodeId]: createNode(
-          segmentNodeId,
-          "Generated Segment",
-          "GeneratedSegmentNode",
-          "scene",
-          { path: output.generatedSegmentPath },
-        ),
-        [memoryNodeId]: createNode(
-          memoryNodeId,
-          "Spatial Memory",
-          "SpatialMemoryNode",
-          "scene",
-          { path: output.spatialMemoryPath, coverage: output.memoryCoverage },
-        ),
-        [worldRefNodeId]: createNode(
-          worldRefNodeId,
-          "World Reference",
-          "WorldReferenceNode",
-          "scene",
-          { worldId, path3dgs: output.visualLayer3dgsPath },
-          "shared",
-        ),
-      };
-
-      if (project.nodes[trajectoryNodeId]) {
-        const trajectory = applyTrajectoryToCameraPath(
-          project.nodes[trajectoryNodeId].parameters,
-          draft.trajectoryLabel,
-          clip.durationFrames ?? clip.duration,
-        );
-        nodes[trajectoryNodeId] = {
-          ...project.nodes[trajectoryNodeId],
-          kind: "CameraPathNode",
-          type: "CameraPathNode",
-          name: "Camera Path",
-          parameters: { ...project.nodes[trajectoryNodeId].parameters, ...trajectory },
-          params: { ...project.nodes[trajectoryNodeId].parameters, ...trajectory },
-          updatedAt: now(),
-        };
-      }
-
+      const imageAssetId = action.imageAssetId || draft.imageAssetId;
+      const worldId = makeId("world");
       const worldName = draft.imageName
         ? `${draft.imageName.replace(/\.[^.]+$/, "")} World`
         : `Generated World ${Object.keys(project.worlds).length + 1}`;
-
-      const registeredWorld = registerWorldFromLyraOutput(
-        {
-          worldId,
-          name: worldName,
-          description: draft.prompt || "Lyra 2.0 generated world",
-          jobId: action.job.jobId,
-          nodeIds: {
-            sourceImageNodeId: imageNodeId,
-            worldGenerateNodeId,
-            generatedSegmentNodeId: segmentNodeId,
-            spatialMemoryNodeId: memoryNodeId,
-          },
-        },
-        output,
-      );
-      const { world, assets: nextAssets } = registerWorldAssetPair(
-        registeredWorld,
-        project.assets ?? {},
-      );
-      const imageAssetId = `asset-image-${action.job.jobId}`;
-      const withImageAssets = registerSourceImageAsset(nextAssets, {
-        id: imageAssetId,
-        name: draft.imageName || "source.png",
-        uri: `uploads/${draft.imageName || "source.png"}`,
-      });
       const executionId = `exec-${action.job.jobId}`;
-      const packagedProject = persistWorldGeneration(
-        {
-          ...project,
-          nodes,
-          assets: withImageAssets,
-          worlds: { ...project.worlds, [worldId]: world },
-        },
-        {
-          worldId,
-          name: worldName,
-          description: draft.prompt || "Lyra 2.0 generated world",
-          execution: {
-            id: executionId,
-            connectorId: "lyra-2.0",
-            task: "image_to_world",
-            modelVersion: "stub",
-            inputAssetIds: [imageAssetId],
-            outputAssetIds: [],
-            parameters: { jobId: action.job.jobId, prompt: draft.prompt },
-            startedAt: now(),
-            completedAt: now(),
-            status: "completed",
+      const packagedProject = persistWorldGeneration(project, {
+        worldId,
+        name: worldName,
+        description: draft.prompt || "Generated world",
+        execution: {
+          id: executionId,
+          connectorId: "lyra-2.0",
+          task: "image_to_world",
+          modelVersion: "stub",
+          seed: draft.seed ? Number(draft.seed) : undefined,
+          inputAssetIds: imageAssetId ? [imageAssetId] : [],
+          outputAssetIds: [],
+          parameters: {
+            jobId: action.job.jobId,
+            prompt: draft.prompt,
+            explorationTrajectory: true,
           },
-          artifacts: output,
+          startedAt: now(),
+          completedAt: now(),
+          status: "completed",
         },
-      );
-
-      const newNodeIds = [
-        imageNodeId,
-        promptNodeId,
-        trajectoryNodeId,
-        worldGenerateNodeId,
-        segmentNodeId,
-        memoryNodeId,
-        worldRefNodeId,
-      ].filter((id) => !graph.nodeIds.includes(id));
-
-      const newEdges = [
-        makeEdge(makeId("edge"), imageNodeId, trajectoryNodeId, "input"),
-        makeEdge(makeId("edge"), trajectoryNodeId, worldGenerateNodeId, "path"),
-        makeEdge(makeId("edge"), promptNodeId, worldGenerateNodeId, "prompt"),
-        makeEdge(makeId("edge"), worldGenerateNodeId, segmentNodeId, "output"),
-        makeEdge(makeId("edge"), worldGenerateNodeId, memoryNodeId, "update"),
-        makeEdge(makeId("edge"), worldGenerateNodeId, worldRefNodeId, "reconstruct"),
-      ];
-
-      const nextProject = updateProjectMetadata({
-        ...packagedProject,
-        nodes,
-        clips: {
-          ...packagedProject.clips,
-          [clip.id]: {
-            ...clip,
-            linkedWorldId: worldId,
-            sourceType: "generated",
-            worldMode: "3dgs",
-            cameraPathNodeId: trajectoryNodeId,
-            cameraTrajectoryNodeId: trajectoryNodeId,
-            graphSnapshotId: graph.id,
-          },
-        },
-        clipGraphs: {
-          ...project.clipGraphs,
-          [graph.id]: {
-            ...graph,
-            nodeIds: [...graph.nodeIds, ...newNodeIds],
-            edges: [...graph.edges, ...newEdges],
-            previewFrames: [
-              `World: ${worldName}`,
-              `Coverage: ${Math.round((output.memoryCoverage ?? 0) * 100)}%`,
-              ...graph.previewFrames,
-            ],
-          },
-        },
+        artifacts: parsed.artifacts,
       });
 
       return {
-        project: nextProject,
+        project: updateProjectMetadata(packagedProject),
         ui: appendWorkflowLog(
           {
             ...state.ui,
-            selectedNodeId: worldRefNodeId,
             lyraJob: action.job,
+            worldGenJob: {
+              requestId: action.job.jobId,
+              status: "completed",
+              progress: 1,
+              message: `World "${worldName}" registered.`,
+              worldId,
+              executionId,
+            },
           },
-          `World "${worldName}" registered from Lyra job ${action.job.jobId}.`,
+          `World "${worldName}" registered. Clip graph was not changed.`,
         ),
       };
     }
@@ -2081,21 +2249,73 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
       };
     case "add-camera-keyframe": {
       const clip = project.clips[action.clipId];
+      if (!clip) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
+      }
       const nodeId = clip.cameraPathNodeId ?? cameraPathNodeIdForClip(clip.id);
       const node = project.nodes[nodeId];
       if (!node) {
         return state;
       }
-      const nextParams = upsertCameraKeyframe(cameraPathParamsFromNode(node.parameters), {
+      if (!isFrameInsideClip(action.frame, clipDurationFrames(clip))) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "Keyframe is outside clip duration.") };
+      }
+      const current = cameraPathParamsFromNode(node.parameters);
+      const colliding = Boolean(keyframeAtExactFrame(current, action.frame));
+      const nextParams = upsertCameraKeyframe(current, {
         frame: action.frame,
         position: action.position,
         rotation: action.rotation,
         focalLengthMm: action.focalLengthMm,
+        focusDistanceM: action.focusDistanceM,
+        aperture: action.aperture,
       });
       return runDomainCommand(
         state,
         { type: "UPDATE_NODE_PARAMS", nodeId, patch: { ...nextParams } },
-        `Camera keyframe at ${action.frame}f saved to CameraPathNode.`,
+        colliding
+          ? `Camera keyframe at ${action.frame}f replaced (frame collision).`
+          : `Camera keyframe at ${action.frame}f saved to CameraPathNode.`,
+      );
+    }
+    case "delete-camera-keyframe": {
+      const clip = project.clips[action.clipId];
+      if (!clip) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
+      }
+      const nodeId = clip.cameraPathNodeId ?? cameraPathNodeIdForClip(clip.id);
+      const node = project.nodes[nodeId];
+      if (!node) {
+        return state;
+      }
+      const current = cameraPathParamsFromNode(node.parameters);
+      if (!keyframeAtExactFrame(current, action.frame)) {
+        return { ...state, ui: appendWorkflowLog(state.ui, `No keyframe at ${action.frame}f.`) };
+      }
+      return runDomainCommand(
+        state,
+        { type: "UPDATE_NODE_PARAMS", nodeId, patch: { ...deleteCameraKeyframe(current, action.frame) } },
+        `Camera keyframe at ${action.frame}f deleted.`,
+      );
+    }
+    case "trim-camera-keyframes": {
+      const clip = project.clips[action.clipId];
+      if (!clip) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
+      }
+      const nodeId = clip.cameraPathNodeId ?? cameraPathNodeIdForClip(clip.id);
+      const node = project.nodes[nodeId];
+      if (!node) {
+        return state;
+      }
+      const trimmed = trimKeyframesToDuration(cameraPathParamsFromNode(node.parameters), clipDurationFrames(clip));
+      if (trimmed.removed === 0) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "No keyframes outside clip duration.") };
+      }
+      return runDomainCommand(
+        state,
+        { type: "UPDATE_NODE_PARAMS", nodeId, patch: { ...trimmed.params } },
+        `Removed ${trimmed.removed} keyframe(s) outside clip duration.`,
       );
     }
     case "cancel-domain-job": {
@@ -2134,6 +2354,9 @@ const runVideoRenderJob = async (
   const graph = state.project.clipGraphs[clip.clipGraphId];
   const world = clip.linkedWorldId ? state.project.worlds[clip.linkedWorldId] : undefined;
   const sequence = state.project.sequences[state.project.activeSequenceId];
+  const previousFinalCache = clip.finalCacheId
+    ? state.project.caches[clip.finalCacheId]
+    : undefined;
   const input = buildVideoRenderInput(
     clip,
     graph,
@@ -2141,7 +2364,51 @@ const runVideoRenderJob = async (
     world,
     sequence.playhead,
     state.ui.worldGenDraft.prompt,
+    { rerenderScope: previousFinalCache?.directionInvalidations },
   );
+  const shotWorkflow = evaluateShotWorkflow({
+    clip,
+    graph,
+    nodes: state.project.nodes,
+    worlds: state.project.worlds,
+    caches: state.project.caches,
+  });
+  if (!shotWorkflow.readyForRender) {
+    dispatch({
+      type: "set-video-render-job",
+      job: {
+        jobId: "shot-setup-incomplete",
+        status: "failed",
+        progress: 0,
+        message: shotWorkflow.blockingIssues[0] ?? "Finish the shot setup.",
+        input,
+        error: shotWorkflow.blockingIssues.join(" "),
+      },
+    });
+    return;
+  }
+  const performancePlan = performancePlanFromNode(
+    state.project.nodes[clip.performancePlanNodeId ?? performancePlanNodeIdForClip(clip.id)]?.parameters,
+  );
+  const performanceValidation = validatePerformancePlan(
+    performancePlan,
+    clipDurationFrames(clip),
+  );
+
+  if (!performanceValidation.ok) {
+    dispatch({
+      type: "set-video-render-job",
+      job: {
+        jobId: "direction-contract-invalid",
+        status: "failed",
+        progress: 0,
+        message: "Direction contract has invalid performance timing.",
+        input,
+        error: performanceValidation.errors.join(" "),
+      },
+    });
+    return;
+  }
 
   dispatch({
     type: "set-video-render-job",
@@ -2180,6 +2447,72 @@ const runVideoRenderJob = async (
   }
 };
 
+const composePersistedEditor = (state: EditorState): string =>
+  JSON.stringify({
+    project: serializeProject(migrateLoadedProject(state.project)),
+    ui: {
+      selectedClipId: state.ui.selectedClipId,
+      selectedNodeId: state.ui.selectedNodeId,
+      selectedLibraryNodeId: state.ui.selectedLibraryNodeId,
+      panelTab: state.ui.panelTab,
+      playback: "stopped",
+      workflowLog: state.ui.workflowLog,
+      assistantMessages: state.ui.assistantMessages,
+      highlightedNodeIds: [],
+      worldGenDraft: state.ui.worldGenDraft,
+      renderQueue: state.ui.renderQueue,
+      commandBus: emptyCommandBusState(),
+      showWorldOverlay: state.ui.showWorldOverlay,
+      domainJobQueue: createEmptyJobQueue(),
+      viewportTool: state.ui.viewportTool,
+      viewportWorkspace: state.ui.viewportWorkspace,
+      outputAspect: state.ui.outputAspect,
+      previewWorldId: state.ui.previewWorldId,
+      viewportOverlays: state.ui.viewportOverlays,
+      cameraViz: state.ui.cameraViz,
+    },
+  });
+
+const parsePersistedEditor = (raw: string): EditorState | undefined => {
+  try {
+    const parsed = JSON.parse(raw) as { project: string | Project; ui: Partial<EditorUiState> };
+    const projectRaw =
+      typeof parsed.project === "string"
+        ? parsed.project
+        : JSON.stringify({ version: 2, project: parsed.project });
+    return {
+      ui: {
+        ...createInitialState().ui,
+        ...parsed.ui,
+        worldGenDraft: {
+          ...createInitialState().ui.worldGenDraft,
+          ...parsed.ui?.worldGenDraft,
+        },
+        renderQueue: parsed.ui?.renderQueue ?? createEmptyRenderQueue(),
+        assistantMessages: parsed.ui?.assistantMessages ?? [],
+        panelTab: normalizePanelTab(parsed.ui?.panelTab),
+        commandBus: emptyCommandBusState(),
+        showWorldOverlay: parsed.ui?.showWorldOverlay ?? true,
+        domainJobQueue: createEmptyJobQueue(),
+        previewWorldId: parsed.ui?.previewWorldId,
+        viewportTool: parsed.ui?.viewportTool ?? "navigate",
+        viewportWorkspace: parseViewportWorkspace(parsed.ui ?? {}),
+        outputAspect: parseOutputAspectPreset(parsed.ui?.outputAspect),
+        viewportOverlays: {
+          ...defaultViewportOverlays(),
+          ...parsed.ui?.viewportOverlays,
+        },
+        cameraViz: { ...defaultCameraViz(), ...parsed.ui?.cameraViz },
+        lyraJob: undefined,
+        worldGenJob: undefined,
+      },
+      project: loadAndMigrateProject(projectRaw),
+    };
+  } catch {
+    return undefined;
+  }
+};
+
 export const EditorStoreProvider = ({ children }: { children: ReactNode }) => {
   const [state, baseDispatch] = useReducer(reducer, undefined, () => {
     if (typeof window === "undefined") {
@@ -2189,36 +2522,15 @@ export const EditorStoreProvider = ({ children }: { children: ReactNode }) => {
     if (!raw) {
       return createInitialState();
     }
-    try {
-      const parsed = JSON.parse(raw) as { project: string | Project; ui: Partial<EditorUiState> };
-      const projectRaw =
-        typeof parsed.project === "string"
-          ? parsed.project
-          : JSON.stringify({ version: 2, project: parsed.project });
-      return {
-        ui: {
-          ...createInitialState().ui,
-          ...parsed.ui,
-          worldGenDraft: {
-            ...createInitialState().ui.worldGenDraft,
-            ...parsed.ui?.worldGenDraft,
-          },
-          renderQueue: parsed.ui?.renderQueue ?? createEmptyRenderQueue(),
-          assistantMessages: parsed.ui?.assistantMessages ?? [],
-          panelTab: normalizePanelTab(parsed.ui?.panelTab),
-          commandBus: emptyCommandBusState(),
-          showWorldOverlay: parsed.ui?.showWorldOverlay ?? true,
-          domainJobQueue: createEmptyJobQueue(),
-        },
-        project: loadAndMigrateProject(projectRaw),
-      };
-    } catch {
-      return createInitialState();
-    }
+    return parsePersistedEditor(raw) ?? createInitialState();
   });
 
   const stateRef = useRef(state);
   stateRef.current = state;
+  const applyingRemoteRef = useRef(false);
+  const syncOriginRef = useRef(
+    typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `sf-${Date.now()}`,
+  );
 
   const dispatch = useCallback((action: EditorAction) => {
     if (action.type === "submit-video-render") {
@@ -2229,16 +2541,47 @@ export const EditorStoreProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   useEffect(() => {
-    const composed = JSON.stringify({
-      project: serializeProject(migrateLoadedProject(state.project)),
-      ui: {
-        ...state.ui,
-        commandBus: emptyCommandBusState(),
-        domainJobQueue: createEmptyJobQueue(),
-      },
-    });
+    if (applyingRemoteRef.current) {
+      applyingRemoteRef.current = false;
+      return;
+    }
+    const composed = composePersistedEditor(state);
     writeAtomicLocalStorage(STORAGE_KEY, composed);
+    const channel = new BroadcastChannel("sceneforge-editor-sync");
+    channel.postMessage({ origin: syncOriginRef.current, body: composed });
+    channel.close();
   }, [state]);
+
+  useEffect(() => {
+    const applyRemote = (raw: string) => {
+      const next = parsePersistedEditor(raw);
+      if (!next) {
+        return;
+      }
+      applyingRemoteRef.current = true;
+      baseDispatch({ type: "load", state: next });
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== STORAGE_KEY || !event.newValue) {
+        return;
+      }
+      applyRemote(event.newValue);
+    };
+    const channel = new BroadcastChannel("sceneforge-editor-sync");
+    const onMessage = (event: MessageEvent<{ origin?: string; body?: string }>) => {
+      if (!event.data?.body || event.data.origin === syncOriginRef.current) {
+        return;
+      }
+      applyRemote(event.data.body);
+    };
+    window.addEventListener("storage", onStorage);
+    channel.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      channel.removeEventListener("message", onMessage);
+      channel.close();
+    };
+  }, []);
 
   const value = useMemo(() => ({ state, dispatch }), [state, dispatch]);
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;

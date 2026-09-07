@@ -7,7 +7,14 @@ import {
   failRenderJob,
 } from "./jobQueue";
 import { layersInvalidatedByChange } from "./invalidationTable";
-import { normalizeRenderRequest, renderJobPriority, validateRenderRequest } from "./request";
+import {
+  DEFAULT_OUTPUT_ASPECT,
+  normalizeRenderRequest,
+  outputAspectRatio,
+  parseOutputAspectPreset,
+  renderJobPriority,
+  validateRenderRequest,
+} from "./request";
 import type { RenderJob } from "./request";
 
 const job = (overrides: Partial<RenderJob> = {}): RenderJob => ({
@@ -26,7 +33,14 @@ describe("render request", () => {
   it("normalizes defaults and validates", () => {
     const request = normalizeRenderRequest({ task: "image_to_world", conditions: [] });
     expect(request.fps).toBe(24);
+    expect(request.width / request.height).toBeCloseTo(outputAspectRatio(DEFAULT_OUTPUT_ASPECT));
     expect(validateRenderRequest(request).ok).toBe(true);
+  });
+
+  it("parses output aspect presets for the Record viewport", () => {
+    expect(parseOutputAspectPreset("9:16")).toBe("9:16");
+    expect(parseOutputAspectPreset("nope")).toBe("16:9");
+    expect(outputAspectRatio("16:9")).toBeCloseTo(16 / 9);
   });
 });
 

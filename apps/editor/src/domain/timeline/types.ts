@@ -27,6 +27,8 @@ export interface TimelineClip {
   clipGraphId: string;
   /** PRD field; replaces legacy cameraTrajectoryNodeId */
   cameraPathNodeId?: string;
+  /** External acting/audio direction. Never contains 3D previs character animation. */
+  performancePlanNodeId?: string;
   /** @deprecated use cameraPathNodeId */
   cameraTrajectoryNodeId?: string;
   renderCacheNodeId?: string;

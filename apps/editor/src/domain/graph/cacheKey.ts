@@ -20,6 +20,7 @@ const UI_PARAM_KEYS = new Set([
   "panelState",
   "selectionState",
   "temporaryTimestamp",
+  "cameraViz",
 ]);
 
 export const stableSerialize = (value: unknown): string => {

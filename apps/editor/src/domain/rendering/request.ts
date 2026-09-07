@@ -1,3 +1,5 @@
+import type { ModelDirectionCapabilities } from "./capabilities";
+
 export type ConditionType =
   | "text"
   | "image"
@@ -56,6 +58,7 @@ export interface ModelExecutionResult {
 export interface ModelConnector {
   id: string;
   supportedTasks(): string[];
+  capabilities(): ModelDirectionCapabilities;
   validate(request: RenderRequest): ValidationResult;
   estimate(request: RenderRequest): Promise<ExecutionEstimate>;
   execute(request: RenderRequest, signal?: AbortSignal): Promise<ModelExecutionResult>;
@@ -79,6 +82,36 @@ export interface RenderJob {
 }
 
 export const DEFAULT_RENDER_BACKEND_VERSION = "stub-1";
+
+/** Output frame shapes used by Record viewport letterboxing (matches default 1280×720). */
+export type OutputAspectPreset = "16:9" | "2.39:1" | "4:3" | "9:16";
+
+export const DEFAULT_OUTPUT_ASPECT: OutputAspectPreset = "16:9";
+
+export const OUTPUT_ASPECT_PRESETS: ReadonlyArray<{
+  id: OutputAspectPreset;
+  label: string;
+  width: number;
+  height: number;
+}> = [
+  { id: "16:9", label: "16:9", width: 16, height: 9 },
+  { id: "2.39:1", label: "2.39:1", width: 239, height: 100 },
+  { id: "4:3", label: "4:3", width: 4, height: 3 },
+  { id: "9:16", label: "9:16", width: 9, height: 16 },
+];
+
+export const parseOutputAspectPreset = (value: unknown): OutputAspectPreset =>
+  OUTPUT_ASPECT_PRESETS.some((item) => item.id === value) ? (value as OutputAspectPreset) : DEFAULT_OUTPUT_ASPECT;
+
+export const outputAspectRatio = (preset: OutputAspectPreset): number => {
+  const item = OUTPUT_ASPECT_PRESETS.find((entry) => entry.id === preset) ?? OUTPUT_ASPECT_PRESETS[0];
+  return item.width / item.height;
+};
+
+export const outputAspectCss = (preset: OutputAspectPreset): { ratio: string; numeric: number } => {
+  const item = OUTPUT_ASPECT_PRESETS.find((entry) => entry.id === preset) ?? OUTPUT_ASPECT_PRESETS[0];
+  return { ratio: `${item.width} / ${item.height}`, numeric: item.width / item.height };
+};
 
 export const normalizeRenderRequest = (input: Partial<RenderRequest> & { task: RenderTask }): RenderRequest => ({
   requestId: input.requestId ?? `req-${Date.now().toString(36)}`,

@@ -1,5 +1,11 @@
 import { useMemo } from "react";
 import { useEditorStore } from "../../state/editorStore";
+import { DIRECTION_CHANNEL_LABELS } from "../../domain/direction";
+import { evaluateShotWorkflow } from "../../domain/workflow";
+import { exportPerformancePlanToOtio, serializeOtio } from "../../domain/editorial";
+import { performancePlanFromNode, performancePlanNodeIdForClip } from "../../domain/performance";
+import { clipDurationFrames } from "../../domain/timeline/timing";
+import { downloadTextFile, editorialFilename } from "../editorialDownload";
 
 const FPS = 24;
 
@@ -30,7 +36,33 @@ export const PlaybackPanel = () => {
   const finalCache = clip.finalCacheId ? project.caches[clip.finalCacheId] : undefined;
   const videoPath = finalCache?.artifactPath ?? (proxyCache?.status === "valid" ? proxyCache.artifactPath : undefined);
   const videoRenderJob = ui.videoRenderJob;
+  const pendingDirectionInvalidations = finalCache?.directionInvalidations ?? [];
   const timecode = formatTimecode(sequence.playhead);
+  const shotWorkflow = evaluateShotWorkflow({
+    clip,
+    graph: project.clipGraphs[clip.clipGraphId],
+    nodes: project.nodes,
+    worlds: project.worlds,
+    caches: project.caches,
+  });
+  const renderBusy = videoRenderJob?.status === "running" || videoRenderJob?.status === "queued";
+  const renderDisabled = renderBusy || !shotWorkflow.readyForRender;
+
+  const exportOtio = () => {
+    const performanceNodeId = clip.performancePlanNodeId ?? performancePlanNodeIdForClip(clip.id);
+    const otioDocument = exportPerformancePlanToOtio({
+      clipId: clip.id,
+      clipName: clip.name,
+      durationFrames: clipDurationFrames(clip),
+      fps: sequence.fps ?? FPS,
+      performancePlan: performancePlanFromNode(project.nodes[performanceNodeId]?.parameters),
+    });
+    downloadTextFile(
+      serializeOtio(otioDocument),
+      editorialFilename(clip.name, "otio"),
+      "application/json",
+    );
+  };
 
   const statusLabel = useMemo(() => {
     if (videoRenderJob?.status === "running") {
@@ -39,14 +71,20 @@ export const PlaybackPanel = () => {
     if (videoRenderJob?.status === "queued") {
       return "Render queued";
     }
+    if (videoRenderJob?.status === "failed") {
+      return "Render blocked";
+    }
     if (finalCache?.status === "failed") {
       return "Render failed";
     }
     if (videoPath) {
       return "Ready";
     }
+    if (!shotWorkflow.readyForRender) {
+      return "Setup needed";
+    }
     return "No render";
-  }, [finalCache?.status, videoPath, videoRenderJob]);
+  }, [finalCache?.status, shotWorkflow.readyForRender, videoPath, videoRenderJob]);
 
   return (
     <section className="playback-panel">
@@ -64,9 +102,11 @@ export const PlaybackPanel = () => {
             <span className="rec-badge">● REC {timecode}</span>
             <p>Render a clip to preview generative video output.</p>
             <p className="muted">
-              {proxyCache?.status === "valid"
+              {!shotWorkflow.readyForRender
+                ? `Next: ${shotWorkflow.nextActionLabel}. ${shotWorkflow.blockingIssues[0] ?? "Finish the shot setup."}`
+                : proxyCache?.status === "valid"
                 ? `Proxy ready (${proxyCache.previewText ?? "stub"}). Final render still optional.`
-                : "Uses SpatialMemoryCache + keyframes for spatial consistency."}
+                : "Uses 3D shot signals + separate performance/audio direction."}
             </p>
           </div>
         )}
@@ -106,15 +146,41 @@ export const PlaybackPanel = () => {
         </div>
         <span className="transport-timecode">{timecode}</span>
         <button
+          id="playback-render-button"
           type="button"
           className="btn-primary"
           onClick={() => dispatch({ type: "submit-video-render", clipId: clip.id })}
-          disabled={videoRenderJob?.status === "running" || videoRenderJob?.status === "queued"}
+          disabled={renderDisabled}
+          title={!shotWorkflow.readyForRender ? shotWorkflow.blockingIssues.join(" ") : undefined}
         >
-          Render to Video
+          {!shotWorkflow.readyForRender
+            ? "Complete shot setup"
+            : pendingDirectionInvalidations.length > 0
+            ? `Re-render ${pendingDirectionInvalidations.length} channel(s)`
+            : "Render to Video"}
         </button>
+        {videoPath && (
+          <button type="button" onClick={exportOtio} title="Export OpenTimelineIO with SceneForge direction metadata.">
+            Export OTIO
+          </button>
+        )}
+        {!shotWorkflow.readyForRender && (
+          <span className="render-setup-message">
+            {shotWorkflow.blockingIssues[0]}
+          </span>
+        )}
+        {pendingDirectionInvalidations.length > 0 &&
+          videoRenderJob?.status !== "running" &&
+          videoRenderJob?.status !== "queued" && (
+          <span className="direction-rerender-scope" title="Only these direction channels and authored frame windows are invalidated.">
+            Partial · {pendingDirectionInvalidations.map((item) => DIRECTION_CHANNEL_LABELS[item.channel]).join(", ")}
+          </span>
+        )}
         {videoRenderJob && (videoRenderJob.status === "running" || videoRenderJob.status === "queued") && (
           <span className="muted">{videoRenderJob.message}</span>
+        )}
+        {videoRenderJob?.status === "failed" && (
+          <span className="look-at-error" title={videoRenderJob.error}>{videoRenderJob.message}</span>
         )}
       </div>
     </section>

@@ -12,13 +12,24 @@ export interface TemporalValidationResult {
   issues: string[];
 }
 
-const TEMPORAL_KINDS = new Set(["CameraPathNode", "ActionBlockNode", "ObjectTrajectoryNode"]);
+const TEMPORAL_KINDS = new Set([
+  "CameraPathNode",
+  "ActionBlockNode",
+  "ObjectTrajectoryNode",
+  "PerformancePlanNode",
+]);
 
 export const nodeTemporalRange = (node: NodeBase): TemporalRange | undefined => {
   if (!TEMPORAL_KINDS.has(node.kind)) {
     return undefined;
   }
   const params = node.parameters ?? {};
+  const cues = params.cues as Array<{ startFrame?: number; endFrame?: number }> | undefined;
+  if (node.kind === "PerformancePlanNode" && Array.isArray(cues) && cues.length > 0) {
+    const starts = cues.map((item) => Number(item.startFrame ?? 0));
+    const ends = cues.map((item) => Number(item.endFrame ?? item.startFrame ?? 0));
+    return { startFrame: Math.min(...starts), endFrame: Math.max(...ends) };
+  }
   const keyframes = params.keyframes as Array<{ frame?: number }> | undefined;
   if (Array.isArray(keyframes) && keyframes.length > 0) {
     const frames = keyframes.map((item) => item.frame ?? 0);
@@ -32,7 +43,7 @@ export const nodeTemporalRange = (node: NodeBase): TemporalRange | undefined => 
 };
 
 /**
- * Clip duration must cover CameraPath / ActionBlock temporal ranges (PRD §10.3).
+ * Clip duration must cover camera, blocking, and performance timing ranges (PRD §10.3).
  */
 export const validateClipTemporalNodes = (
   clip: TimelineClip,

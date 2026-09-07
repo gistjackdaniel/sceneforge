@@ -1,3 +1,5 @@
+import type { DirectionChannelInvalidation } from "../direction";
+
 export type CacheStatus = "valid" | "invalid" | "rendering" | "failed";
 
 export type CacheKind =
@@ -22,6 +24,8 @@ export interface RenderCacheEntry {
   artifactPath?: string;
   connectorId?: string;
   previewText?: string;
+  /** Pending partial rerender scope. Omitted on a clean, fully rendered cache entry. */
+  directionInvalidations?: DirectionChannelInvalidation[];
 }
 
 /** Legacy persisted values → spec-aligned cache status. */

@@ -14,3 +14,19 @@ export {
   type WorldOverrideLayer,
 } from "./layers";
 export { packageWorldFromExecution, type PackagedWorldResult } from "./packageWorld";
+export { sampleViewportWorlds } from "./sampleWorlds";
+export {
+  OVERLAY_LABELS,
+  firstViewportImageUri,
+  isViewportImageUri,
+  overlayElementKind,
+  overlayKindForElement,
+  resolveViewportRepresentation,
+  viewportImageUris,
+  viewportPreviewBadge,
+  worldOverlayAvailability,
+  worldOverlayMarkerElements,
+  type OverlayKind,
+  type ViewportLoadState,
+  type ViewportRepresentationPlan,
+} from "./viewportRepresentation";

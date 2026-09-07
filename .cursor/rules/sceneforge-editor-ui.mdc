@@ -22,11 +22,17 @@ alwaysApply: false
 
 ## UX 플로우 (UI가 지원해야 할 시나리오)
 
-**월드 생성:** 이미지 + trajectory → `ImageToWorldNode` 실행(connector) → `WorldAsset` 등록, artifact·coverage 표시
+상세: [docs/user-flows/README.md](docs/user-flows/README.md)
 
-**컷 촬영:** Stage에서 배우/소품/카메라/조명 배치 → `StageRenderPassNode` → `GenerativeRefinementNode` → `TimelineClip` + cache 연결
+**한 샷 작성:** World → Stage(Build) → Camera(Record) → Performance → Render. 완료는 클립 데이터에서 파생.
+
+**월드 생성:** 이미지 + trajectory → `ImageToWorldNode` 실행(connector) → `WorldAsset` 등록. Preview는 그래프를 바꾸지 않고, Use in Current Clip만 현재 컷에 연결.
+
+**다음 컷:** Add Clip은 선택 컷의 월드를 참조로 상속한다. 월드를 복제하지 않는다.
 
 **부분 재렌더:** shared 노드 수정 → affected clips + rerender 범위 **승인 전** 표시 → 승인 → proxy/final queue
+
+**리뷰·교환:** Playback에서 재생. 채널·프레임만 재렌더. OTIO가 무손실 기준.
 
 **3패널 동기화:** Clip 선택 → 해당 Clip Graph 열림 → Viewer가 resolved state 표시 → Camera가 선택 프레임으로 이동
 

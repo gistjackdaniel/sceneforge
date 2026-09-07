@@ -3,6 +3,9 @@ import { CacheStatusBadge, needsRerender } from "../../components/CacheStatusBad
 import { ReferenceBadge } from "../../components/ReferenceBadge";
 import { getAffectedClipIds } from "../../core/dependency/affectedClips";
 import { queueLength } from "../../core/render/queue";
+import { cameraPathParamsFromNode } from "../../domain/graph/cameraPath";
+import { performancePlanFromNode, performancePlanNodeIdForClip } from "../../domain/performance";
+import { clipStartFrame } from "../../domain/timeline/timing";
 import { useEditorStore } from "../../state/editorStore";
 
 const FPS = 24;
@@ -45,6 +48,14 @@ export const TimelinePanel = ({ compact = false }: TimelinePanelProps) => {
   );
   const selectedClip = project.clips[ui.selectedClipId];
   const selectedGraph = project.clipGraphs[selectedClip.clipGraphId];
+  const selectedPerformanceNodeId =
+    selectedClip.performancePlanNodeId ?? performancePlanNodeIdForClip(selectedClip.id);
+  const performancePlan = performancePlanFromNode(
+    project.nodes[selectedPerformanceNodeId]?.parameters,
+  );
+  const selectedCameraNodeId =
+    selectedClip.cameraPathNodeId ?? selectedClip.cameraTrajectoryNodeId ?? `node-${selectedClip.id}-trajectory`;
+  const cameraPath = cameraPathParamsFromNode(project.nodes[selectedCameraNodeId]?.parameters ?? {});
   const selectedRootNode = project.nodes[`node-${selectedClip.id}-clip`];
   const affectedClipIds = selectedRootNode
     ? getAffectedClipIds(project.dependencyMap, selectedRootNode.id)
@@ -88,8 +99,24 @@ export const TimelinePanel = ({ compact = false }: TimelinePanelProps) => {
         </div>
       )}
 
-      {compact && queueLength(ui.renderQueue) > 0 && (
-        <p className="muted timeline-queue-hint">Render queue: {queueLength(ui.renderQueue)} job(s)</p>
+      {compact && (
+        <div className="timeline-compact-toolbar">
+          <div className="button-row wrap">
+            <button type="button" onClick={() => dispatch({ type: "add-empty-clip" })}>
+              Add Clip
+            </button>
+            <button
+              type="button"
+              onClick={() => dispatch({ type: "delete-clip", clipId: selectedClip.id })}
+              disabled={activeSequence.clipIds.length <= 1}
+            >
+              Delete
+            </button>
+          </div>
+          {queueLength(ui.renderQueue) > 0 && (
+            <p className="muted timeline-queue-hint">Render queue: {queueLength(ui.renderQueue)} job(s)</p>
+          )}
+        </div>
       )}
 
       <div className="timeline-editor">
@@ -161,25 +188,73 @@ export const TimelinePanel = ({ compact = false }: TimelinePanelProps) => {
             </div>
           </div>
 
-          <div className="timeline-track-row">
-            <span className="track-label">AST</span>
+          <div className="timeline-track-row timeline-track-camera">
+            <span className="track-label">CAM</span>
             <div className="timeline-track-lane" style={{ width: durationSeconds * PIXELS_PER_SECOND }}>
-              {selectedGraph.keyframeNodeIds.map((keyframeId) => {
-                const node = project.nodes[keyframeId];
-                const playhead = Number(node?.parameters.playhead ?? 0);
-                return (
-                  <button
-                    key={keyframeId}
-                    type="button"
-                    className="timeline-keyframe-marker"
-                    style={{ left: (playhead / FPS) * PIXELS_PER_SECOND }}
-                    title={node?.name ?? keyframeId}
-                    onClick={() => dispatch({ type: "select-node", nodeId: keyframeId })}
-                  >
-                    ◆
-                  </button>
-                );
-              })}
+              {cameraPath.keyframes.map((keyframe) => (
+                <button
+                  key={`camera-${keyframe.frame}`}
+                  type="button"
+                  className="timeline-keyframe-marker camera-keyframe-marker"
+                  style={{ left: ((clipStartFrame(selectedClip) + keyframe.frame) / FPS) * PIXELS_PER_SECOND }}
+                  title={`Camera keyframe ${keyframe.frame}f · ${keyframe.focalLengthMm}mm`}
+                  onClick={() => {
+                    dispatch({ type: "scrub-playhead", playhead: clipStartFrame(selectedClip) + keyframe.frame });
+                    dispatch({ type: "select-node", nodeId: selectedCameraNodeId });
+                  }}
+                >
+                  ◆
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="timeline-track-row timeline-track-audio">
+            <span className="track-label">AUD</span>
+            <div className="timeline-track-lane" style={{ width: durationSeconds * PIXELS_PER_SECOND }}>
+              {performancePlan.audioGuide && (
+                <button
+                  type="button"
+                  className="timeline-direction-block timeline-audio-block"
+                  style={{
+                    left:
+                      ((clipStartFrame(selectedClip) + performancePlan.audioGuide.offsetFrame) / FPS) *
+                      PIXELS_PER_SECOND,
+                    width:
+                      ((performancePlan.audioGuide.durationFrames ?? selectedClip.duration) / FPS) *
+                      PIXELS_PER_SECOND,
+                  }}
+                  title={`${performancePlan.audioGuide.label} · offset ${performancePlan.audioGuide.offsetFrame}f`}
+                  onClick={() => dispatch({ type: "set-panel-tab", tab: "direction" })}
+                >
+                  {performancePlan.audioGuide.label}
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="timeline-track-row timeline-track-performance">
+            <span className="track-label">PERF</span>
+            <div className="timeline-track-lane" style={{ width: durationSeconds * PIXELS_PER_SECOND }}>
+              {performancePlan.cues.map((cue) => (
+                <button
+                  key={cue.id}
+                  type="button"
+                  className={`timeline-direction-block timeline-performance-block cue-${cue.kind}`}
+                  style={{
+                    left: ((clipStartFrame(selectedClip) + cue.startFrame) / FPS) * PIXELS_PER_SECOND,
+                    width: (Math.max(1, cue.endFrame - cue.startFrame) / FPS) * PIXELS_PER_SECOND,
+                  }}
+                  title={`${cue.label} · ${cue.startFrame}–${cue.endFrame}f · ${cue.direction || "No direction"}`}
+                  onClick={() => {
+                    dispatch({ type: "scrub-playhead", playhead: clipStartFrame(selectedClip) + cue.startFrame });
+                    dispatch({ type: "select-node", nodeId: selectedPerformanceNodeId });
+                    dispatch({ type: "set-panel-tab", tab: "direction" });
+                  }}
+                >
+                  {cue.label}
+                </button>
+              ))}
             </div>
           </div>
         </div>

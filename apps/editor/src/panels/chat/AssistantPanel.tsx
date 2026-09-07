@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useEditorStore } from "../../state/editorStore";
+import { evaluateShotWorkflow } from "../../domain/workflow";
 
 export const AssistantPanel = () => {
   const {
@@ -11,6 +12,13 @@ export const AssistantPanel = () => {
 
   const selectedClip = project.clips[ui.selectedClipId];
   const clipCaches = Object.values(project.caches).filter((cache) => cache.clipId === selectedClip.id);
+  const shotWorkflow = evaluateShotWorkflow({
+    clip: selectedClip,
+    graph: project.clipGraphs[selectedClip.clipGraphId],
+    nodes: project.nodes,
+    worlds: project.worlds,
+    caches: project.caches,
+  });
 
   const sendMessage = () => {
     const trimmed = input.trim();
@@ -31,7 +39,7 @@ export const AssistantPanel = () => {
       <div className="assistant-messages">
         {ui.assistantMessages.length === 0 && (
           <div className="assistant-bubble assistant-bubble-system">
-            월드 배치, 샷 프리셋, 렌더 승인을 자연어로 요청하세요.
+            월드 연결, 다음 컷, 샷 프리셋, 렌더를 요청하세요. 샷 계약이 성립하기 전에는 렌더가 나가지 않습니다.
           </div>
         )}
         {ui.assistantMessages.map((message) => (
@@ -79,9 +87,14 @@ export const AssistantPanel = () => {
         >
           렌즈 인스턴스 가져오기
         </button>
+        <button type="button" onClick={() => dispatch({ type: "add-empty-clip" })}>
+          다음 컷 만들기
+        </button>
         <button
           type="button"
           onClick={() => dispatch({ type: "submit-video-render", clipId: selectedClip.id })}
+          disabled={!shotWorkflow.readyForRender}
+          title={!shotWorkflow.readyForRender ? shotWorkflow.blockingIssues[0] : undefined}
         >
           키프레임 기반 렌더
         </button>

@@ -1,5 +1,9 @@
 import type { NodeKind } from "../../domain/graph/types";
 import type { CacheKind } from "../../domain/rendering/types";
+import {
+  fullDirectionInvalidation,
+  type DirectionChannelInvalidation,
+} from "../../domain/direction";
 
 /** Spec-aligned invalidation targets per node kind (PRD §11.6). */
 export const INVALIDATION_TARGETS_BY_KIND: Partial<Record<NodeKind, CacheKind[]>> = {
@@ -22,3 +26,32 @@ export const INVALIDATION_TARGETS_BY_KIND: Partial<Record<NodeKind, CacheKind[]>
 
 export const getInvalidationTargets = (nodeKind: NodeKind): CacheKind[] =>
   INVALIDATION_TARGETS_BY_KIND[nodeKind] ?? ["proxy", "final"];
+
+const full = (...channels: DirectionChannelInvalidation["channel"][]): DirectionChannelInvalidation[] =>
+  channels.map((channel) => ({ channel }));
+
+/** Direction lanes affected by a node recipe change. */
+export const getDirectionInvalidations = (nodeKind: NodeKind): DirectionChannelInvalidation[] => {
+  switch (nodeKind) {
+    case "CameraPathNode":
+    case "CameraRigNode":
+    case "LensNode":
+      return full("camera");
+    case "WorldAssetNode":
+    case "WorldReferenceNode":
+    case "LightingRigNode":
+    case "ActorPlacementNode":
+    case "PlacementNode":
+    case "ImageToWorldNode":
+      return full("structure");
+    case "ObjectTrajectoryNode":
+    case "ActionBlockNode":
+      return full("performance_body");
+    case "PerformancePlanNode":
+      return full("performance_body", "performance_face", "audio");
+    case "KeyframeNode":
+      return full("camera", "structure");
+    default:
+      return fullDirectionInvalidation();
+  }
+};

@@ -9,6 +9,19 @@ export const TopBar = () => {
   const activeSequence = project.sequences[project.activeSequenceId];
   const selectedClip = project.clips[ui.selectedClipId];
 
+  const openViewport = () => {
+    dispatch({ type: "set-panel-tab", tab: "viewport" });
+    dispatch({ type: "set-viewport-workspace", workspace: "build" });
+  };
+
+  const focusRender = () => {
+    window.requestAnimationFrame(() => {
+      const renderButton = document.getElementById("playback-render-button");
+      renderButton?.scrollIntoView({ behavior: "smooth", block: "center" });
+      renderButton?.focus();
+    });
+  };
+
   return (
     <header className="top-bar">
       <div className="top-bar-brand">
@@ -16,16 +29,16 @@ export const TopBar = () => {
         <div>
           <strong>SceneForge</strong>
           <nav className="top-nav">
-            <button type="button" className="nav-link is-active">
+            <button type="button" className={`nav-link ${ui.panelTab === "viewport" ? "is-active" : ""}`} onClick={openViewport}>
               Editor
             </button>
-            <button type="button" className="nav-link">
-              Library
+            <button type="button" className={`nav-link ${ui.panelTab === "world-generation" ? "is-active" : ""}`} onClick={() => dispatch({ type: "set-panel-tab", tab: "world-generation" })}>
+              Worlds
             </button>
-            <button type="button" className="nav-link">
-              Assets
+            <button type="button" className={`nav-link ${ui.panelTab === "direction" ? "is-active" : ""}`} onClick={() => dispatch({ type: "set-panel-tab", tab: "direction" })}>
+              Direction
             </button>
-            <button type="button" className="nav-link">
+            <button type="button" className="nav-link" onClick={focusRender}>
               Render
             </button>
           </nav>
@@ -49,7 +62,7 @@ export const TopBar = () => {
           className="btn-primary"
           onClick={() => dispatch({ type: "set-panel-tab", tab: "world-generation" })}
         >
-          Generate World
+          World Setup
         </button>
       </div>
 

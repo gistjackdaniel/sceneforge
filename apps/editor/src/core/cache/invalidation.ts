@@ -1,8 +1,12 @@
 import type { RenderCacheEntry } from "./types";
-import { getInvalidationTargets } from "./invalidationRules";
+import { getDirectionInvalidations, getInvalidationTargets } from "./invalidationRules";
 import type { DependencyMap } from "../clipgraph/types";
 import type { NodeBase, NodeKind } from "../nodes/types";
 import { getAffectedClipIds } from "../dependency/affectedClips";
+import {
+  mergeDirectionInvalidations,
+  type DirectionChannelInvalidation,
+} from "../../domain/direction";
 
 /**
  * Invalidate caches affected by a node change, scoped by node kind rules.
@@ -14,9 +18,12 @@ export const invalidateRelatedCaches = (
   nodeId: string,
   updatedAt: string,
   nodeKind?: NodeKind,
+  directionInvalidations?: DirectionChannelInvalidation[],
 ): Record<string, RenderCacheEntry> => {
   const affectedClipIds = new Set(getAffectedClipIds(dependencyMap, nodeId));
   const targetKinds = new Set(getInvalidationTargets(nodeKind ?? "RenderSettingsNode"));
+  const nextDirectionInvalidations =
+    directionInvalidations ?? getDirectionInvalidations(nodeKind ?? "RenderSettingsNode");
 
   return Object.fromEntries(
     Object.entries(caches).map(([cacheId, cache]) => {
@@ -33,6 +40,10 @@ export const invalidateRelatedCaches = (
           status: "invalid" as const,
           updatedAt,
           invalidatedByNodeIds: Array.from(new Set([...cache.invalidatedByNodeIds, nodeId])),
+          directionInvalidations: mergeDirectionInvalidations(
+            cache.directionInvalidations,
+            nextDirectionInvalidations,
+          ),
         },
       ];
     }),
@@ -44,5 +55,13 @@ export const invalidateCachesForNodeChange = (
   dependencyMap: DependencyMap,
   node: NodeBase,
   updatedAt: string,
+  directionInvalidations?: DirectionChannelInvalidation[],
 ): Record<string, RenderCacheEntry> =>
-  invalidateRelatedCaches(caches, dependencyMap, node.id, updatedAt, node.kind);
+  invalidateRelatedCaches(
+    caches,
+    dependencyMap,
+    node.id,
+    updatedAt,
+    node.kind,
+    directionInvalidations,
+  );

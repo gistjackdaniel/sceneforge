@@ -6,6 +6,7 @@ import type { ModelExecutionRecord } from "../../domain/worlds/modelExecution";
 import { packageWorldFromExecution } from "../../domain/worlds/packageWorld";
 import type { WorldAsset } from "../../domain/worlds/types";
 import type { Project } from "../../domain/project/types";
+import type { WorldGenerationArtifacts } from "./worldGenerationRequest";
 
 export const registerSourceImageAsset = (
   assets: Record<string, AssetRecord>,
@@ -17,6 +18,7 @@ export const registerSourceImageAsset = (
     type: "image",
     name: input.name,
     uri: input.uri,
+    thumbnailUri: input.uri,
     metadata: { role: "world_source" },
   }),
 });
@@ -48,16 +50,7 @@ export const persistWorldGeneration = (
     name: string;
     description: string;
     execution: ModelExecutionRecord;
-    artifacts: {
-      generatedSegmentPath?: string;
-      spatialMemoryPath?: string;
-      visualLayer3dgsPath?: string;
-      surfaceMeshPath?: string;
-      navmeshPath?: string;
-      collisionMeshPath?: string;
-      memoryCoverage?: number;
-      generatedAreaRatio?: number;
-    };
+    artifacts: WorldGenerationArtifacts;
   },
 ): Project => {
   const packaged = packageWorldFromExecution({
@@ -79,5 +72,55 @@ export const persistWorldGeneration = (
     },
   };
 };
+
+export const findReusableWorldExecution = (
+  project: Project,
+  input: {
+    inputAssetIds: string[];
+    connectorId: string;
+    task: string;
+    prompt?: string;
+    seed?: number;
+  },
+): { world: WorldAsset; execution: ModelExecutionRecord } | undefined => {
+  const executions = Object.values(project.modelExecutions ?? {});
+  const match = executions.find((execution) => {
+    if (execution.status !== "completed") {
+      return false;
+    }
+    if (execution.connectorId !== input.connectorId || execution.task !== input.task) {
+      return false;
+    }
+    if (!input.inputAssetIds.every((id) => execution.inputAssetIds.includes(id))) {
+      return false;
+    }
+    if (input.prompt !== undefined && execution.parameters.prompt !== input.prompt) {
+      return false;
+    }
+    if (input.seed !== undefined && execution.seed !== input.seed) {
+      return false;
+    }
+    return true;
+  });
+  if (!match) {
+    return undefined;
+  }
+  const world = Object.values(project.worlds).find((item) => item.generatedBy?.id === match.id);
+  if (!world) {
+    return undefined;
+  }
+  return { world, execution: match };
+};
+
+export const snapshotProjectIdentity = (project: Project): string =>
+  JSON.stringify({
+    worldIds: Object.keys(project.worlds).sort(),
+    assetIds: Object.keys(project.assets ?? {}).sort(),
+    executionIds: Object.keys(project.modelExecutions ?? {}).sort(),
+    clipLinks: Object.fromEntries(
+      Object.values(project.clips).map((clip) => [clip.id, clip.linkedWorldId ?? ""]),
+    ),
+    nodeIds: Object.keys(project.nodes).sort(),
+  });
 
 export type { WorldAsset };

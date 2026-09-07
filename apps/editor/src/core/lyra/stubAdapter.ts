@@ -83,6 +83,19 @@ export const createStubLyraAdapter = (): LyraAdapter => ({
     return completed;
   },
 
+  async cancelJob(jobId: string): Promise<void> {
+    const current = jobs.get(jobId);
+    if (!current || current.status === "completed") {
+      return;
+    }
+    jobs.set(jobId, {
+      ...current,
+      status: "failed",
+      message: "Cancelled",
+      error: "cancelled",
+    });
+  },
+
   async submitVideoRenderJob(input: LyraVideoRenderInput): Promise<LyraVideoRenderJobState> {
     const jobId = `lyra-video-stub-${Date.now().toString(36)}`;
     const state: LyraVideoRenderJobState = {

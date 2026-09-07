@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Local toolchain (portable Node install)
+.tools/
+
 # Build
 dist/
 dist-electron/

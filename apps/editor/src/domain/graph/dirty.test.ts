@@ -135,7 +135,39 @@ describe("unconnected clip cache preservation", () => {
 
     const next = invalidateCachesForNodeChange(caches, dependencyMap, nodes.light, "t1");
     expect(next["cache-a"].status).toBe("invalid");
+    expect(next["cache-a"].directionInvalidations).toEqual([{ channel: "structure" }]);
     expect(next["cache-b"].status).toBe("valid");
     expect(next["cache-b"].updatedAt).toBe("t0");
+  });
+
+  it("records a frame-scoped performance invalidation for partial rerender", () => {
+    const performance = node("performance", {
+      kind: "PerformancePlanNode",
+      downstreamNodeIds: ["render-a"],
+    });
+    const dependencyMap: DependencyMap = {
+      downstreamByNodeId: { performance: ["render-a"], "render-a": [] },
+      clipsByNodeId: { performance: ["clip-a"], "render-a": ["clip-a"] },
+      referencesByNodeId: {},
+      cacheHashesByClipId: {},
+    };
+    const caches: Record<string, RenderCacheEntry> = {
+      final: {
+        id: "final",
+        clipId: "clip-a",
+        label: "Final",
+        kind: "final",
+        status: "valid",
+        updatedAt: "t0",
+        invalidatedByNodeIds: [],
+      },
+    };
+
+    const next = invalidateCachesForNodeChange(caches, dependencyMap, performance, "t1", [
+      { channel: "performance_face", frameRanges: [{ startFrame: 12, endFrame: 20 }] },
+    ]);
+    expect(next.final.directionInvalidations).toEqual([
+      { channel: "performance_face", frameRanges: [{ startFrame: 12, endFrame: 20 }] },
+    ]);
   });
 });

@@ -1,6 +1,7 @@
 import type { NodeBase } from "../../domain/graph/types";
 import type { NodeReference, ReferenceType } from "../../domain/graph/references";
 import type { GraphEdge } from "../../domain/graph/types";
+import type { CameraRigPreset } from "../../domain/graph/cameraRig";
 
 /** PRD §13.1 — domain commands. UI-only actions are not commands. */
 export type DomainCommand =
@@ -31,7 +32,24 @@ export type DomainCommand =
   | { type: "SET_ACTIVE_VARIANT"; clipId: string; variantId: string; previous?: string }
   | { type: "INVALIDATE_CACHE"; nodeId: string }
   | { type: "REQUEST_RENDER"; clipId: string; quality: "proxy" | "final" }
-  | { type: "CANCEL_RENDER"; jobId: string };
+  | { type: "CANCEL_RENDER"; jobId: string }
+  | { type: "LINK_CLIP_WORLD"; clipId: string; worldId: string | null }
+  | {
+      type: "APPLY_CAMERA_RIG";
+      clipId: string;
+      preset: CameraRigPreset;
+      durationFrames: number;
+      startPosition: [number, number, number];
+      startRotation: [number, number, number];
+      focalLengthMm?: number;
+      restore?: {
+        rigParameters: Record<string, unknown> | null;
+        pathParameters?: Record<string, unknown>;
+        createdRig: boolean;
+        rigNodeId: string;
+        pathNodeId: string;
+      };
+    };
 
 export type DomainEventType =
   | "NodeCreated"

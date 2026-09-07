@@ -33,6 +33,19 @@ const node = (overrides: Partial<NodeBase> = {}): NodeBase => {
 };
 
 describe("cache key / content hash", () => {
+  it("does not change when view-only camera visualization flags live on node.ui", () => {
+    const params = { keyframes: [], interpolation: "linear" };
+    const base = node({ kind: "CameraPathNode", type: "CameraPathNode", parameters: params, params });
+    const withViz = node({
+      kind: "CameraPathNode",
+      type: "CameraPathNode",
+      parameters: params,
+      params,
+      ui: { position: { x: 40, y: 80 } },
+    });
+    expect(computeNodeContentHash(withViz)).toBe(computeNodeContentHash(base));
+  });
+
   it("is unchanged when display name or UI position changes", () => {
     const base = node();
     const renamed = node({ name: "Hero Light (renamed)" });

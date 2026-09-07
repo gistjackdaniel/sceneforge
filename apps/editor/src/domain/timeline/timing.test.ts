@@ -73,4 +73,35 @@ describe("temporal validation", () => {
     expect(result.ok).toBe(false);
     expect(result.issues[0]).toContain("초과");
   });
+
+  it("fails when a performance cue ends outside the clip", () => {
+    const ports = defaultPorts();
+    const performance: NodeBase = {
+      id: "performance",
+      name: "Performance Direction",
+      kind: "PerformancePlanNode",
+      type: "PerformancePlanNode",
+      category: "performance",
+      scope: "clip",
+      enabled: true,
+      tags: [],
+      version: 1,
+      referenceType: "local",
+      parameters: { cues: [{ startFrame: 40, endFrame: 60 }] },
+      params: { cues: [{ startFrame: 40, endFrame: 60 }] },
+      downstreamNodeIds: [],
+      status: "clean",
+      inputPorts: ports.inputPorts,
+      outputPorts: ports.outputPorts,
+      createdAt: "t",
+      updatedAt: "t",
+    };
+    const result = validateClipTemporalNodes(
+      withClipTiming(clip(), 0, 48),
+      { performance },
+      ["performance"],
+    );
+    expect(result.ok).toBe(false);
+    expect(result.issues[0]).toContain("초과");
+  });
 });

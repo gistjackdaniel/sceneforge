@@ -7,6 +7,7 @@ describe("Lyra ModelConnector", () => {
   it("executes image_to_world via stub without changing graph schema", async () => {
     const connector = createLyraModelConnector(createStubLyraAdapter());
     expect(connector.supportedTasks()).toContain("image_to_world");
+    expect(connector.capabilities().channels.camera.mode).toBe("exact");
     const request = normalizeRenderRequest({
       task: "image_to_world",
       conditions: [

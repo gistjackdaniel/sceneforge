@@ -71,11 +71,46 @@ export {
   cameraPathParamsFromNode,
   cameraPoseAtFrame,
   defaultCameraPathParams,
+  deleteCameraKeyframe,
+  interpolateCameraPose,
+  isFrameInsideClip,
+  keyframeAtExactFrame,
+  nextKeyframeFrame,
+  previousKeyframeFrame,
+  sampleCameraPath,
+  trimKeyframesToDuration,
   upsertCameraKeyframe,
   type CameraInterpolation,
+  type CameraContinuityRule,
+  type CameraSide,
   type CameraKeyframe,
   type CameraPathParams,
+  type ScreenDirection,
 } from "./cameraPath";
+export {
+  validateCameraContinuity,
+  type CameraContinuityValidation,
+  type CameraSideSample,
+  type ContinuityActorAnchor,
+  type ContinuityCameraSample,
+  type ObservedCameraSide,
+} from "./continuity";
+export {
+  CAMERA_RIG_PRESETS,
+  buildRigPreset,
+  cameraRigNodeIdForClip,
+  normalizeLegacyRig,
+  type CameraRigParams,
+  type CameraRigPreset,
+} from "./cameraRig";
+export {
+  defaultLensParams,
+  lensNodeIdForClip,
+  lensParamsFromNode,
+  verticalFovFromLens,
+  type LensParams,
+  type SensorPreset,
+} from "./lens";
 export {
   CAMERA_MOTION_KINDS,
   OBJECT_MOTION_KINDS,

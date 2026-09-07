@@ -182,6 +182,9 @@ describe("serialization + migrate", () => {
     expect(migrated.nodes["node-clip"].contentHash).toBe("abc123");
 
     expect(migrated.clips["clip-1"].cameraPathNodeId).toBe("node-path");
+    expect(migrated.clips["clip-1"].performancePlanNodeId).toBe("node-clip-1-performance");
+    expect(migrated.nodes["node-clip-1-performance"].kind).toBe("PerformancePlanNode");
+    expect(migrated.clipGraphs["graph-1"].nodeIds).toContain("node-clip-1-performance");
     expect(migrated.clipGraphs["graph-1"].edges[0].sourceNodeId).toBe("node-clip");
     expect(migrated.clipGraphs["graph-1"].edges[0].targetNodeId).toBe("node-path");
 
@@ -189,6 +192,25 @@ describe("serialization + migrate", () => {
     expect(migrated.worlds["world-1"].coordinateSystem).toBe("Y_UP");
     expect(migrated.worlds["world-1"].unitScaleMeters).toBe(1);
     expect(migrated.references.r1.referenceType).toBe("instance");
+  });
+
+  it("seeds splat and point-cloud samples when the apartment world is present", () => {
+    const project = minimalProject();
+    project.worlds = {
+      "world-apartment-livingroom": {
+        ...project.worlds["world-1"],
+        id: "world-apartment-livingroom",
+        name: "Apartment Livingroom",
+        rootUri: "worlds/apartment_livingroom",
+        previewPath: "worlds/apartment_livingroom/preview.glb",
+      },
+    };
+    const migrated = migrateProject(project, {
+      buildDependencyMap: () => emptyDependencyMap,
+      syncClipCacheFields: (clip) => clip,
+    });
+    expect(migrated.worlds["world-color-block-splat"]?.representation).toBe("gaussian_splat");
+    expect(migrated.worlds["world-color-block-points"]?.representation).toBe("point_cloud");
   });
 
   it("normalizes §7.2 kind aliases", () => {

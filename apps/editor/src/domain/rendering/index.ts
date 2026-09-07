@@ -4,11 +4,21 @@ export type {
   RenderCacheEntry,
 } from "./types";
 export { normalizeCacheStatus } from "./types";
+export {
+  negotiateDirectionCapabilities,
+  type DirectionCapabilityNegotiation,
+  type DirectionChannelCapability,
+  type DirectionNegotiationContext,
+  type DirectionSupportMode,
+  type ModelDirectionCapabilities,
+  type NegotiatedDirectionChannel,
+} from "./capabilities";
 export type {
   ConditionType,
   ModelCondition,
   ModelConnector,
   ModelExecutionResult,
+  OutputAspectPreset,
   RenderQuality,
   RenderRequest,
   RenderJob,
@@ -16,8 +26,13 @@ export type {
   ExecutionEstimate,
 } from "./request";
 export {
+  DEFAULT_OUTPUT_ASPECT,
   DEFAULT_RENDER_BACKEND_VERSION,
+  OUTPUT_ASPECT_PRESETS,
   normalizeRenderRequest,
+  outputAspectCss,
+  outputAspectRatio,
+  parseOutputAspectPreset,
   renderJobPriority,
   validateRenderRequest,
 } from "./request";
