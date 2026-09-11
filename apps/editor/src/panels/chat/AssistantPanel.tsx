@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useEditorStore } from "../../state/editorStore";
 import { evaluateShotWorkflow } from "../../domain/workflow";
+import { AgentOrchestrator, type AgentIntentType } from "../../application/services/agent/AgentOrchestrator";
 
 export const AssistantPanel = () => {
   const {
@@ -25,8 +26,55 @@ export const AssistantPanel = () => {
     if (!trimmed) {
       return;
     }
-    dispatch({ type: "assistant-message", message: trimmed });
+    const detected = AgentOrchestrator.detectIntent(trimmed);
+    if (!detected) {
+      dispatch({ type: "assistant-message", message: trimmed });
+      setInput("");
+      return;
+    }
+    const plan = AgentOrchestrator.plan(detected, { project, selectedClip });
+    if (detected === "render_shot") {
+      if (!plan.requiresConfirmation) {
+        const msg = plan.notes?.[0] ?? "샷 설정을 먼저 완료하세요.";
+        dispatch({ type: "assistant-message", message: `렌더 보류: ${msg}` });
+        setInput("");
+        return;
+      }
+      const ok = typeof window !== "undefined" ? window.confirm(plan.confirmMessage ?? "Render shot?") : true;
+      if (!ok) {
+        dispatch({ type: "assistant-message", message: "렌더 요청이 취소되었습니다." });
+        setInput("");
+        return;
+      }
+      dispatch({ type: "submit-video-render", clipId: selectedClip.id });
+      setInput("");
+      return;
+    }
+    void AgentOrchestrator.execute(plan, (commands, logMessage) => {
+      dispatch({ type: "agent-execute-commands", commands, logMessage });
+    });
     setInput("");
+  };
+
+  const handleIntent = (intent: AgentIntentType) => {
+    const plan = AgentOrchestrator.plan(intent, { project, selectedClip });
+    if (intent === "render_shot") {
+      if (!plan.requiresConfirmation) {
+        const msg = plan.notes?.[0] ?? "샷 설정을 먼저 완료하세요.";
+        dispatch({ type: "assistant-message", message: `렌더 보류: ${msg}` });
+        return;
+      }
+      const ok = typeof window !== "undefined" ? window.confirm(plan.confirmMessage ?? "Render shot?") : true;
+      if (!ok) {
+        dispatch({ type: "assistant-message", message: "렌더 요청이 취소되었습니다." });
+        return;
+      }
+      dispatch({ type: "submit-video-render", clipId: selectedClip.id });
+      return;
+    }
+    void AgentOrchestrator.execute(plan, (commands, logMessage) => {
+      dispatch({ type: "agent-execute-commands", commands, logMessage });
+    });
   };
 
   return (
@@ -55,22 +103,13 @@ export const AssistantPanel = () => {
       <div className="assistant-chips">
         <button
           type="button"
-          onClick={() =>
-            dispatch({
-              type: "set-world",
-              clipId: selectedClip.id,
-              worldId: Object.keys(project.worlds)[0],
-              worldMode: "structured_3d",
-            })
-          }
+          onClick={() => handleIntent("link_world")}
         >
           이 구간용 방 배경 만들어줘
         </button>
         <button
           type="button"
-          onClick={() =>
-            dispatch({ type: "apply-shot-preset", clipId: selectedClip.id, preset: "CU" })
-          }
+          onClick={() => handleIntent("apply_shot_preset")}
         >
           CU 샷 적용
         </button>
@@ -92,7 +131,7 @@ export const AssistantPanel = () => {
         </button>
         <button
           type="button"
-          onClick={() => dispatch({ type: "submit-video-render", clipId: selectedClip.id })}
+          onClick={() => handleIntent("render_shot")}
           disabled={!shotWorkflow.readyForRender}
           title={!shotWorkflow.readyForRender ? shotWorkflow.blockingIssues[0] : undefined}
         >
