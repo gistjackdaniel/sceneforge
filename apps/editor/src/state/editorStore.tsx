@@ -96,6 +96,7 @@ import {
   type ViewportObjectKind,
 } from "../application/services/viewportCommit";
 import { createNodeBase } from "../application/services/nodeFactory";
+import { WorkspaceFocus } from "../application/services/workspaceFocus";
 import type { OverlayKind } from "../domain/worlds/viewportRepresentation";
 import {
   DEFAULT_OUTPUT_ASPECT,
@@ -124,6 +125,9 @@ const STORAGE_KEY = "sceneforge-editor-state-v3";
 /** User-facing left panel tabs. Graph/Library/Inspector are backend-only structures. */
 export type PanelTab = "viewport" | "world-generation" | "direction";
 
+/** Main content area (center pane) selection. */
+export type MainPanel = "playback" | "graph";
+
 const normalizePanelTab = (value: unknown): PanelTab =>
   value === "world-generation" || value === "direction" ? value : "viewport";
 
@@ -134,11 +138,13 @@ export interface AssistantMessage {
   createdAt: string;
 }
 
-interface EditorUiState {
+export interface EditorUiState {
   selectedClipId: string;
   selectedNodeId: string;
   selectedLibraryNodeId?: string;
   panelTab: PanelTab;
+  /** Which main (center) panel is visible — playback or graph */
+  mainPanel: MainPanel;
   playback: "stopped" | "playing";
   workflowLog: string[];
   assistantMessages: AssistantMessage[];
@@ -228,6 +234,7 @@ type EditorAction =
   | { type: "select-clip"; clipId: string }
   | { type: "select-node"; nodeId: string }
   | { type: "set-panel-tab"; tab: PanelTab }
+  | { type: "set-main-panel"; panel: MainPanel }
   | { type: "scrub-playhead"; playhead: number }
   | { type: "trim-clip"; clipId: string; duration: number }
   | { type: "set-world"; clipId: string; worldId: string; worldMode: WorldMode }
@@ -618,6 +625,7 @@ const createInitialState = (): EditorState => {
     ui: {
       selectedClipId: "clip-001",
       selectedNodeId: "node-clip-001-clip",
+      mainPanel: "playback",
       panelTab: "viewport",
       playback: "stopped",
       workflowLog: [
@@ -1086,22 +1094,14 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
           ui: appendWorkflowLog(state.ui, "선택한 클립을 찾을 수 없습니다."),
         };
       }
-      const cameraNodeId = clip.cameraPathNodeId ?? `node-${clip.id}-trajectory`;
-      return {
-        ...state,
-        ui: {
-          ...state.ui,
-          selectedClipId: action.clipId,
-          selectedNodeId: `node-${clip.id}-clip`,
-          previewWorldId: undefined,
-          highlightedNodeIds: [cameraNodeId, `node-${clip.id}-clip`].filter((id) => project.nodes[id]),
-        },
-      };
+      return { ...state, ui: WorkspaceFocus.focusClipGraph(project, state.ui, action.clipId) };
     }
     case "select-node":
       return { ...state, ui: { ...state.ui, selectedNodeId: action.nodeId } };
     case "set-panel-tab":
       return { ...state, ui: { ...state.ui, panelTab: action.tab } };
+    case "set-main-panel":
+      return { ...state, ui: { ...state.ui, mainPanel: action.panel } };
     case "scrub-playhead": {
       const nextProject = updateProjectMetadata({
         ...project,
@@ -2455,6 +2455,7 @@ const composePersistedEditor = (state: EditorState): string =>
       selectedNodeId: state.ui.selectedNodeId,
       selectedLibraryNodeId: state.ui.selectedLibraryNodeId,
       panelTab: state.ui.panelTab,
+      mainPanel: state.ui.mainPanel,
       playback: "stopped",
       workflowLog: state.ui.workflowLog,
       assistantMessages: state.ui.assistantMessages,
@@ -2484,6 +2485,7 @@ const parsePersistedEditor = (raw: string): EditorState | undefined => {
       ui: {
         ...createInitialState().ui,
         ...parsed.ui,
+        mainPanel: parsed.ui?.mainPanel === "graph" ? "graph" : "playback",
         worldGenDraft: {
           ...createInitialState().ui.worldGenDraft,
           ...parsed.ui?.worldGenDraft,
