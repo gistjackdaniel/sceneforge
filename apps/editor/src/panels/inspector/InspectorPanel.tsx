@@ -39,12 +39,41 @@ export const InspectorPanel = () => {
       {showApproval && pending && (
         <div className="rerender-approval">
           <p>{pending.impactSentence}</p>
-          <p className="muted">{pending.affectedClipIds.length}개 컷이 proxy queue 대기 중입니다.</p>
-          <div className="button-row wrap">
-            <button onClick={() => dispatch({ type: "approve-partial-rerender" })}>
-              Approve Partial Rerender
-            </button>
-            <button onClick={() => dispatch({ type: "dismiss-partial-rerender" })}>Dismiss</button>
+          <div className="stack compact">
+            <div className="button-row wrap">
+              <button onClick={() => dispatch({ type: "set-all-pending-rerender", selected: true })}>Select All</button>
+              <button onClick={() => dispatch({ type: "set-all-pending-rerender", selected: false })}>Clear All</button>
+            </div>
+            <div className="affected-clips-readonly">
+              <ul>
+                {pending.affectedClipIds.map((clipId) => {
+                  const clip = project.clips[clipId];
+                  const selected = pending.selectedClipIds.includes(clipId);
+                  return (
+                    <li key={clipId}>
+                      <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => dispatch({ type: "toggle-pending-rerender-clip", clipId })}
+                        />
+                        <span>{clip?.name ?? clipId}</span>
+                        {clip && <CacheStatusBadge status={clip.cacheStatus} />}
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+            <p className="muted">
+              Selected {pending.selectedClipIds.length} / {pending.affectedClipIds.length} clip(s) for proxy re-render.
+            </p>
+            <div className="button-row wrap">
+              <button onClick={() => dispatch({ type: "approve-partial-rerender" })}>
+                Approve Partial Rerender ({pending.selectedClipIds.length})
+              </button>
+              <button onClick={() => dispatch({ type: "dismiss-partial-rerender" })}>Dismiss</button>
+            </div>
           </div>
         </div>
       )}
