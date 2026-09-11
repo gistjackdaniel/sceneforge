@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "worldId": "world-apartment-livingroom",
+  "elements": [
+    {
+      "id": "elem-room-living",
+      "name": "Living Room Zone",
+      "kind": "room",
+      "description": "메인 대화 장면 구역"
+    },
+    {
+      "id": "elem-actor-mark-a",
+      "name": "Actor Mark A",
+      "kind": "actor_mark",
+      "description": "주연 배우 기본 스탠딩 위치"
+    },
+    {
+      "id": "elem-camera-anchor-wide",
+      "name": "Camera Anchor Wide",
+      "kind": "camera_anchor",
+      "description": "와이드 샷 기본 카메라 앵커"
+    },
+    {
+      "id": "elem-light-socket-window",
+      "name": "Window Light Socket",
+      "kind": "light_socket",
+      "description": "창문 역광 라이트 소켓"
+    },
+    {
+      "id": "elem-material-window",
+      "name": "Window Glass Material",
+      "kind": "material_slot",
+      "description": "유리 색상 오버라이드 슬롯"
+    }
+  ]
+}
