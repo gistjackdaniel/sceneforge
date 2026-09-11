@@ -311,6 +311,7 @@ type EditorAction =
   | { type: "create-variant"; clipId: string; name?: string }
   | { type: "set-active-variant"; clipId: string; variantId: string }
   | { type: "toggle-world-overlay" }
+  | { type: "agent-execute-commands"; commands: DomainCommand[]; logMessage?: string }
   | { type: "add-camera-keyframe"; clipId: string; frame: number; position: [number, number, number]; rotation: [number, number, number, number]; focalLengthMm: number; focusDistanceM?: number; aperture?: number }
   | { type: "cancel-domain-job"; jobId: string }
   | { type: "trim-clip-frames"; clipId: string; durationFrames: number }
@@ -2247,6 +2248,18 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
           state.ui.showWorldOverlay ? "World overlay hidden." : "World overlay shown.",
         ),
       };
+    case "agent-execute-commands": {
+      const commands = action.commands ?? [];
+      if (commands.length === 0) {
+        return state;
+      }
+      let nextState: EditorState = state;
+      commands.forEach((cmd, index) => {
+        const isLast = index === commands.length - 1;
+        nextState = runDomainCommand(nextState, cmd, isLast ? action.logMessage ?? `${cmd.type} applied.` : false);
+      });
+      return nextState;
+    }
     case "add-camera-keyframe": {
       const clip = project.clips[action.clipId];
       if (!clip) {
