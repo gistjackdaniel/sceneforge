@@ -134,6 +134,30 @@ export const StagePanel = ({ compact = false, alwaysActive = false }: StagePanel
     [cameraParams],
   );
 
+  // Persist a viewport pick as a graph mutation via DomainCommand bus.
+  // We deliberately route through the existing commit-object-transform action to reuse
+  // placement node creation/update semantics and keep undo/redo support.
+  useEffect(() => {
+    if (!clip || !selection || isPreviewOnly) {
+      return;
+    }
+    if (selection.kind === "camera") {
+      // Camera picks are handled explicitly by camera keyframe operations; skip here.
+      return;
+    }
+    dispatch({
+      type: "commit-object-transform",
+      clipId: clip.id,
+      worldElementId: selection.id,
+      kind: selection.kind,
+      position: selection.position,
+      rotation: selection.rotation,
+    });
+    // Only react to element identity changes; position/rotation are provided to seed initial params
+    // and will be updated through transform commits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clip?.id, selection?.id]);
+
   const cameraPose = useMemo((): StageCameraPose | undefined => {
     if (!cameraParams) {
       return undefined;
