@@ -1752,6 +1752,14 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
       if (!clip) {
         return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
       }
+      // Respect package-backed elements.json: only allow references to existing elements in the linked world.
+      const linkedWorld = clip.linkedWorldId ? project.worlds[clip.linkedWorldId] : undefined;
+      if (!linkedWorld || !(linkedWorld.elements ?? []).some((e) => e.id === action.worldElementId)) {
+        return {
+          ...state,
+          ui: appendWorkflowLog(state.ui, "선택한 월드 요소를 찾을 수 없습니다(패키지 elements.json)."),
+        };
+      }
       if (action.kind === "camera") {
         if (state.ui.viewportWorkspace !== "build") {
           return state;
