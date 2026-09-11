@@ -66,3 +66,33 @@ export const loadWorldPackageFromDirectory = async (dirPath: string): Promise<Wo
   });
 };
 
+export const saveWorldElementsToDirectory = async (
+  dirPath: string,
+  elements: ReturnType<typeof createWorldElementsPackage>,
+): Promise<void> => {
+  await writeAtomicFile(filePathFor(dirPath, "elements.json"), serializeWorldElements(elements));
+};
+
+export const upsertWorldElementsInDirectory = async (
+  dirPath: string,
+  worldId: string,
+  incoming: Array<{ id: string; name: string; kind: string; description?: string }>,
+): Promise<void> => {
+  const fs = await import("node:fs/promises");
+  const elementsPath = filePathFor(dirPath, "elements.json");
+  let current = { version: 1, worldId, elements: [] as Array<{ id: string; name: string; kind: string; description?: string }> };
+  try {
+    const raw = await fs.readFile(elementsPath, "utf8");
+    current = deserializeWorldElements(raw);
+  } catch {
+    // file may not exist yet — proceed with empty
+  }
+  const byId = new Map(current.elements.map((e) => [e.id, e]));
+  incoming.forEach((e) => {
+    const prev = byId.get(e.id);
+    byId.set(e.id, { ...prev, ...e });
+  });
+  const next = { version: 1, worldId, elements: Array.from(byId.values()) };
+  await writeAtomicFile(elementsPath, serializeWorldElements(next));
+};
+

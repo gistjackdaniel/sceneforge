@@ -20,12 +20,35 @@ export const findWorldReferenceNodesInClip = (project: Project, clipId: string):
     .filter((node): node is NodeBase => node?.kind === "WorldReferenceNode");
 };
 
+export const findWorldElementRefNodesInClip = (project: Project, clipId: string): NodeBase[] => {
+  const clip = project.clips[clipId];
+  if (!clip) {
+    return [];
+  }
+  const graph = project.clipGraphs[clip.clipGraphId];
+  if (!graph) {
+    return [];
+  }
+  return graph.nodeIds
+    .map((id) => project.nodes[id])
+    .filter((node): node is NodeBase => node?.kind === "WorldElementRefNode");
+};
+
 export const findWorldReferenceNode = (
   project: Project,
   clipId: string,
   worldId: string,
 ): NodeBase | undefined =>
   findWorldReferenceNodesInClip(project, clipId).find((node) => node.parameters.worldId === worldId);
+
+export const findWorldElementRefNodeByElementId = (
+  project: Project,
+  clipId: string,
+  elementId: string,
+): NodeBase | undefined =>
+  findWorldElementRefNodesInClip(project, clipId).find(
+    (node) => node.parameters.worldElementId === elementId,
+  );
 
 export interface LinkWorldToClipResult {
   project: Project;
@@ -131,8 +154,10 @@ export const linkWorldToClip = (
   // Derive WorldElementRefNode(s) from the world's element package, if any.
   const renderNodeId = `node-${clip.id}-render`;
   const elementRefNodes = (world.elements ?? []).map((element) => {
-    const id = `node-${clip.id}-elementref-${element.id}`;
-    const existing = project.nodes[id];
+    // Prefer adopting an existing WorldElementRefNode created via viewport picks
+    const adopted = findWorldElementRefNodeByElementId(project, clip.id, element.id);
+    const id = adopted?.id ?? `node-${clip.id}-elementref-${element.id}`;
+    const existing = adopted ?? project.nodes[id];
     const params = {
       worldId: world.id,
       worldElementId: element.id,
