@@ -195,13 +195,31 @@ export const StagePanel = ({ compact = false, alwaysActive = false }: StagePanel
       if (!clip) {
         return;
       }
+      // 1) Camera keyframe via DomainCommand mapping (add-camera-keyframe -> UPDATE_NODE_PARAMS)
       dispatch({
-        type: "capture-keyframe",
+        type: "add-camera-keyframe",
         clipId: clip.id,
-        pose: payload,
+        frame: localFrame,
+        position: payload.camera.position,
+        rotation: eulerToQuaternionApprox(payload.camera.rotation),
+        focalLengthMm: lens.focalLengthMm,
+        focusDistanceM: lens.focusDistanceM,
+        aperture: lens.aperture,
+      });
+      // 2) Object placements via DomainCommand mapping (commit-object-transform -> CREATE/UPDATE_NODE_PARAMS)
+      payload.objects.forEach((obj) => {
+        dispatch({
+          type: "commit-object-transform",
+          clipId: clip.id,
+          worldElementId: obj.id,
+          kind: obj.kind,
+          position: obj.position,
+          rotation: obj.rotation,
+          scale: undefined,
+        });
       });
     },
-    [clip, dispatch],
+    [clip, dispatch, localFrame, lens],
   );
 
   const addOrUpdateCameraKeyframe = () => {
