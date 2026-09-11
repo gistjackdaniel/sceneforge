@@ -3,3 +3,4 @@ export { computeClipCacheDependencyHash } from "./cacheDependency";
 export { buildImpactSentence } from "./impactSentence";
 export { collectReferencedNodeIds } from "./referenceGraph";
 export { getClipIdsForNode, indexSharedNodeClipUsage } from "./usageIndex";
+export { PartialRerenderGate, type PendingRerenderGateState } from "./partialRerenderGate";

@@ -42,7 +42,13 @@ import type {
 } from "../core/project/types";
 import type { NodeReference, ReferenceType } from "../core/references/types";
 import { buildDependencyMap } from "../core/clipgraph/dependency";
-import { buildImpactSentence, collectReferencedNodeIds, getAffectedClips } from "../core/dependency";
+import {
+  PartialRerenderGate,
+  buildImpactSentence,
+  collectReferencedNodeIds,
+  getAffectedClips,
+  type PendingRerenderGateState,
+} from "../core/dependency";
 import {
   createEmptyRenderQueue,
   enqueueAffectedClips,
@@ -161,9 +167,11 @@ interface EditorUiState {
   viewportOverlays: Record<OverlayKind, boolean>;
   cameraViz: CameraVizState;
   pendingRerender?: {
+    /** Pre-queue partial rerender gate: affected clips and current selection */
     nodeId: string;
     affectedClipIds: string[];
     impactSentence: string;
+    selectedClipIds: string[];
   };
   renderQueue: ReturnType<typeof createEmptyRenderQueue>;
   commandBus: CommandBusState;
@@ -305,6 +313,8 @@ type EditorAction =
   | { type: "assistant-message"; message: string }
   | { type: "approve-partial-rerender" }
   | { type: "dismiss-partial-rerender" }
+  | { type: "toggle-pending-rerender-clip"; clipId: string }
+  | { type: "set-all-pending-rerender"; selected: boolean }
   | { type: "retry-failed-render"; clipId: string; kind: RenderQueueKind }
   | { type: "undo" }
   | { type: "redo" }
@@ -1350,26 +1360,23 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         { type: "UPDATE_NODE_PARAMS", nodeId: node.id, patch: { [action.key]: action.value } },
         `${node.name} parameter ${action.key} updated.`,
       );
-      const affected = getAffectedClips(nextState.project.clips, nextState.project.dependencyMap, node.id);
-      const impact = buildImpactSentence(
-        node.name,
-        affected.map((clip) => clip.name),
-      );
       const needsApproval = node.referenceType === "shared" || node.referenceType === "instance";
+      const pending: PendingRerenderGateState | undefined = needsApproval
+        ? PartialRerenderGate.computePending(
+            node.id,
+            node.name,
+            nextState.project.clips,
+            nextState.project.dependencyMap,
+          )
+        : undefined;
       return {
         ...nextState,
         ui: appendWorkflowLog(
           {
             ...nextState.ui,
-            pendingRerender: needsApproval
-              ? {
-                  nodeId: node.id,
-                  affectedClipIds: affected.map((clip) => clip.id),
-                  impactSentence: impact,
-                }
-              : nextState.ui.pendingRerender,
+            pendingRerender: pending ?? nextState.ui.pendingRerender,
           },
-          `${impact}${needsApproval ? " 승인 후 부분 재렌더링 큐에 추가됩니다." : ""}`,
+          `${pending?.impactSentence ?? ""}${needsApproval ? " 승인 후 부분 재렌더링 큐에 추가됩니다." : ""}`,
         ),
       };
     }
@@ -2130,7 +2137,7 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
       const sequence = project.sequences[project.activeSequenceId];
       let renderQueue = enqueueAffectedClips(
         state.ui.renderQueue,
-        pending.affectedClipIds,
+        pending.selectedClipIds,
         "proxy",
         sequence.playhead,
         sequence.visibleRange,
@@ -2138,7 +2145,7 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         pending.nodeId,
       );
       let nextProject = project;
-      pending.affectedClipIds.forEach((clipId) => {
+      pending.selectedClipIds.forEach((clipId) => {
         nextProject = applyProxyRender(nextProject, clipId, sequence.playhead);
         const queuedItem = renderQueue.proxy.find(
           (item) => item.clipId === clipId && item.status === "queued",
@@ -2151,7 +2158,7 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         project: nextProject,
         ui: appendWorkflowLog(
           { ...state.ui, pendingRerender: undefined, renderQueue },
-          `Approved partial rerender for ${pending.affectedClipIds.length} clip(s).`,
+          `Approved partial rerender for ${pending.selectedClipIds.length} clip(s).`,
         ),
       };
     }
@@ -2163,6 +2170,28 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
           "Partial rerender dismissed. Caches remain invalid until manual render.",
         ),
       };
+    case "toggle-pending-rerender-clip": {
+      const pending = state.ui.pendingRerender;
+      if (!pending) {
+        return state;
+      }
+      const nextPending = PartialRerenderGate.toggleSelection(pending, action.clipId);
+      return {
+        ...state,
+        ui: { ...state.ui, pendingRerender: nextPending },
+      };
+    }
+    case "set-all-pending-rerender": {
+      const pending = state.ui.pendingRerender;
+      if (!pending) {
+        return state;
+      }
+      const nextPending = PartialRerenderGate.setAll(pending, action.selected);
+      return {
+        ...state,
+        ui: { ...state.ui, pendingRerender: nextPending },
+      };
+    }
     case "retry-failed-render": {
       const clip = project.clips[action.clipId];
       const cacheId = action.kind === "proxy" ? clip.proxyCacheId : clip.finalCacheId;
