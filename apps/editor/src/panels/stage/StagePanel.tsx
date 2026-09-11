@@ -145,6 +145,13 @@ export const StagePanel = ({ compact = false, alwaysActive = false }: StagePanel
       // Camera picks are handled explicitly by camera keyframe operations; skip here.
       return;
     }
+    // Guard: only reference existing packaged elements for the linked world.
+    const existsInLinkedWorld = Boolean(
+      world?.id === clip.linkedWorldId && (world?.elements ?? []).some((e) => e.id === selection.id),
+    );
+    if (!existsInLinkedWorld) {
+      return;
+    }
     dispatch({
       type: "commit-object-transform",
       clipId: clip.id,
