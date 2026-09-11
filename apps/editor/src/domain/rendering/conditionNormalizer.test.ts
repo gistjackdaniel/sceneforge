@@ -15,7 +15,7 @@ describe("GenerationConditionNormalizer", () => {
           ],
         },
       ],
-      world: { spatialMemoryAssetId: "mem-1", generatedSegmentAssetId: "seg-1" },
+      world: { worldAssetId: "world-1" },
       camera: { label: "shot-a", frameCount: 24 },
     };
 

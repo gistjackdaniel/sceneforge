@@ -14,12 +14,8 @@ export interface SubjectPlates {
 }
 
 export interface WorldReferences {
-  /** Optional world-level packaged asset id (placeholder — owned by World Generation bot). */
+  /** Reference WorldAsset by id (owned by World Generation). */
   worldAssetId?: string;
-  /** Spatial memory store id (cache kind: spatial_memory). */
-  spatialMemoryAssetId?: string;
-  /** Generated segment id (cache kind: generated_segment). */
-  generatedSegmentAssetId?: string;
 }
 
 export interface CameraSignal {
@@ -144,15 +140,12 @@ export class GenerationConditionNormalizer {
       subjectViews.push({ subjectId: subject.subjectId, role: subject.role, views: viewTags });
     });
 
-    if (input.world && (input.world.worldAssetId || input.world.spatialMemoryAssetId || input.world.generatedSegmentAssetId)) {
+    if (input.world?.worldAssetId) {
       conditions.push({
         id: "world",
         type: "world_reference",
         payload: {
-          clipId: input.clipId,
           worldAssetId: input.world.worldAssetId,
-          spatialMemoryAssetId: input.world.spatialMemoryAssetId,
-          generatedSegmentAssetId: input.world.generatedSegmentAssetId,
         },
       });
     }
