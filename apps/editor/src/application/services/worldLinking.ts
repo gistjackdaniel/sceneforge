@@ -128,9 +128,41 @@ export const linkWorldToClip = (
 
   const clipRootId = `node-${clip.id}-clip`;
   const clipRoot = project.nodes[clipRootId];
+  // Derive WorldElementRefNode(s) from the world's element package, if any.
+  const renderNodeId = `node-${clip.id}-render`;
+  const elementRefNodes = (world.elements ?? []).map((element) => {
+    const id = `node-${clip.id}-elementref-${element.id}`;
+    const existing = project.nodes[id];
+    const params = {
+      worldId: world.id,
+      worldElementId: element.id,
+      elementKind: element.kind,
+      elementName: element.name,
+      visible: true,
+    };
+    return existing
+      ? {
+          ...existing,
+          parameters: { ...existing.parameters, ...params },
+          params: { ...existing.parameters, ...params },
+          updatedAt: input.timestamp,
+        }
+      : createNodeBase({
+          id,
+          name: element.name,
+          kind: "WorldElementRefNode",
+          category: "scene",
+          timestamp: input.timestamp,
+          referenceType: "shared",
+          parameters: params,
+          downstreamNodeIds: [renderNodeId],
+        });
+  });
+
   const nodes: Project["nodes"] = {
     ...project.nodes,
     [nodeId]: worldRef,
+    ...Object.fromEntries(elementRefNodes.map((n) => [n.id, n])),
   };
   if (clipRoot) {
     const nextParams = {
@@ -146,14 +178,22 @@ export const linkWorldToClip = (
     };
   }
 
-  const renderNodeId = `node-${clip.id}-render`;
-  const nextNodeIds = graph.nodeIds.includes(nodeId) ? graph.nodeIds : [...graph.nodeIds, nodeId];
+  const nextNodeIdsBase = graph.nodeIds.includes(nodeId) ? graph.nodeIds : [...graph.nodeIds, nodeId];
+  const elementNodeIds = elementRefNodes.map((n) => n.id);
+  const nextNodeIds = Array.from(new Set([...nextNodeIdsBase, ...elementNodeIds]));
   const hasEdge = graph.edges.some(
     (edge) => edge.sourceNodeId === nodeId && edge.targetNodeId === renderNodeId,
   );
-  const nextEdges = hasEdge
+  // Ensure edges from world reference and each element node to render
+  let nextEdges = hasEdge
     ? graph.edges
     : [...graph.edges, makeWorldRefEdge(`edge-${clip.id}-worldref`, nodeId, renderNodeId)];
+  elementRefNodes.forEach((node) => {
+    const exists = nextEdges.some((e) => e.sourceNodeId === node.id && e.targetNodeId === renderNodeId);
+    if (!exists) {
+      nextEdges = [...nextEdges, makeWorldRefEdge(`edge-${clip.id}-elementref-${node.id}`, node.id, renderNodeId)];
+    }
+  });
 
   const withGraph: Project = {
     ...project,
