@@ -92,7 +92,7 @@ export const TimelinePanel = ({ compact = false }: TimelinePanelProps) => {
             </button>
             {ui.pendingRerender && (
               <button type="button" onClick={() => dispatch({ type: "approve-partial-rerender" })}>
-                Approve Rerender ({ui.pendingRerender.affectedClipIds.length})
+                Approve Rerender ({ui.pendingRerender.selectedClipIds.length})
               </button>
             )}
           </div>

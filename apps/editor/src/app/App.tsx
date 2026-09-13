@@ -11,9 +11,12 @@ import {
   type ViewportWindowMessage,
 } from "./viewportWindow";
 import { AssistantPanel } from "../panels/chat/AssistantPanel";
+import { GraphPanel } from "../panels/graph/GraphPanel";
+import { InspectorPanel } from "../panels/inspector/InspectorPanel";
 import { PlaybackPanel } from "../panels/playback/PlaybackPanel";
 import { TimelinePanel } from "../panels/timeline/TimelinePanel";
 import { ShotWorkflowBar } from "../panels/workflow/ShotWorkflowBar";
+import { useEditorStore } from "../state/editorStore";
 
 const LAYOUT_STORAGE_KEY = "sceneforge-layout-v2";
 const POPOUT_SESSION_KEY = "sceneforge-viewport-popout";
@@ -78,6 +81,9 @@ const loadLayout = (): LayoutSizes => {
 };
 
 const EditorShell = () => {
+  const {
+    state: { ui },
+  } = useEditorStore();
   const [layout, setLayout] = useState<LayoutSizes>(loadLayout);
   const dragStartRef = useRef<LayoutSizes>(layout);
   const chromeBeforeFullscreenRef = useRef<Exclude<ViewportChrome, "fullscreen">>("split");
@@ -248,11 +254,13 @@ const EditorShell = () => {
         <div className="grid-handle-left">
           <ResizeHandle orientation="vertical" onResizeStart={beginDrag} onResize={resizeLeft} />
         </div>
-        <PlaybackPanel />
+        {ui.mainPanel === "graph" ? <GraphPanel /> : <PlaybackPanel />}
         <div className="grid-handle-assistant">
           <ResizeHandle orientation="vertical" onResizeStart={beginDrag} onResize={resizeAssistant} />
         </div>
         <AssistantPanel />
+        {/* Temporary: surface Inspector alongside Assistant to enable approval UI demo */}
+        <InspectorPanel />
         <div className="grid-handle-timeline">
           <ResizeHandle orientation="horizontal" onResizeStart={beginDrag} onResize={resizeTimeline} />
         </div>

@@ -42,7 +42,13 @@ import type {
 } from "../core/project/types";
 import type { NodeReference, ReferenceType } from "../core/references/types";
 import { buildDependencyMap } from "../core/clipgraph/dependency";
-import { buildImpactSentence, collectReferencedNodeIds, getAffectedClips } from "../core/dependency";
+import {
+  PartialRerenderGate,
+  buildImpactSentence,
+  collectReferencedNodeIds,
+  getAffectedClips,
+  type PendingRerenderGateState,
+} from "../core/dependency";
 import {
   createEmptyRenderQueue,
   enqueueAffectedClips,
@@ -96,6 +102,7 @@ import {
   type ViewportObjectKind,
 } from "../application/services/viewportCommit";
 import { createNodeBase } from "../application/services/nodeFactory";
+import { WorkspaceFocus } from "../application/services/workspaceFocus";
 import type { OverlayKind } from "../domain/worlds/viewportRepresentation";
 import {
   DEFAULT_OUTPUT_ASPECT,
@@ -124,6 +131,9 @@ const STORAGE_KEY = "sceneforge-editor-state-v3";
 /** User-facing left panel tabs. Graph/Library/Inspector are backend-only structures. */
 export type PanelTab = "viewport" | "world-generation" | "direction";
 
+/** Main content area (center pane) selection. */
+export type MainPanel = "playback" | "graph";
+
 const normalizePanelTab = (value: unknown): PanelTab =>
   value === "world-generation" || value === "direction" ? value : "viewport";
 
@@ -134,11 +144,13 @@ export interface AssistantMessage {
   createdAt: string;
 }
 
-interface EditorUiState {
+export interface EditorUiState {
   selectedClipId: string;
   selectedNodeId: string;
   selectedLibraryNodeId?: string;
   panelTab: PanelTab;
+  /** Which main (center) panel is visible — playback or graph */
+  mainPanel: MainPanel;
   playback: "stopped" | "playing";
   workflowLog: string[];
   assistantMessages: AssistantMessage[];
@@ -161,9 +173,11 @@ interface EditorUiState {
   viewportOverlays: Record<OverlayKind, boolean>;
   cameraViz: CameraVizState;
   pendingRerender?: {
+    /** Pre-queue partial rerender gate: affected clips and current selection */
     nodeId: string;
     affectedClipIds: string[];
     impactSentence: string;
+    selectedClipIds: string[];
   };
   renderQueue: ReturnType<typeof createEmptyRenderQueue>;
   commandBus: CommandBusState;
@@ -228,6 +242,7 @@ type EditorAction =
   | { type: "select-clip"; clipId: string }
   | { type: "select-node"; nodeId: string }
   | { type: "set-panel-tab"; tab: PanelTab }
+  | { type: "set-main-panel"; panel: MainPanel }
   | { type: "scrub-playhead"; playhead: number }
   | { type: "trim-clip"; clipId: string; duration: number }
   | { type: "set-world"; clipId: string; worldId: string; worldMode: WorldMode }
@@ -305,12 +320,15 @@ type EditorAction =
   | { type: "assistant-message"; message: string }
   | { type: "approve-partial-rerender" }
   | { type: "dismiss-partial-rerender" }
+  | { type: "toggle-pending-rerender-clip"; clipId: string }
+  | { type: "set-all-pending-rerender"; selected: boolean }
   | { type: "retry-failed-render"; clipId: string; kind: RenderQueueKind }
   | { type: "undo" }
   | { type: "redo" }
   | { type: "create-variant"; clipId: string; name?: string }
   | { type: "set-active-variant"; clipId: string; variantId: string }
   | { type: "toggle-world-overlay" }
+  | { type: "agent-execute-commands"; commands: DomainCommand[]; logMessage?: string }
   | { type: "add-camera-keyframe"; clipId: string; frame: number; position: [number, number, number]; rotation: [number, number, number, number]; focalLengthMm: number; focusDistanceM?: number; aperture?: number }
   | { type: "cancel-domain-job"; jobId: string }
   | { type: "trim-clip-frames"; clipId: string; durationFrames: number }
@@ -618,6 +636,7 @@ const createInitialState = (): EditorState => {
     ui: {
       selectedClipId: "clip-001",
       selectedNodeId: "node-clip-001-clip",
+      mainPanel: "playback",
       panelTab: "viewport",
       playback: "stopped",
       workflowLog: [
@@ -1086,22 +1105,14 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
           ui: appendWorkflowLog(state.ui, "선택한 클립을 찾을 수 없습니다."),
         };
       }
-      const cameraNodeId = clip.cameraPathNodeId ?? `node-${clip.id}-trajectory`;
-      return {
-        ...state,
-        ui: {
-          ...state.ui,
-          selectedClipId: action.clipId,
-          selectedNodeId: `node-${clip.id}-clip`,
-          previewWorldId: undefined,
-          highlightedNodeIds: [cameraNodeId, `node-${clip.id}-clip`].filter((id) => project.nodes[id]),
-        },
-      };
+      return { ...state, ui: WorkspaceFocus.focusClipGraph(project, state.ui, action.clipId) };
     }
     case "select-node":
       return { ...state, ui: { ...state.ui, selectedNodeId: action.nodeId } };
     case "set-panel-tab":
       return { ...state, ui: { ...state.ui, panelTab: action.tab } };
+    case "set-main-panel":
+      return { ...state, ui: { ...state.ui, mainPanel: action.panel } };
     case "scrub-playhead": {
       const nextProject = updateProjectMetadata({
         ...project,
@@ -1350,26 +1361,23 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         { type: "UPDATE_NODE_PARAMS", nodeId: node.id, patch: { [action.key]: action.value } },
         `${node.name} parameter ${action.key} updated.`,
       );
-      const affected = getAffectedClips(nextState.project.clips, nextState.project.dependencyMap, node.id);
-      const impact = buildImpactSentence(
-        node.name,
-        affected.map((clip) => clip.name),
-      );
       const needsApproval = node.referenceType === "shared" || node.referenceType === "instance";
+      const pending: PendingRerenderGateState | undefined = needsApproval
+        ? PartialRerenderGate.computePending(
+            node.id,
+            node.name,
+            nextState.project.clips,
+            nextState.project.dependencyMap,
+          )
+        : undefined;
       return {
         ...nextState,
         ui: appendWorkflowLog(
           {
             ...nextState.ui,
-            pendingRerender: needsApproval
-              ? {
-                  nodeId: node.id,
-                  affectedClipIds: affected.map((clip) => clip.id),
-                  impactSentence: impact,
-                }
-              : nextState.ui.pendingRerender,
+            pendingRerender: pending ?? nextState.ui.pendingRerender,
           },
-          `${impact}${needsApproval ? " 승인 후 부분 재렌더링 큐에 추가됩니다." : ""}`,
+          `${pending?.impactSentence ?? ""}${needsApproval ? " 승인 후 부분 재렌더링 큐에 추가됩니다." : ""}`,
         ),
       };
     }
@@ -1752,6 +1760,14 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
       if (!clip) {
         return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
       }
+      // Respect package-backed elements.json: only allow references to existing elements in the linked world.
+      const linkedWorld = clip.linkedWorldId ? project.worlds[clip.linkedWorldId] : undefined;
+      if (!linkedWorld || !(linkedWorld.elements ?? []).some((e) => e.id === action.worldElementId)) {
+        return {
+          ...state,
+          ui: appendWorkflowLog(state.ui, "선택한 월드 요소를 찾을 수 없습니다(패키지 elements.json)."),
+        };
+      }
       if (action.kind === "camera") {
         if (state.ui.viewportWorkspace !== "build") {
           return state;
@@ -2130,7 +2146,7 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
       const sequence = project.sequences[project.activeSequenceId];
       let renderQueue = enqueueAffectedClips(
         state.ui.renderQueue,
-        pending.affectedClipIds,
+        pending.selectedClipIds,
         "proxy",
         sequence.playhead,
         sequence.visibleRange,
@@ -2138,7 +2154,7 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         pending.nodeId,
       );
       let nextProject = project;
-      pending.affectedClipIds.forEach((clipId) => {
+      pending.selectedClipIds.forEach((clipId) => {
         nextProject = applyProxyRender(nextProject, clipId, sequence.playhead);
         const queuedItem = renderQueue.proxy.find(
           (item) => item.clipId === clipId && item.status === "queued",
@@ -2151,7 +2167,7 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         project: nextProject,
         ui: appendWorkflowLog(
           { ...state.ui, pendingRerender: undefined, renderQueue },
-          `Approved partial rerender for ${pending.affectedClipIds.length} clip(s).`,
+          `Approved partial rerender for ${pending.selectedClipIds.length} clip(s).`,
         ),
       };
     }
@@ -2163,6 +2179,28 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
           "Partial rerender dismissed. Caches remain invalid until manual render.",
         ),
       };
+    case "toggle-pending-rerender-clip": {
+      const pending = state.ui.pendingRerender;
+      if (!pending) {
+        return state;
+      }
+      const nextPending = PartialRerenderGate.toggleSelection(pending, action.clipId);
+      return {
+        ...state,
+        ui: { ...state.ui, pendingRerender: nextPending },
+      };
+    }
+    case "set-all-pending-rerender": {
+      const pending = state.ui.pendingRerender;
+      if (!pending) {
+        return state;
+      }
+      const nextPending = PartialRerenderGate.setAll(pending, action.selected);
+      return {
+        ...state,
+        ui: { ...state.ui, pendingRerender: nextPending },
+      };
+    }
     case "retry-failed-render": {
       const clip = project.clips[action.clipId];
       const cacheId = action.kind === "proxy" ? clip.proxyCacheId : clip.finalCacheId;
@@ -2247,6 +2285,18 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
           state.ui.showWorldOverlay ? "World overlay hidden." : "World overlay shown.",
         ),
       };
+    case "agent-execute-commands": {
+      const commands = action.commands ?? [];
+      if (commands.length === 0) {
+        return state;
+      }
+      let nextState: EditorState = state;
+      commands.forEach((cmd, index) => {
+        const isLast = index === commands.length - 1;
+        nextState = runDomainCommand(nextState, cmd, isLast ? action.logMessage ?? `${cmd.type} applied.` : false);
+      });
+      return nextState;
+    }
     case "add-camera-keyframe": {
       const clip = project.clips[action.clipId];
       if (!clip) {
@@ -2455,6 +2505,7 @@ const composePersistedEditor = (state: EditorState): string =>
       selectedNodeId: state.ui.selectedNodeId,
       selectedLibraryNodeId: state.ui.selectedLibraryNodeId,
       panelTab: state.ui.panelTab,
+      mainPanel: state.ui.mainPanel,
       playback: "stopped",
       workflowLog: state.ui.workflowLog,
       assistantMessages: state.ui.assistantMessages,
@@ -2484,6 +2535,7 @@ const parsePersistedEditor = (raw: string): EditorState | undefined => {
       ui: {
         ...createInitialState().ui,
         ...parsed.ui,
+        mainPanel: parsed.ui?.mainPanel === "graph" ? "graph" : "playback",
         worldGenDraft: {
           ...createInitialState().ui.worldGenDraft,
           ...parsed.ui?.worldGenDraft,
