@@ -14,6 +14,7 @@ import { AssistantPanel } from "../panels/chat/AssistantPanel";
 import { PlaybackPanel } from "../panels/playback/PlaybackPanel";
 import { TimelinePanel } from "../panels/timeline/TimelinePanel";
 import { ShotWorkflowBar } from "../panels/workflow/ShotWorkflowBar";
+import { InspectorPanel } from "../panels/inspector/InspectorPanel";
 
 const LAYOUT_STORAGE_KEY = "sceneforge-layout-v2";
 const POPOUT_SESSION_KEY = "sceneforge-viewport-popout";
@@ -253,6 +254,8 @@ const EditorShell = () => {
           <ResizeHandle orientation="vertical" onResizeStart={beginDrag} onResize={resizeAssistant} />
         </div>
         <AssistantPanel />
+        {/* Temporary: surface Inspector alongside Assistant to enable approval UI demo */}
+        <InspectorPanel />
         <div className="grid-handle-timeline">
           <ResizeHandle orientation="horizontal" onResizeStart={beginDrag} onResize={resizeTimeline} />
         </div>

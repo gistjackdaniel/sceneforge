@@ -19,12 +19,12 @@ export const PendingRerenderBanner = () => {
       <div className="pending-rerender-copy">
         <strong>Approve partial rerender</strong>
         <span>
-          {pending.impactSentence} {pending.affectedClipIds.length} clip(s): {clipNames}.
+          {pending.impactSentence} {pending.selectedClipIds.length}/{pending.affectedClipIds.length} selected: {clipNames}.
         </span>
       </div>
       <div className="button-row wrap">
         <button type="button" className="btn-primary" onClick={() => dispatch({ type: "approve-partial-rerender" })}>
-          Approve ({pending.affectedClipIds.length})
+          Approve ({pending.selectedClipIds.length})
         </button>
         <button type="button" onClick={() => dispatch({ type: "dismiss-partial-rerender" })}>
           Later
