@@ -1,5 +1,5 @@
 import { normalizeWorldAsset } from "../../domain/worlds/normalize";
-import type { WorldAsset } from "../../domain/worlds/types";
+import type { WorldAsset, WorldElement } from "../../domain/worlds/types";
 import {
   createWorldDirectoryManifest,
   createWorldElementsPackage,
@@ -8,6 +8,7 @@ import {
   serializeWorldDirectoryManifest,
   serializeWorldElements,
   type WorldDirectoryManifest,
+  type WorldElementsPackage,
 } from "../../core/world/storage";
 import { writeAtomicFile } from "../../infrastructure/persistence";
 
@@ -76,11 +77,11 @@ export const saveWorldElementsToDirectory = async (
 export const upsertWorldElementsInDirectory = async (
   dirPath: string,
   worldId: string,
-  incoming: Array<{ id: string; name: string; kind: string; description?: string }>,
+  incoming: Array<Pick<WorldElement, "id" | "name" | "kind"> & { description?: string }>,
 ): Promise<void> => {
   const fs = await import("node:fs/promises");
   const elementsPath = filePathFor(dirPath, "elements.json");
-  let current = { version: 1, worldId, elements: [] as Array<{ id: string; name: string; kind: string; description?: string }> };
+  let current: WorldElementsPackage = { version: 1, worldId, elements: [] };
   try {
     const raw = await fs.readFile(elementsPath, "utf8");
     current = deserializeWorldElements(raw);
@@ -90,9 +91,14 @@ export const upsertWorldElementsInDirectory = async (
   const byId = new Map(current.elements.map((e) => [e.id, e]));
   incoming.forEach((e) => {
     const prev = byId.get(e.id);
-    byId.set(e.id, { ...prev, ...e });
+    byId.set(e.id, {
+      id: e.id,
+      name: e.name,
+      kind: e.kind,
+      description: e.description ?? prev?.description ?? "",
+    });
   });
-  const next = { version: 1, worldId, elements: Array.from(byId.values()) };
+  const next: WorldElementsPackage = { version: 1, worldId, elements: Array.from(byId.values()) };
   await writeAtomicFile(elementsPath, serializeWorldElements(next));
 };
 

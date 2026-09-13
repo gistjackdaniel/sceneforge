@@ -8,6 +8,11 @@ import { createNodeBase } from "./nodeFactory";
 const now = "2026-01-01T00:00:00.000Z";
 const ports = defaultPorts();
 
+const keyframeCount = (parameters: Record<string, unknown>): number => {
+  const keyframes = parameters.keyframes;
+  return Array.isArray(keyframes) ? keyframes.length : 0;
+};
+
 const renderNode = (): NodeBase => ({
   id: "render",
   name: "Render",
@@ -128,14 +133,14 @@ describe("viewport-style commits go through command bus", () => {
     });
     const executed = executeCommand(project, bus, { type: "UPDATE_NODE_PARAMS", nodeId, patch: { ...patch } }, now);
     expect(executed.result.ok).toBe(true);
-    expect(executed.project.nodes[nodeId].parameters.keyframes?.length ?? 0).toBeGreaterThan(0);
+    expect(keyframeCount(executed.project.nodes[nodeId].parameters)).toBeGreaterThan(0);
     expect(executed.bus.undoStack.length).toBe(1);
 
     const undone = undoCommand(executed.project, executed.bus, now);
-    expect(undone.project.nodes[nodeId].parameters.keyframes?.length ?? 0).toBe(0);
+    expect(keyframeCount(undone.project.nodes[nodeId].parameters)).toBe(0);
 
     const redone = redoCommand(undone.project, undone.bus, now);
-    expect(redone.project.nodes[nodeId].parameters.keyframes?.length ?? 0).toBeGreaterThan(0);
+    expect(keyframeCount(redone.project.nodes[nodeId].parameters)).toBeGreaterThan(0);
   });
 
   it("creates PlacementNode via CREATE_NODE with clipGraphId and supports undo", () => {
