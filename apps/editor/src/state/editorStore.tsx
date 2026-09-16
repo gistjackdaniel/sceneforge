@@ -16,6 +16,7 @@ import {
   migrateLoadedProject,
   resolveNodesToRemoveWithClip,
   linkWorldToClip,
+  enqueueClipRender,
 } from "../application/services";
 import { serializeProject, writeAtomicLocalStorage } from "../infrastructure/persistence";
 import { invalidateCachesForNodeChange } from "../core/cache/invalidation";
@@ -751,6 +752,45 @@ const runDomainCommand = (
     };
   }
   let project = updateProjectMetadata(executed.project);
+  // Bridge domain render events to the job queue
+  let nextUi: EditorUiState = { ...state.ui, commandBus: executed.bus };
+  if (executed.result.events.length > 0) {
+    let queue = nextUi.domainJobQueue;
+    const sequence = project.sequences[project.activeSequenceId];
+    executed.result.events.forEach((evt) => {
+      if (evt.type === "RenderQueued") {
+        const clipId = typeof evt.payload.clipId === "string" ? evt.payload.clipId : undefined;
+        const quality = evt.payload.quality === "proxy" || evt.payload.quality === "final" ? evt.payload.quality : undefined;
+        const cacheKey = typeof evt.payload.cacheKey === "string" ? evt.payload.cacheKey : undefined;
+        if (!clipId || !quality || !cacheKey) {
+          return;
+        }
+        const clip = project.clips[clipId];
+        if (!clip) {
+          return;
+        }
+        const renderNodeId =
+          typeof evt.payload.renderNodeId === "string" ? (evt.payload.renderNodeId as string) : `node-${clip.id}-render`;
+        const createdAt = typeof evt.payload.createdAt === "string" ? (evt.payload.createdAt as string) : now();
+        queue = enqueueClipRender(queue, clip, {
+          renderNodeId,
+          quality,
+          cacheKey,
+          playhead: sequence.playhead,
+          visibleRange: sequence.visibleRange,
+          createdAt,
+        });
+        return;
+      }
+      if (evt.type === "RenderFailed" && evt.payload && (evt.payload as any).cancelled) {
+        const jobId = typeof evt.payload.jobId === "string" ? (evt.payload.jobId as string) : undefined;
+        if (jobId) {
+          queue = cancelRenderJob(queue, jobId);
+        }
+      }
+    });
+    nextUi = { ...nextUi, domainJobQueue: queue };
+  }
   let sourceNodeId =
     "nodeId" in command && typeof command.nodeId === "string"
       ? command.nodeId
@@ -770,11 +810,8 @@ const runDomainCommand = (
     project,
     ui:
       logMessage === false
-        ? { ...state.ui, commandBus: executed.bus }
-        : appendWorkflowLog(
-            { ...state.ui, commandBus: executed.bus },
-            logMessage ?? `${command.type} applied.`,
-          ),
+        ? nextUi
+        : appendWorkflowLog(nextUi, logMessage ?? `${command.type} applied.`),
   };
 };
 
