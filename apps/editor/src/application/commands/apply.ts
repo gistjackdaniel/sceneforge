@@ -464,6 +464,69 @@ export const applyCommand = (
         },
       };
     }
+    case "REQUEST_RENDER": {
+      const clip = project.clips[command.clipId];
+      if (!clip) {
+        return fail("Clip not found.");
+      }
+      const graph = project.clipGraphs[clip.clipGraphId];
+      if (!graph) {
+        return fail("Clip graph not found.");
+      }
+      const renderNodeId = `node-${clip.id}-render`;
+      const hasRenderNode = graph.nodeIds.includes(renderNodeId);
+      if (!hasRenderNode) {
+        return fail("RenderSettingsNode not found in clip graph.");
+      }
+      const cacheKey = project.dependencyMap.cacheHashesByClipId[clip.id] ?? `dep-${clip.id}-${timestamp}`;
+      const jobId = `job-${command.quality}-${clip.id}-${timestamp}`;
+      return {
+        project,
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "CANCEL_RENDER", jobId },
+          events: [
+            event(
+              "RenderQueued",
+              {
+                jobId,
+                clipId: clip.id,
+                renderNodeId,
+                quality: command.quality,
+                cacheKey,
+                createdAt: timestamp,
+              },
+              timestamp,
+            ),
+          ],
+        },
+      };
+    }
+    case "CANCEL_RENDER": {
+      const jobId = command.jobId;
+      if (!jobId) {
+        return fail("jobId is required to cancel render.");
+      }
+      return {
+        project,
+        result: {
+          ok: true,
+          command,
+          events: [
+            event(
+              "RenderFailed",
+              {
+                jobId,
+                reason: "cancelled",
+                cancelled: true,
+              },
+              timestamp,
+            ),
+          ],
+        },
+      };
+    }
     case "APPLY_CAMERA_RIG": {
       if (command.restore) {
         const { rigNodeId, pathNodeId, rigParameters, pathParameters, createdRig } = command.restore;
