@@ -633,12 +633,16 @@ const createInitialProject = (): Project => {
 
 const createInitialState = (): EditorState => {
   const project = createInitialProject();
+  const forcedPanel =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("panel")
+      : null;
   return {
     project,
     ui: {
       selectedClipId: "clip-001",
       selectedNodeId: "node-clip-001-clip",
-      mainPanel: "playback",
+      mainPanel: forcedPanel === "graph" ? "graph" : "playback",
       panelTab: "viewport",
       playback: "stopped",
       workflowLog: [
