@@ -16,7 +16,9 @@ export const GraphPanel = () => {
   const graph = project.clipGraphs[clip.clipGraphId];
   const focusNodeId = ui.highlightedNodeIds[0] ?? ui.selectedNodeId;
   const focusNode = project.nodes[focusNodeId];
-  const [finderQuery, setFinderQuery] = useState("");
+  const initialQuery =
+    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("q") ?? "" : "";
+  const [finderQuery, setFinderQuery] = useState(initialQuery);
   const matches = useMemo(
     () =>
       finderQuery.trim() ? ClipGraphNodeFinder.filter(project, graph.id, finderQuery) : [],

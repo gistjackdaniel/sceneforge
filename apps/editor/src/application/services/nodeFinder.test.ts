@@ -4,6 +4,10 @@ import type { ClipGraph } from "../../domain/project/clipGraph";
 import type { Project } from "../../domain/project/types";
 import { defaultPorts, type NodeBase } from "../../domain/graph/types";
 import { NodeFinderService } from "./nodeFinder";
+import { DEFAULT_OUTPUT_ASPECT } from "../../domain/rendering";
+import { emptyCommandBusState } from "../commands";
+import { createEmptyRenderQueue } from "../../core/render/queue";
+import { createEmptyJobQueue } from "../../domain/rendering/jobQueue";
 
 const node = (id: string, name: string, kind: NodeBase["kind"], category: NodeBase["category"]): NodeBase => ({
   id,
@@ -102,13 +106,13 @@ const makeUi = (): EditorUiState => ({
   },
   viewportTool: "navigate",
   viewportWorkspace: "build",
-  outputAspect: { id: "16:9", width: 1920, height: 1080 },
+  outputAspect: DEFAULT_OUTPUT_ASPECT,
   viewportOverlays: { actorMarks: true, cameraAnchors: true, lightSockets: true, propSockets: true, walkableZones: true },
   cameraViz: { frustum: true, path: true, lookAtLine: true, keyframeMarkers: true },
-  renderQueue: { proxy: [], final: [] },
-  commandBus: { past: [], future: [], pointer: -1 },
+  renderQueue: createEmptyRenderQueue(),
+  commandBus: emptyCommandBusState(),
   showWorldOverlay: true,
-  domainJobQueue: { proxy: [], final: [] },
+  domainJobQueue: createEmptyJobQueue(),
 });
 
 describe("NodeFinderService.focusNodeInSelectedClip", () => {
