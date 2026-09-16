@@ -46,7 +46,9 @@ export const AssistantPanel = () => {
         setInput("");
         return;
       }
-      dispatch({ type: "submit-video-render", clipId: selectedClip.id });
+      void AgentOrchestrator.execute(plan, (commands, logMessage) => {
+        dispatch({ type: "agent-execute-commands", commands, logMessage });
+      });
       setInput("");
       return;
     }
@@ -69,7 +71,9 @@ export const AssistantPanel = () => {
         dispatch({ type: "assistant-message", message: "렌더 요청이 취소되었습니다." });
         return;
       }
-      dispatch({ type: "submit-video-render", clipId: selectedClip.id });
+      void AgentOrchestrator.execute(plan, (commands, logMessage) => {
+        dispatch({ type: "agent-execute-commands", commands, logMessage });
+      });
       return;
     }
     void AgentOrchestrator.execute(plan, (commands, logMessage) => {
