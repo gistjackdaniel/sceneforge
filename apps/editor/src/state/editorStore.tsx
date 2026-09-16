@@ -103,6 +103,7 @@ import {
 } from "../application/services/viewportCommit";
 import { createNodeBase } from "../application/services/nodeFactory";
 import { WorkspaceFocus } from "../application/services/workspaceFocus";
+import { NodeFinderService } from "../application/services/nodeFinder";
 import type { OverlayKind } from "../domain/worlds/viewportRepresentation";
 import {
   DEFAULT_OUTPUT_ASPECT,
@@ -241,6 +242,7 @@ type EditorAction =
   | { type: "connect-nodes"; clipId: string; sourceNodeId: string; targetNodeId: string; label?: string }
   | { type: "select-clip"; clipId: string }
   | { type: "select-node"; nodeId: string }
+  | { type: "focus-node-in-clip-graph"; nodeId: string }
   | { type: "set-panel-tab"; tab: PanelTab }
   | { type: "set-main-panel"; panel: MainPanel }
   | { type: "scrub-playhead"; playhead: number }
@@ -1109,6 +1111,8 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
     }
     case "select-node":
       return { ...state, ui: { ...state.ui, selectedNodeId: action.nodeId } };
+    case "focus-node-in-clip-graph":
+      return { ...state, ui: NodeFinderService.focusNodeInSelectedClip(project, state.ui, action.nodeId) };
     case "set-panel-tab":
       return { ...state, ui: { ...state.ui, panelTab: action.tab } };
     case "set-main-panel":
