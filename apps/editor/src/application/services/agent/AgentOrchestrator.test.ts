@@ -129,6 +129,12 @@ describe("AgentOrchestrator", () => {
     const plan = AgentOrchestrator.plan("render_shot", { project, selectedClip: clip });
     expect(plan.requiresConfirmation).toBe(true);
     expect(plan.confirmTitle).toBeTruthy();
+    expect(plan.commands.length).toBe(1);
+    expect(plan.commands[0].type).toBe("REQUEST_RENDER");
+    if (plan.commands[0].type === "REQUEST_RENDER") {
+      expect(plan.commands[0].clipId).toBe(clip.id);
+      expect(plan.commands[0].quality).toBe("final");
+    }
   });
 
   it("gates render when not ready", () => {
