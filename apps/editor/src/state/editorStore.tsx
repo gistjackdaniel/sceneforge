@@ -103,6 +103,7 @@ import {
   type OutputAspectPreset,
 } from "../domain/rendering";
 import { parseViewportWorkspace, type ViewportWorkspace } from "./viewportWorkspace";
+import { objectTrackNodeId, readObjectTrack, upsertObjectKeyframe, objectKeyframeSchema, type ObjectPose, type SceneObject } from "../domain/worlds/sceneObjects";
 import {
   cancelRenderJob,
   createEmptyJobQueue,
@@ -221,6 +222,9 @@ export interface EditorState {
 }
 
 type EditorAction =
+  | { type: "add-scene-object"; clipId: string; object: SceneObject; source?: Record<string, unknown> }
+  | { type: "key-object"; clipId: string; elementId: string; pose: ObjectPose; frame: number }
+  | { type: "delete-object-key"; clipId: string; elementId: string; frame: number }
   | { type: "add-empty-clip" }
   | { type: "delete-clip"; clipId: string }
   | { type: "delete-node"; nodeId: string }
@@ -843,6 +847,35 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
   const activeSequence = project.sequences[project.activeSequenceId];
 
   switch (action.type) {
+    case "add-scene-object": {
+      const clip = project.clips[action.clipId];
+      if (!clip) return state;
+      const object = action.object;
+      const node = createNodeBase({
+        id: placementNodeIdForElement(clip.id, object.id), name: object.name, kind: nodeKindForObject(object.kind), category: "cinematic",
+        parameters: { ...buildPlacementParams({ worldElementId: object.id, kind: object.kind, ...object, layer: "clip" }),
+          label: object.name, representation: object.representation, uri: object.uri, color: object.color, intensity: object.intensity,
+          visible: object.visible, locked: object.locked, source: action.source },
+        timestamp: now(), downstreamNodeIds: [`node-${clip.id}-render`],
+      });
+      return runDomainCommand(state, { type: "CREATE_NODE", node, clipGraphId: clip.clipGraphId }, `${object.name} added to this shot.`);
+    }
+    case "key-object":
+    case "delete-object-key": {
+      const clip = project.clips[action.clipId];
+      if (!clip || !Number.isInteger(action.frame) || !isFrameInsideClip(action.frame, clipDurationFrames(clip))) return state;
+      const nodeId = objectTrackNodeId(clip.id, action.elementId);
+      const existing = project.nodes[nodeId];
+      const track = readObjectTrack(existing?.parameters) ?? { targetElementId: action.elementId, interpolation: "linear" as const, keyframes: [] };
+      if (action.type === "delete-object-key" && !existing) return state;
+      const key = action.type === "key-object" ? objectKeyframeSchema.safeParse({ ...action.pose, frame: action.frame }) : undefined;
+      if (key && !key.success) return state;
+      const updated = key?.success ? upsertObjectKeyframe(track, key.data) : { ...track, keyframes: track.keyframes.filter((item) => item.frame !== action.frame) };
+      if (existing) return runDomainCommand(state, { type: "UPDATE_NODE_PARAMS", nodeId, patch: updated }, `Object pose updated at ${action.frame}f.`);
+      const node = createNodeBase({ id: nodeId, name: `Motion · ${action.elementId}`, kind: "ObjectTrajectoryNode", category: "cinematic",
+        parameters: updated, timestamp: now(), downstreamNodeIds: [`node-${clip.id}-render`] });
+      return runDomainCommand(state, { type: "CREATE_NODE", node, clipGraphId: clip.clipGraphId }, `Object track created at ${action.frame}f.`);
+    }
     case "add-empty-clip": {
       const clipId = makeId("clip");
       const graphId = makeId("graph");

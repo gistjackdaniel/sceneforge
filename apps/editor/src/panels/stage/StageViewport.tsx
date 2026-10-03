@@ -6,7 +6,6 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import {
   overlayKindForElement,
   viewportPreviewBadge,
-  worldOverlayMarkerElements,
   type OverlayKind,
   type ViewportLoadState,
   type ViewportRepresentationPlan,
@@ -16,15 +15,17 @@ import {
   createPointCloudPreview,
   parsePly,
 } from "../../infrastructure/renderers/viewport";
-import type { WorldAsset, WorldElement } from "../../domain/worlds/types";
+import type { WorldAsset } from "../../domain/worlds/types";
 import type { ViewportTool, ViewportWorkspace, CameraVizState } from "../../state/editorStore";
 import type { CameraKeyframe } from "../../domain/graph/cameraPath";
+import type { SceneObject } from "../../domain/worlds/sceneObjects";
 
 export interface StageObjectTransform {
   id: string;
   kind: "actor" | "prop" | "light";
   position: [number, number, number];
   rotation: [number, number, number];
+  scale?: [number, number, number];
 }
 
 export interface StageCameraPose {
@@ -42,6 +43,11 @@ export interface ViewportSelection {
 }
 
 interface StageViewportProps {
+  sceneObjects?: SceneObject[];
+  selectedId?: string;
+  showCameraPreview?: boolean;
+  readOnly?: boolean;
+  lighting?: { intensity: number; color: string };
   world?: WorldAsset;
   worldName?: string;
   previewPlan: ViewportRepresentationPlan;
@@ -74,15 +80,13 @@ interface StageViewportProps {
   resetSignal?: number;
 }
 
-const kindFromElement = (element: WorldElement): "actor" | "prop" | "light" => {
-  if (element.kind === "actor_mark") {
-    return "actor";
+const disposeObject = (object: THREE.Object3D) => object.traverse((child) => {
+  if (child instanceof THREE.Mesh) {
+    child.geometry.dispose();
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    materials.forEach((material) => material.dispose());
   }
-  if (element.kind === "light_socket") {
-    return "light";
-  }
-  return "prop";
-};
+});
 
 const resolveMediaUri = (uri: string): string =>
   uri.startsWith("data:") || uri.startsWith("blob:") || uri.startsWith("http") || uri.startsWith("/")
@@ -151,6 +155,8 @@ const applyRecordLook = (camera: THREE.PerspectiveCamera, dx: number, dy: number
 };
 
 export const StageViewport = ({
+  sceneObjects = [], selectedId, showCameraPreview = false, readOnly = false,
+  lighting = { intensity: 1.2, color: "#ffffff" },
   world,
   worldName,
   previewPlan,
@@ -182,6 +188,11 @@ export const StageViewport = ({
   resetSignal = 0,
 }: StageViewportProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const previewRef = useRef(showCameraPreview);
+  const readOnlyRef = useRef(readOnly);
+  previewRef.current = showCameraPreview;
+  readOnlyRef.current = readOnly;
+  const lastCaptureRef = useRef(0);
   const onTransformCommitRef = useRef(onTransformCommit);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onLoadStateChangeRef = useRef(onLoadStateChange);
@@ -224,6 +235,7 @@ export const StageViewport = ({
     stageFloor: THREE.Object3D;
     grid: THREE.Object3D;
     dragging: boolean;
+    keyLight: THREE.DirectionalLight;
   } | null>(null);
   const loadTokenRef = useRef(0);
   const [hud, setHud] = useState(worldName ?? "No world");
@@ -257,7 +269,7 @@ export const StageViewport = ({
     scene.add(transform.getHelper());
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.45));
-    const keyLight = new THREE.DirectionalLight(0x7ee8ff, 1.2);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
     keyLight.position.set(3, 5, 2);
     scene.add(keyLight);
 
@@ -266,7 +278,7 @@ export const StageViewport = ({
       new THREE.MeshStandardMaterial({ color: 0x151b24 }),
     );
     floor.rotation.x = -Math.PI / 2;
-    const grid = new THREE.GridHelper(12, 24, 0x00c2ff, 0x1e2a38);
+    const grid = new THREE.GridHelper(12, 24, 0x46504e, 0x232a2c);
     scene.add(floor);
     scene.add(grid);
 
@@ -279,7 +291,7 @@ export const StageViewport = ({
     );
     shotBody.rotation.x = Math.PI / 2;
     shotCamera.add(shotBody);
-    const helperCam = new THREE.PerspectiveCamera(50, outputAspect, 0.12, 3.5);
+    const helperCam = new THREE.PerspectiveCamera(50, outputAspect, 0.12, 100);
     shotCamera.add(helperCam);
     scene.add(shotCamera);
     const frustumHelper = new THREE.CameraHelper(helperCam);
@@ -326,6 +338,7 @@ export const StageViewport = ({
       stageFloor: floor,
       grid,
       dragging: false,
+      keyLight,
     };
     sceneApiRef.current = api;
 
@@ -333,14 +346,14 @@ export const StageViewport = ({
     const pointer = new THREE.Vector2();
 
     const pickObject = (event: PointerEvent) => {
-      if (api.dragging || workspaceRef.current === "record") {
+      if (readOnlyRef.current || api.dragging || workspaceRef.current === "record" || toolRef.current === "navigate" || event.button !== 0) {
         return;
       }
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
-      const pickables = Array.from(objects.values());
+      const pickables = Array.from(objects.values()).filter((object) => object.visible && !object.userData.locked);
       const hits = raycaster.intersectObjects(pickables, true);
       const raw = hits[0]?.object;
       if (!raw) {
@@ -353,6 +366,7 @@ export const StageViewport = ({
       if (!picked || !objects.has(picked.name)) {
         return;
       }
+      if (picked.userData.locked) return;
       transform.attach(picked);
       const id = picked.name;
       const kind = objectKinds.get(id);
@@ -396,6 +410,11 @@ export const StageViewport = ({
     renderer.domElement.addEventListener("pointerdown", pickObject);
 
     const setFlyKey = (event: KeyboardEvent, pressed: boolean) => {
+      if (!pressed) {
+        const key = event.key.toLowerCase();
+        if (key in flyKeysRef.current) flyKeysRef.current[key as keyof FlyKeys] = false;
+        return;
+      }
       if (isTypingTarget(event.target) || workspaceRef.current !== "record") {
         return;
       }
@@ -469,7 +488,25 @@ export const StageViewport = ({
       } else {
         orbit.update();
       }
+      const size = renderer.getSize(new THREE.Vector2());
+      renderer.setViewport(0, 0, size.x, size.y);
+      renderer.setScissorTest(false);
       renderer.render(scene, camera);
+      if (previewRef.current && workspaceRef.current === "build") {
+        const previewWidth = Math.min(280, size.x * 0.32);
+        const previewHeight = previewWidth / outputAspectRef.current;
+        const helpers = [shotBody, frustumHelper, pathLine, lookAtLine, playheadMarker, keyframeGroup, transform.getHelper(), grid,
+          ...Array.from(objects.values()).filter((object) => object.userData.marker)];
+        const visibility = helpers.map((helper) => helper.visible);
+        helpers.forEach((helper) => { helper.visible = false; });
+        renderer.setViewport(size.x - previewWidth - 16, 16, previewWidth, previewHeight);
+        renderer.setScissor(size.x - previewWidth - 16, 16, previewWidth, previewHeight);
+        renderer.setScissorTest(true);
+        renderer.clearDepth();
+        renderer.render(scene, helperCam);
+        helpers.forEach((helper, index) => { helper.visible = visibility[index]; });
+        renderer.setScissorTest(false);
+      }
     };
     animate();
 
@@ -514,6 +551,7 @@ export const StageViewport = ({
       return;
     }
     const recording = workspace === "record";
+    flyKeysRef.current = emptyFlyKeys();
     if (recording) {
       if (!buildViewRef.current) {
         buildViewRef.current = {
@@ -536,18 +574,21 @@ export const StageViewport = ({
       buildViewRef.current = null;
     }
     liveOverrideRef.current = false;
+    const size = api.renderer.getSize(new THREE.Vector2());
+    api.camera.aspect = size.x / Math.max(1, size.y);
+    api.camera.updateProjectionMatrix();
     const navigate = tool === "navigate";
     api.orbit.enabled = navigate && !api.dragging;
     if (tool === "translate" || tool === "rotate" || tool === "scale") {
       api.transform.setMode(tool === "translate" ? "translate" : tool);
-      api.transform.enabled = true;
+      api.transform.enabled = !readOnly;
     } else if (tool === "select") {
-      api.transform.enabled = true;
+      api.transform.enabled = !readOnly;
     } else {
       api.transform.detach();
       api.transform.enabled = false;
     }
-  }, [tool, workspace]);
+  }, [tool, workspace, readOnly]);
 
   useEffect(() => {
     const api = sceneApiRef.current;
@@ -574,7 +615,7 @@ export const StageViewport = ({
       }
       const element = world?.elements.find((item) => item.id === id);
       const overlay = element ? overlayKindForElement(element.kind) : undefined;
-      object.visible = overlay ? overlays[overlay] : false;
+      if (object.userData.marker && !object.userData.light) object.visible = overlay ? overlays[overlay] : object.visible;
     }
   }, [overlays, world]);
 
@@ -590,6 +631,7 @@ export const StageViewport = ({
       }
       object.position.set(...item.position);
       object.rotation.set(...item.rotation);
+      if (item.scale) object.scale.set(...item.scale);
     });
   }, [objectTransforms]);
 
@@ -641,11 +683,14 @@ export const StageViewport = ({
     }
     api.shotBody.visible = workspace === "build";
     api.frustumHelper.visible = cameraViz.frustum && workspace === "build";
-    api.keyframeGroup.visible = cameraViz.keyframeMarkers;
-    api.pathLine.visible = cameraViz.path && pathSamples.length > 1;
-    api.lookAtLine.visible = Boolean(cameraViz.lookAtLine && lookAtTargetId);
-    api.playheadMarker.visible = cameraViz.path || cameraViz.keyframeMarkers;
+    api.keyframeGroup.visible = cameraViz.keyframeMarkers && workspace === "build";
+    api.pathLine.visible = cameraViz.path && pathSamples.length > 1 && workspace === "build";
+    api.lookAtLine.visible = Boolean(cameraViz.lookAtLine && lookAtTargetId) && workspace === "build";
+    api.playheadMarker.visible = (cameraViz.path || cameraViz.keyframeMarkers) && workspace === "build";
 
+    api.keyframeGroup.children.forEach((child) => {
+      if (child instanceof THREE.Mesh) { child.geometry.dispose(); (child.material as THREE.Material).dispose(); }
+    });
     api.keyframeGroup.clear();
     if (cameraViz.keyframeMarkers) {
       keyframes.forEach((keyframe) => {
@@ -692,33 +737,71 @@ export const StageViewport = ({
       api.objects.delete(id);
       api.objectKinds.delete(id);
     }
-    worldOverlayMarkerElements(world).forEach((element) => {
-      const color =
-        element.kind === "actor_mark"
-          ? 0xffa657
-          : element.kind === "camera_anchor"
-            ? 0x79c0ff
-            : element.kind === "light_socket"
-              ? 0xffd666
-              : 0x238636;
-      const mesh = new THREE.Mesh(
-        element.kind === "zone" ? new THREE.CircleGeometry(0.45, 24) : new THREE.CylinderGeometry(0.12, 0.12, 0.04, 20),
-        new THREE.MeshStandardMaterial({ color, emissive: 0x111111 }),
-      );
-      mesh.name = element.id;
-      mesh.position.set(
-        element.kind === "actor_mark" ? -0.6 : element.kind === "camera_anchor" ? 1.2 : 0.4,
-        0.05,
-        element.kind === "light_socket" ? -0.8 : 0.2,
-      );
-      if (element.kind === "zone") {
-        mesh.rotation.x = -Math.PI / 2;
+    let disposed = false;
+    const loaded: THREE.Object3D[] = [];
+    sceneObjects.forEach((item) => {
+      const group = new THREE.Group();
+      group.name = item.id;
+      group.userData.marker = item.representation === "marker";
+      group.userData.light = item.kind === "light";
+      const geometry = item.representation === "sphere" ? new THREE.SphereGeometry(0.35, 24, 16)
+        : item.representation === "box" ? new THREE.BoxGeometry(0.6, 0.6, 0.6)
+        : new THREE.CylinderGeometry(0.12, 0.12, 0.04, 20);
+      const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: item.color }));
+      group.add(mesh);
+      if (item.kind === "light") group.add(new THREE.PointLight(item.color, item.intensity, 20));
+      if (item.representation === "mesh" && item.uri) {
+        new GLTFLoader().load(resolveMediaUri(item.uri), (gltf) => {
+          if (disposed) { disposeObject(gltf.scene); return; }
+          group.remove(mesh);
+          mesh.geometry.dispose();
+          (mesh.material as THREE.Material).dispose();
+          group.add(gltf.scene);
+        }, undefined, () => {
+          if (!disposed) onLoadStateChangeRef.current?.("missing_artifact", `${item.name}: 3D 에셋을 불러올 수 없습니다.`);
+        });
       }
-      api.scene.add(mesh);
-      api.objects.set(element.id, mesh);
-      api.objectKinds.set(element.id, kindFromElement(element));
+      group.position.set(...item.position);
+      group.rotation.set(...item.rotation);
+      group.scale.set(...item.scale);
+      group.visible = item.visible;
+      group.userData.locked = item.locked;
+      api.scene.add(group);
+      api.objects.set(item.id, group);
+      api.objectKinds.set(item.id, item.kind);
+      loaded.push(group);
     });
-  }, [world]);
+    return () => {
+      disposed = true;
+      api.transform.detach();
+      loaded.forEach((object) => { api.scene.remove(object); disposeObject(object); });
+    };
+  }, [sceneObjects.map((item) => `${item.id}:${item.representation}:${item.uri}:${item.kind}`).join("|"), world?.id]);
+
+  useEffect(() => {
+    const api = sceneApiRef.current;
+    if (!api) return;
+    api.keyLight.color.set(lighting.color);
+    api.keyLight.intensity = lighting.intensity;
+    sceneObjects.forEach((item) => {
+      const object = api.objects.get(item.id);
+      if (!object) return;
+      object.visible = item.visible;
+      object.userData.locked = item.locked;
+      if (!api.dragging) {
+        object.position.set(...item.position);
+        object.rotation.set(...item.rotation);
+        object.scale.set(...item.scale);
+      }
+      object.traverse((child) => {
+        if (child instanceof THREE.PointLight) { child.color.set(item.color); child.intensity = item.intensity; }
+        if (child instanceof THREE.Mesh && item.representation !== "mesh") (child.material as THREE.MeshStandardMaterial).color.set(item.color);
+      });
+    });
+    const selected = selectedId ? api.objects.get(selectedId) : undefined;
+    if (selected && selected.visible && !selected.userData.locked && !readOnly && workspace === "build" && tool !== "navigate") api.transform.attach(selected);
+    else api.transform.detach();
+  }, [sceneObjects, selectedId, tool, workspace, readOnly, lighting]);
 
   useEffect(() => {
     const api = sceneApiRef.current;
@@ -862,9 +945,10 @@ export const StageViewport = ({
   }, [previewPlan, worldName, world, fallbackImageUri]);
 
   useEffect(() => {
-    if (!captureSignal || !onCapturePose || !sceneApiRef.current) {
+    if (!captureSignal || captureSignal === lastCaptureRef.current || !onCapturePose || !sceneApiRef.current) {
       return;
     }
+    lastCaptureRef.current = captureSignal;
     const { objects, objectKinds } = sceneApiRef.current;
     const objectTransformsCaptured: StageObjectTransform[] = [];
     objects.forEach((object, id) => {
@@ -877,6 +961,7 @@ export const StageViewport = ({
         kind,
         position: [object.position.x, object.position.y, object.position.z],
         rotation: [object.rotation.x, object.rotation.y, object.rotation.z],
+        scale: [object.scale.x, object.scale.y, object.scale.z],
       });
     });
     const shot = sceneApiRef.current.shotCamera;
@@ -949,6 +1034,9 @@ export const StageViewport = ({
         <span>{hud}</span>
         <span>{viewportPreviewBadge(previewPlan, showingImageProxy)}</span>
       </div>
+      {showCameraPreview && workspace === "build" && (
+        <div className="scene-camera-preview-label">Camera preview · {outputAspectLabel}</div>
+      )}
     </div>
   );
 };

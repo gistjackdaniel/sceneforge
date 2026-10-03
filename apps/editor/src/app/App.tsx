@@ -30,8 +30,8 @@ interface LayoutSizes {
 const DEFAULT_LAYOUT: LayoutSizes = {
   leftWidth: 480,
   assistantWidth: 340,
-  timelineHeight: 240,
-  viewportChrome: "split",
+  timelineHeight: 170,
+  viewportChrome: "expanded",
 };
 
 const LIMITS = {

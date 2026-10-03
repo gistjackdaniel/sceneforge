@@ -216,6 +216,7 @@ const directionContractSchema = z.object({
 });
 
 export const lyraVideoRenderInputSchema = z.object({
+  sceneConditioning: sceneConditioningSchema,
   clipId: z.string(),
   prompt: z.string().optional(),
   keyframes: z.array(stageKeyframePoseSchema),
@@ -272,3 +273,4 @@ export const lyraJobStateSchema = z.object({
     .optional(),
   error: z.string().optional(),
 });
+import { sceneConditioningSchema } from "../../domain/rendering/sceneConditioning";

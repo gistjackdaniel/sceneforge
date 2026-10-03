@@ -365,15 +365,20 @@ textarea {
 }
 
 .ide-main.is-viewport-expanded .left-panel {
-  grid-column: 1 / span 3;
-  grid-row: 1 / span 3;
+  grid-column: 1 / -1;
+  grid-row: 1;
 }
 
 .ide-main.is-viewport-expanded .grid-handle-left,
 .ide-main.is-viewport-expanded .playback-panel,
-.ide-main.is-viewport-expanded .grid-handle-timeline,
-.ide-main.is-viewport-expanded .timeline-panel-compact {
+.ide-main.is-viewport-expanded .grid-handle-assistant,
+.ide-main.is-viewport-expanded .assistant-panel {
   display: none;
+}
+
+.ide-main.is-viewport-expanded .timeline-panel-compact,
+.ide-main.is-viewport-expanded .grid-handle-timeline {
+  grid-column: 1 / -1;
 }
 
 .ide-main.is-viewport-fullscreen {

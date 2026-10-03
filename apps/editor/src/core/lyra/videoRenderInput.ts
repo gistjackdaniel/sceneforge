@@ -22,6 +22,7 @@ import {
 } from "../../domain/rendering/capabilities";
 import { validateCameraContinuity } from "../../domain/graph/continuity";
 import { LYRA_DIRECTION_CAPABILITIES } from "./capabilities";
+import { buildSceneConditioning } from "../../domain/rendering/sceneConditioning";
 
 const defaultCamera = (): StageKeyframePose["camera"] => ({
   position: [2.5, 1.8, 3.2],
@@ -155,6 +156,8 @@ export const buildVideoRenderInput = (
   playhead: number,
   prompt?: string,
   options?: {
+    fps?: number;
+    outputAspect?: string;
     capabilities?: ModelDirectionCapabilities;
     rerenderScope?: DirectionChannelInvalidation[];
   },
@@ -240,6 +243,7 @@ export const buildVideoRenderInput = (
 
   return {
     clipId: clip.id,
+    sceneConditioning: buildSceneConditioning(clip, graph.nodeIds.flatMap((id) => nodes[id] ? [nodes[id]] : []), world, options?.fps, options?.outputAspect),
     prompt,
     keyframes,
     cameraTrajectory: {

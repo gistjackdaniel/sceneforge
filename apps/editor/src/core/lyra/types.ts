@@ -1,6 +1,7 @@
 import type { DirectionChannelInvalidation } from "../../domain/direction";
 import type { DirectionCapabilityNegotiation } from "../../domain/rendering/capabilities";
 import type { CameraContinuityValidation } from "../../domain/graph/continuity";
+import type { SceneConditioning } from "../../domain/rendering/sceneConditioning";
 
 export type LyraJobStatus = "idle" | "queued" | "running" | "completed" | "failed";
 
@@ -171,6 +172,7 @@ export interface DirectionRerenderScope {
 }
 
 export interface LyraVideoRenderInput {
+  sceneConditioning: SceneConditioning;
   clipId: string;
   prompt?: string;
   keyframes: StageKeyframePose[];
