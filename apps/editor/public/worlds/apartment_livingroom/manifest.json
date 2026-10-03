@@ -1,0 +1,13 @@
+{
+  "id": "world-apartment-livingroom",
+  "name": "Apartment Livingroom",
+  "proxyKind": "usd",
+  "representation": "mesh",
+  "rootUri": "worlds/apartment_livingroom",
+  "files": [
+    "world.usda",
+    "semantics.json",
+    "navmesh.bin",
+    "preview.glb"
+  ]
+}

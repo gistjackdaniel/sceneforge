@@ -14,6 +14,7 @@ import {
   fullDirectionInvalidation,
 } from "../../../domain/direction";
 import { negotiateDirectionCapabilities } from "../../../domain/rendering/capabilities";
+import { sceneConditioningSchema } from "../../../domain/rendering/sceneConditioning";
 
 export class ConnectorCancelledError extends Error {
   constructor(message = "Connector execution cancelled") {
@@ -72,6 +73,20 @@ export const createLyraModelConnector = (adapter: LyraAdapter = lyraAdapter): Mo
           },
         );
         const job = await adapter.submitVideoRenderJob({
+          sceneConditioning: sceneConditioningSchema.parse({
+            schemaVersion: 1,
+            source: "editable_scene",
+            delivery: "scene_encoder_required",
+            rasterKeyframes: "forbidden",
+            clipId,
+            time: { fps: 24, durationFrames: Math.max(1, request.frameCount), frameOrigin: "clip_local" },
+            objects: [],
+            objectTracks: [],
+            recipe: [],
+            camera: { interpolation: "linear", keyframes: [] },
+            lens: { focalLengthMm: Number(request.backendOptions.focalLengthMm ?? 35) },
+            outputAspect: String(request.backendOptions.outputAspect ?? "16:9"),
+          }),
           clipId,
           prompt: request.conditions.find((condition) => condition.type === "text")?.payload?.text as
             | string

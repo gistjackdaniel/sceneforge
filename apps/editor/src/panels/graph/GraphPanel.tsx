@@ -25,6 +25,11 @@ export const GraphPanel = () => {
           <p className="eyebrow">ClipGraph Editor</p>
           <h2>{clip.name} Graph</h2>
         </div>
+        <div className="button-row">
+          <button type="button" onClick={() => dispatch({ type: "set-main-panel", panel: "playback" })}>
+            Back to Playback
+          </button>
+        </div>
         <div className="graph-summary">
           <span>{graph.nodeIds.length} nodes</span>
           <span>{graph.edges.length} edges</span>

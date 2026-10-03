@@ -51,3 +51,15 @@ export {
   layersInvalidatedByChange,
   type CacheChangeKind,
 } from "./invalidationTable";
+export {
+  GenerationConditionNormalizer,
+  type SceneSignals,
+  type SubjectPlates,
+  type SubjectPlateView,
+  type SubjectRole,
+  type WorldReferences,
+  type LayoutCue,
+  type PerformanceCueSummary,
+  type ConditionNormalizationResult,
+  type SubjectViewMetadata,
+} from "./conditionNormalizer";

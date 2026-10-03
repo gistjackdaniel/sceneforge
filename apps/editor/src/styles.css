@@ -371,7 +371,9 @@ textarea {
 
 .ide-main.is-viewport-expanded .grid-handle-left,
 .ide-main.is-viewport-expanded .playback-panel,
+.ide-main.is-viewport-expanded .graph-panel,
 .ide-main.is-viewport-expanded .grid-handle-assistant,
+.ide-main.is-viewport-expanded .assistant-column,
 .ide-main.is-viewport-expanded .assistant-panel {
   display: none;
 }
@@ -393,7 +395,9 @@ textarea {
 
 .ide-main.is-viewport-fullscreen .grid-handle-left,
 .ide-main.is-viewport-fullscreen .playback-panel,
+.ide-main.is-viewport-fullscreen .graph-panel,
 .ide-main.is-viewport-fullscreen .grid-handle-assistant,
+.ide-main.is-viewport-fullscreen .assistant-column,
 .ide-main.is-viewport-fullscreen .assistant-panel,
 .ide-main.is-viewport-fullscreen .grid-handle-timeline,
 .ide-main.is-viewport-fullscreen .timeline-panel-compact {
@@ -592,11 +596,41 @@ textarea {
   max-height: 46%;
 }
 
+.assistant-column {
+  grid-column: 5;
+  grid-row: 1 / span 3;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--panel-border);
+}
+
+.assistant-column > .assistant-panel,
+.assistant-column > .inspector-panel {
+  grid-column: auto;
+  grid-row: auto;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  border-left: none;
+}
+
 .assistant-panel {
   grid-column: 5;
   grid-row: 1 / span 3;
   border-left: 1px solid var(--panel-border);
   min-width: 0;
+}
+
+.ide-main > .graph-panel {
+  grid-column: 3;
+  grid-row: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  border-radius: 0;
 }
 
 .playback-panel {
