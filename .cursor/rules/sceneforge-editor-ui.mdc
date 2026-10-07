@@ -6,59 +6,35 @@ alwaysApply: false
 
 # SceneForge Editor UI
 
-기준 문서: [sceneforge_PRD.md](sceneforge_PRD.md) §9–§10, §17
+기준 문서: [sceneforge_PRD.md](sceneforge_PRD.md)
 
-## 패널 역할
+## 화면
 
-| 패널 | 역할 |
+최소 기능의 화면은 Stage 하나다.
+
+| 영역 | 역할 |
 |------|------|
-| Timeline | 1급 작업 공간. Empty clip, linked world, Shared/Instance/Local 배지, proxy/final cache, rerender needed |
-| World Generation | 이미지·prompt·trajectory 입력, 생성 job status, artifact path, memory coverage |
-| Stage (Viewport) | 3DGS/mesh preview, production overlay, placement/rig/camera/light 조작 → Command → 노드 persist |
-| Graph | 현재 컷 서브그래프. World/Shot/Dependency 뷰 전환. 고급 모드에서만 전체 카탈로그 |
-| Inspector | 파라미터 편집, 참조 배지, Reveal References / Break Link / Make Local / Override Value |
-| Library | Asset(월드·캐릭터·룩·프리셋) + project/sequence scope 노드 — shared/instance로 다른 컷 연결 |
-| Chat | 자연어 → Command 번역 (타임라인·스테이지 다음 진입점). 입력은 런타임 검증 |
+| Stage | 3D 자산을 놓고 본다 |
+| Subjects | 사람·사물. 텍스트 포즈 또는 explicit pose |
+| Camera | 카메라 궤적 |
+| Generate video | 자산, 포즈, 궤적을 비디오 모델에 보낸다 |
 
-## UX 플로우 (UI가 지원해야 할 시나리오)
-
-상세: [docs/user-flows/README.md](docs/user-flows/README.md)
-
-**한 샷 작성:** World → Stage(Build) → Camera(Record) → Performance → Render. 완료는 클립 데이터에서 파생.
-
-**월드 생성:** 이미지 + trajectory → `ImageToWorldNode` 실행(connector) → `WorldAsset` 등록. Preview는 그래프를 바꾸지 않고, Use in Current Clip만 현재 컷에 연결.
-
-**다음 컷:** Add Clip은 선택 컷의 월드를 참조로 상속한다. 월드를 복제하지 않는다.
-
-**부분 재렌더:** shared 노드 수정 → affected clips + rerender 범위 **승인 전** 표시 → 승인 → proxy/final queue
-
-**리뷰·교환:** Playback에서 재생. 채널·프레임만 재렌더. OTIO가 무손실 기준.
-
-**3패널 동기화:** Clip 선택 → 해당 Clip Graph 열림 → Viewer가 resolved state 표시 → Camera가 선택 프레임으로 이동
+Graph, Inspector, Direction, World Gen, Assistant, Timeline, Shot Workflow는 최소 화면에 넣지 않는다.
 
 ## 보여줄 것 / 숨길 것
 
 **보여줄 것**
-- 컷이 공유 중인 월드·캐릭터·룩
-- Shared/Instance/Local 상태
-- 변경 시 영향받는 컷, memory coverage %
-- proxy/final cache 상태
+- 샷에 들어간 3D 자산
+- 주체의 포즈 프롬프트 또는 explicit pose
+- 카메라 키 수와 궤적
+- Generate 가능 여부와 실패 이유
 
 **숨길 것**
-- 캐시 키, dependency hash, scheduler, DiT 내부, memory injection 방식
-
-문장형 상태 예시를 UI에 활용한다:
-- "이 컷은 CafeWorld_v03, Hero_v02, WarmNightLook을 공유 중입니다."
-- "카메라 경로의 78%는 기존 SpatialMemory로 커버됩니다."
-- "조명 노드를 수정하면 3개 컷이 다시 렌더링됩니다."
+- 노드 그래프, 캐시 키, dependency hash, 모델 내부
 
 ## 구현 규칙
 
 - **모든 상태 변경은 Command 경유** — UI Component가 Domain Store를 직접 수정하지 않는다 (`object.position.x = 10` ❌, `commandBus.execute({ type: "UPDATE_NODE_PARAMS", ... })` ✅).
-- Stage 조작은 placement/rig/`CameraPathNode`로 persist — UI 전용 state만 두지 않는다. Project 재로드 시 복원 불가능한 상태를 React state에만 저장하지 않는다.
-- Timeline 스크럽 시 `CameraPathNode`, `StageRenderPassNode`, `RenderCacheEntry` 동기화.
-- 복제 UI는 `링크 / 인스턴스 / 독립 복사` 3분리 — 하나의 "복제" 버튼으로 합치지 않는다.
+- Stage의 배치, 포즈 프롬프트, explicit pose, 카메라 궤적은 Command로 저장한다. 새로고침 후 복원되지 않는 값을 React state에만 두지 않는다.
 - Undo/Redo는 Command 단위.
-- Graph Editor 기본 뷰는 현재 컷 핵심 서브그래프만.
-- Import Video Clip UI는 Future — MVP에 추가하지 않는다.
-- 패널 view state는 `state/editorStore.tsx`에서 project graph와 동기화 (목표: application/presentation 분리, PRD §15).
+- 최소 화면에 Graph, Inspector, Direction, Timeline을 다시 열지 않는다.

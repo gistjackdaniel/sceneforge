@@ -125,7 +125,6 @@ import {
   type PerformancePlanParams,
 } from "../domain/performance";
 import type { DirectionChannelInvalidation } from "../domain/direction";
-import { evaluateShotWorkflow } from "../domain/workflow";
 
 const STORAGE_KEY = "sceneforge-editor-state-v3";
 
@@ -2459,45 +2458,19 @@ const runVideoRenderJob = async (
     state.ui.worldGenDraft.prompt,
     { rerenderScope: previousFinalCache?.directionInvalidations },
   );
-  const shotWorkflow = evaluateShotWorkflow({
-    clip,
-    graph,
-    nodes: state.project.nodes,
-    worlds: state.project.worlds,
-    caches: state.project.caches,
-  });
-  if (!shotWorkflow.readyForRender) {
+  const cameraParams = cameraPathParamsFromNode(
+    state.project.nodes[cameraPathNodeIdFromClip(clip)]?.parameters ?? {},
+  );
+  if (cameraParams.keyframes.length === 0) {
     dispatch({
       type: "set-video-render-job",
       job: {
-        jobId: "shot-setup-incomplete",
+        jobId: "camera-trajectory-missing",
         status: "failed",
         progress: 0,
-        message: shotWorkflow.blockingIssues[0] ?? "Finish the shot setup.",
+        message: "Record a camera trajectory.",
         input,
-        error: shotWorkflow.blockingIssues.join(" "),
-      },
-    });
-    return;
-  }
-  const performancePlan = performancePlanFromNode(
-    state.project.nodes[clip.performancePlanNodeId ?? performancePlanNodeIdForClip(clip.id)]?.parameters,
-  );
-  const performanceValidation = validatePerformancePlan(
-    performancePlan,
-    clipDurationFrames(clip),
-  );
-
-  if (!performanceValidation.ok) {
-    dispatch({
-      type: "set-video-render-job",
-      job: {
-        jobId: "direction-contract-invalid",
-        status: "failed",
-        progress: 0,
-        message: "Direction contract has invalid performance timing.",
-        input,
-        error: performanceValidation.errors.join(" "),
+        error: "Record a camera trajectory.",
       },
     });
     return;

@@ -1,3 +1,5 @@
+import { cameraPathParamsFromNode } from "../domain/graph/cameraPath";
+import { cameraPathNodeIdForClip } from "../application/services/viewportCommit";
 import { useEditorStore } from "../state/editorStore";
 
 export const TopBar = () => {
@@ -6,84 +8,43 @@ export const TopBar = () => {
     dispatch,
   } = useEditorStore();
 
-  const activeSequence = project.sequences[project.activeSequenceId];
-  const selectedClip = project.clips[ui.selectedClipId];
-
-  const openViewport = () => {
-    dispatch({ type: "set-panel-tab", tab: "viewport" });
-    dispatch({ type: "set-viewport-workspace", workspace: "build" });
-  };
-
-  const focusRender = () => {
-    window.requestAnimationFrame(() => {
-      const renderButton = document.getElementById("playback-render-button");
-      renderButton?.scrollIntoView({ behavior: "smooth", block: "center" });
-      renderButton?.focus();
-    });
+  const clip = project.clips[ui.selectedClipId];
+  const cameraKeys = clip
+    ? cameraPathParamsFromNode(project.nodes[cameraPathNodeIdForClip(clip)]?.parameters ?? {}).keyframes.length
+    : 0;
+  const job = ui.videoRenderJob;
+  const busy = job?.status === "queued" || job?.status === "running";
+  const generate = () => {
+    if (clip) dispatch({ type: "submit-video-render", clipId: clip.id });
   };
 
   return (
     <header className="top-bar">
       <div className="top-bar-brand">
         <span className="brand-mark">◆</span>
-        <div>
-          <strong>SceneForge</strong>
-          <nav className="top-nav">
-            <button type="button" className={`nav-link ${ui.panelTab === "viewport" ? "is-active" : ""}`} onClick={openViewport}>
-              Editor
-            </button>
-            <button type="button" className={`nav-link ${ui.panelTab === "world-generation" ? "is-active" : ""}`} onClick={() => dispatch({ type: "set-panel-tab", tab: "world-generation" })}>
-              Worlds
-            </button>
-            <button type="button" className={`nav-link ${ui.panelTab === "direction" ? "is-active" : ""}`} onClick={() => dispatch({ type: "set-panel-tab", tab: "direction" })}>
-              Direction
-            </button>
-            <button type="button" className="nav-link" onClick={focusRender}>
-              Render
-            </button>
-          </nav>
-        </div>
+        <strong>SceneForge</strong>
       </div>
-
       <div className="top-bar-prompt">
-        <input
-          className="prompt-input"
-          placeholder="Enter cinematic prompt..."
-          value={ui.worldGenDraft.prompt}
-          onChange={(event) =>
-            dispatch({
-              type: "set-world-gen-draft",
-              draft: { prompt: event.target.value },
-            })
-          }
-        />
         <button
           type="button"
           className="btn-primary"
-          onClick={() => dispatch({ type: "set-panel-tab", tab: "world-generation" })}
+          onClick={generate}
+          disabled={!clip || cameraKeys === 0 || busy}
+          title={cameraKeys === 0 ? "Record a camera trajectory in Motion, then press K." : "Send 3D assets, poses, and the camera trajectory to the video model."}
         >
-          World Setup
+          {busy ? "Generating…" : "Generate video"}
         </button>
+        {job?.message && <span className="muted">{job.message}</span>}
       </div>
-
       <div className="top-bar-meta">
-        <button
-          type="button"
-          onClick={() => dispatch({ type: "undo" })}
-          disabled={ui.commandBus.undoStack.length === 0}
-        >
+        <button type="button" onClick={() => dispatch({ type: "undo" })} disabled={ui.commandBus.undoStack.length === 0}>
           Undo
         </button>
-        <button
-          type="button"
-          onClick={() => dispatch({ type: "redo" })}
-          disabled={ui.commandBus.redoStack.length === 0}
-        >
+        <button type="button" onClick={() => dispatch({ type: "redo" })} disabled={ui.commandBus.redoStack.length === 0}>
           Redo
         </button>
-        <span>{activeSequence.name}</span>
-        <span>{selectedClip.name}</span>
-        <span>{ui.playback}</span>
+        <span>{clip?.name}</span>
+        <span>{cameraKeys === 0 ? "No camera trajectory" : `${cameraKeys} camera keys`}</span>
       </div>
     </header>
   );

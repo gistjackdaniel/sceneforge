@@ -175,7 +175,6 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         <button aria-pressed={!recording} onClick={() => switchMode("build")}>Scene</button>
         <button aria-pressed={recording} onClick={() => switchMode("record")}>Motion</button>
       </div>
-      <button className="scene-icon-button" aria-label="Scene output settings" aria-expanded={drawer === "settings"} onClick={() => toggleDrawer("settings")}><SceneIcon name="settings" /></button>
     </header>
     <div className="scene-stage-area">
       <div className={`scene-stage-canvas ${cameraView ? "is-camera-view" : ""}`} style={{ "--scene-aspect": outputAspectRatio(ui.outputAspect) } as React.CSSProperties}>
@@ -193,7 +192,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           onCapturePose={captureCamera} captureSignal={captureSignal} focusSignal={focusSignal} resetSignal={resetSignal} />
       </div>
       <nav className="scene-rail" aria-label="Scene tools">
-        {([["assets", "plus", "Add assets"], ["layers", "layers", "Scene layers"], ["light", "light", "Lighting"], ["camera", "camera", "Camera & lens"]] as const).map(([id, icon, title]) =>
+        {([["assets", "plus", "Add assets"], ["layers", "layers", "Subjects"], ["camera", "camera", "Camera trajectory"]] as const).map(([id, icon, title]) =>
           <button key={id} className={drawer === id ? "is-active" : ""} aria-label={title} title={title} aria-expanded={drawer === id} onClick={() => toggleDrawer(id)}><SceneIcon name={icon} /></button>)}
       </nav>
       <div className="scene-view-controls">
@@ -206,7 +205,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         {tools.map((tool) => <button key={tool.id} aria-label={tool.label} title={tool.label} aria-pressed={ui.viewportTool === tool.id} onClick={() => dispatch({ type: "set-viewport-tool", tool: tool.id })}><SceneIcon name={tool.icon} /></button>)}
       </div>}
       {drawer && <aside className="scene-drawer" aria-label={`${drawer} panel`}>
-        <div className="scene-drawer-heading"><strong>{{ assets: "Add to scene", layers: "Scene layers", light: "Lighting", camera: "Camera & lens", settings: "Scene output" }[drawer]}</strong><button aria-label="Close panel" onClick={() => setDrawer(null)}><SceneIcon name="close" /></button></div>
+        <div className="scene-drawer-heading"><strong>{{ assets: "Add 3D asset", layers: "Subjects", light: "Lighting", camera: "Camera trajectory", settings: "Scene output" }[drawer]}</strong><button aria-label="Close panel" onClick={() => setDrawer(null)}><SceneIcon name="close" /></button></div>
         {drawer === "assets" && <SceneAssets disabled={!canEdit} onAdd={(object, source) => { if (clip) { dispatch({ type: "add-scene-object", clipId: clip.id, object, source }); select(object.id); setDrawer("layers"); } }} />}
         {drawer === "layers" && <>
           <p className="scene-note">{world?.name ?? "Local scene"} · changes stay in this shot</p>
@@ -218,6 +217,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           </div>)}
           {selected && <><div className="scene-section-label">{selected.name} · {selected.representation === "marker" ? "placement marker" : "3D object"}</div>
             <button onClick={() => setFocusSignal((value) => value + 1)}>Focus selection <kbd>F</kbd></button>
+            {selected.kind !== "light" && <label>Pose prompt<textarea aria-label={`${selected.name} pose prompt`} rows={3} placeholder="How this subject moves. Leave empty and record an explicit pose in Motion with K." value={selected.posePrompt ?? ""} disabled={!canEdit || selected.locked} onChange={(event) => patchObject(selected, { posePrompt: event.target.value })} /></label>}
             {(["position", "rotation", "scale"] as const).map((property) => <fieldset key={property} disabled={!canEdit || selected.locked || playing}><legend>{property}</legend><div className="scene-vector">
               {selected[property].map((value, axis) => <label key={axis}>{["X", "Y", "Z"][axis]}<input aria-label={`${property} ${["X", "Y", "Z"][axis]}`} type="number" step={property === "rotation" ? 5 : 0.1} value={Number((property === "rotation" ? value * 180 / Math.PI : value).toFixed(3))}
                 onChange={(event) => { const numeric = event.target.valueAsNumber; if (!Number.isFinite(numeric) || property === "scale" && numeric <= 0) return;

@@ -47,7 +47,8 @@
 .scene-drawer-heading button { padding: 0; min-height: 24px; width: 24px; }
 .scene-workspace .scene-note { color: #a0aaa4; font-size: 11px; line-height: 1.65; margin: 10px 0 14px; }
 .scene-drawer label { display: flex; flex-direction: column; gap: 7px; color: #abb5ae; font-size: 10px; margin: 12px 0; }
-.scene-drawer input, .scene-drawer select { color: #e0e8e2; background: #111713; border: 1px solid #354038; border-radius: 4px; padding: 7px 8px; min-width: 0; font-size: 11px; }
+.scene-drawer input, .scene-drawer select, .scene-drawer textarea { color: #e0e8e2; background: #111713; border: 1px solid #354038; border-radius: 4px; padding: 7px 8px; min-width: 0; font-size: 11px; font: inherit; }
+.scene-drawer textarea { resize: vertical; min-height: 64px; }
 .scene-drawer input[type="range"] { padding: 0; accent-color: var(--scene-accent); }
 .scene-drawer input[type="color"] { height: 32px; padding: 3px; }
 .scene-section-label { margin: 20px 0 12px; padding-top: 14px; border-top: 1px solid var(--scene-border); font-size: 9px; color: var(--scene-muted); letter-spacing: 0.8px; text-transform: uppercase; }

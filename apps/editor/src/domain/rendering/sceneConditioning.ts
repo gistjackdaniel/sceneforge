@@ -23,6 +23,7 @@ export const sceneConditioningSchema = z.object({
     representation: z.enum(["marker", "box", "sphere", "mesh"]), uri: z.string().optional(),
     position: vector3Schema, rotation: vector3Schema, scale: vector3Schema,
     visible: z.boolean(), locked: z.boolean(), color: z.string(), intensity: z.number().nonnegative(),
+    posePrompt: z.string().optional(),
   })),
   objectTracks: z.array(objectTrackSchema),
   recipe: z.array(z.object({ id: z.string(), kind: z.string(), version: z.number(), parameters: z.record(z.string(), z.unknown()) })),

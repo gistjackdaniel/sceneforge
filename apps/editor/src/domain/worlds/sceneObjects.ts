@@ -27,6 +27,7 @@ export type SceneObject = ObjectPose & {
   locked: boolean;
   color: string;
   intensity: number;
+  posePrompt?: string;
 };
 
 export const objectTrackNodeId = (clipId: string, elementId: string) => `node-${clipId}-motion-${elementId}`;
@@ -90,6 +91,7 @@ export const resolveSceneObjects = (world: WorldAsset | undefined, nodes: NodeBa
       visible: params.visible !== false, locked: params.locked === true,
       color: typeof params.color === "string" && /^#[0-9a-f]{6}$/i.test(params.color) ? params.color : "#d8d2c4",
       intensity: typeof params.intensity === "number" && Number.isFinite(params.intensity) ? Math.max(0, params.intensity) : 2,
+      posePrompt: typeof params.posePrompt === "string" ? params.posePrompt : previous?.posePrompt,
     });
   });
   return [...objects.values()];
