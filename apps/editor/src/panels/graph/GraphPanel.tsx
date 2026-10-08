@@ -1,8 +1,10 @@
+import { useMemo, useState } from "react";
 import { ReferenceBadge } from "../../components/ReferenceBadge";
 import { CacheStatusBadge } from "../../components/CacheStatusBadge";
 import { buildImpactSentence, getAffectedClips } from "../../core/dependency";
 import { edgeSourceId, edgeTargetId } from "../../core/nodes/types";
 import { useEditorStore } from "../../state/editorStore";
+import { ClipGraphNodeFinder } from "../../domain/graph/nodeFinder";
 
 export const GraphPanel = () => {
   const {
@@ -14,6 +16,18 @@ export const GraphPanel = () => {
   const graph = project.clipGraphs[clip.clipGraphId];
   const focusNodeId = ui.highlightedNodeIds[0] ?? ui.selectedNodeId;
   const focusNode = project.nodes[focusNodeId];
+  const initialQuery =
+    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("q") ?? "" : "";
+  const [finderQuery, setFinderQuery] = useState(initialQuery);
+  const matches = useMemo(
+    () =>
+      finderQuery.trim() ? ClipGraphNodeFinder.filter(project, graph.id, finderQuery) : [],
+    [project, graph.id, finderQuery],
+  );
+  const visibleNodeIds = useMemo(
+    () => (finderQuery.trim() ? matches.map((m) => m.nodeId) : graph.nodeIds),
+    [finderQuery, matches, graph.nodeIds],
+  );
   const affectedClips = focusNode
     ? getAffectedClips(project.clips, project.dependencyMap, focusNode.id)
     : [];
@@ -35,6 +49,25 @@ export const GraphPanel = () => {
           <span>{graph.edges.length} edges</span>
           <span>{graph.keyframeNodeIds.length} keyframes</span>
         </div>
+        <div className="finder-inline">
+          <input
+            type="search"
+            placeholder="Find node in this clip…"
+            value={finderQuery}
+            onChange={(e) => setFinderQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && matches.length > 0) {
+                dispatch({ type: "focus-node-in-clip-graph", nodeId: matches[0].nodeId });
+              }
+              if (e.key === "Escape") {
+                setFinderQuery("");
+              }
+            }}
+          />
+          {finderQuery.trim() && (
+            <span className="muted">{matches.length}/{graph.nodeIds.length} match(es)</span>
+          )}
+        </div>
       </div>
 
       {focusNode && (
@@ -48,7 +81,7 @@ export const GraphPanel = () => {
         <div className="graph-column">
           <h3>Nodes</h3>
           <div className="graph-list">
-            {graph.nodeIds.map((nodeId) => {
+            {visibleNodeIds.map((nodeId) => {
               const node = project.nodes[nodeId];
               if (!node) {
                 return null;
@@ -59,7 +92,9 @@ export const GraphPanel = () => {
                 <button
                   key={node.id}
                   className={`graph-node ${ui.selectedNodeId === node.id ? "is-selected" : ""} ${
-                    ui.highlightedNodeIds.includes(node.id) ? "is-highlighted" : ""
+                    ui.highlightedNodeIds.includes(node.id) || (finderQuery && matches.find((m) => m.nodeId === node.id))
+                      ? "is-highlighted"
+                      : ""
                   }`}
                   onClick={() => dispatch({ type: "select-node", nodeId: node.id })}
                 >
