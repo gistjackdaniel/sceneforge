@@ -125,7 +125,7 @@ export class AgentOrchestrator {
       return {
         intent,
         steps,
-        commands: [], // render execution is triggered outside the domain mutator; REQUEST_RENDER can be added later
+        commands: ready ? ([{ type: "REQUEST_RENDER", clipId: clip.id, quality: "final" }] as DomainCommand[]) : [],
         requiresConfirmation: ready,
         confirmTitle: "Render shot?",
         confirmMessage: ready

@@ -149,7 +149,13 @@ export const PlaybackPanel = () => {
           id="playback-render-button"
           type="button"
           className="btn-primary"
-          onClick={() => dispatch({ type: "submit-video-render", clipId: clip.id })}
+          onClick={() =>
+            dispatch({
+              type: "agent-execute-commands",
+              commands: [{ type: "REQUEST_RENDER", clipId: clip.id, quality: "final" }],
+              logMessage: "render_shot applied.",
+            })
+          }
           disabled={renderDisabled}
           title={!shotWorkflow.readyForRender ? shotWorkflow.blockingIssues.join(" ") : undefined}
         >
