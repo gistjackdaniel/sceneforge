@@ -15,7 +15,13 @@ export const TopBar = () => {
   const job = ui.videoRenderJob;
   const busy = job?.status === "queued" || job?.status === "running";
   const generate = () => {
-    if (clip) dispatch({ type: "submit-video-render", clipId: clip.id });
+    if (clip) {
+      dispatch({
+        type: "agent-execute-commands",
+        commands: [{ type: "REQUEST_RENDER", clipId: clip.id, quality: "final" }],
+        logMessage: "Render requested.",
+      });
+    }
   };
 
   return (

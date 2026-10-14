@@ -114,6 +114,8 @@ import { objectTrackNodeId, readObjectTrack, upsertObjectKeyframe, objectKeyfram
 import {
   cancelRenderJob,
   createEmptyJobQueue,
+  enqueueRenderJob,
+  failRenderJob,
   type RenderJobQueue,
 } from "../domain/rendering/jobQueue";
 import {
@@ -769,15 +771,54 @@ const runDomainCommand = (
   if (sourceNodeId && executed.result.events.some((item) => item.type === "NodeMarkedDirty")) {
     project = invalidateCachesForNode(project, sourceNodeId, directionInvalidations);
   }
+  // Bridge domain render events to the UI job queue
+  let domainJobQueue = state.ui.domainJobQueue;
+  for (const evt of executed.result.events) {
+    if (evt.type === "RenderQueued") {
+      const clipId = String(evt.payload.clipId ?? "");
+      if (clipId) {
+        const jobId = String(evt.payload.jobId ?? makeId("render"));
+        const quality = (evt.payload.quality as "proxy" | "final") ?? "final";
+        const renderNodeId = String(evt.payload.renderNodeId ?? `node-${clipId}-render`);
+        const priority = typeof evt.payload.priority === "number" ? (evt.payload.priority as number) : 1000;
+        const cacheKey =
+          typeof evt.payload.cacheKey === "string"
+            ? (evt.payload.cacheKey as string)
+            : `${quality}:${clipId}:${project.dependencyMap.cacheHashesByClipId[clipId] ?? "no-hash"}`;
+        domainJobQueue = enqueueRenderJob(domainJobQueue, {
+          id: jobId,
+          clipId,
+          renderNodeId,
+          quality,
+          priority,
+          cacheKey,
+          status: "queued",
+          createdAt: now(),
+        });
+      }
+    } else if (evt.type === "RenderFailed") {
+      const jobId = String(evt.payload.jobId ?? "");
+      const errorMessage = String(evt.payload.error ?? "Render failed");
+      const retryable = Boolean(evt.payload.retryable);
+      if (jobId) {
+        domainJobQueue = failRenderJob(domainJobQueue, jobId, errorMessage, retryable);
+      }
+    }
+  }
+  // CANCEL_RENDER is a command without events — mark queue item as cancelled
+  if (command.type === "CANCEL_RENDER") {
+    domainJobQueue = cancelRenderJob(domainJobQueue, command.jobId);
+  }
+  const nextUiBase =
+    logMessage === false
+      ? { ...state.ui, commandBus: executed.bus, domainJobQueue }
+      : appendWorkflowLog(
+          { ...state.ui, commandBus: executed.bus, domainJobQueue },
+          logMessage ?? `${command.type} applied.`,
+        );
   return {
     project,
-    ui:
-      logMessage === false
-        ? { ...state.ui, commandBus: executed.bus }
-        : appendWorkflowLog(
-            { ...state.ui, commandBus: executed.bus },
-            logMessage ?? `${command.type} applied.`,
-          ),
+    ui: nextUiBase,
   };
 };
 
@@ -2619,6 +2660,27 @@ export const EditorStoreProvider = ({ children }: { children: ReactNode }) => {
     channel.postMessage({ origin: syncOriginRef.current, body: composed });
     channel.close();
   }, [state]);
+
+  // Bridge: kick off render jobs when a domain RenderQueued event is recorded
+  const lastEventIndexRef = useRef(0);
+  useEffect(() => {
+    const events = state.ui.commandBus.events;
+    if (!Array.isArray(events) || events.length === 0) {
+      lastEventIndexRef.current = 0;
+      return;
+    }
+    const start = lastEventIndexRef.current;
+    const slice = events.slice(start);
+    for (const evt of slice) {
+      if (evt.type === "RenderQueued") {
+        const clipId = String(evt.payload.clipId ?? "");
+        if (clipId) {
+          void runVideoRenderJob(stateRef.current, clipId, baseDispatch);
+        }
+      }
+    }
+    lastEventIndexRef.current = events.length;
+  }, [state.ui.commandBus.events]);
 
   useEffect(() => {
     const applyRemote = (raw: string) => {
