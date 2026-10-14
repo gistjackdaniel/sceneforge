@@ -1,4 +1,7 @@
 import type { ModelCondition } from "./request";
+import type { CameraPathParams } from "../graph/cameraPath";
+import type { LensParams } from "../graph/lens";
+import { BackboneCameraBuilder, backbonePoseSchema, type BackbonePose } from "./backboneV01";
 
 export type SubjectRole = "person" | "object" | "background";
 
@@ -46,6 +49,13 @@ export interface SceneSignals {
   subjects?: SubjectPlates[];
   layoutCues?: LayoutCue[];
   performanceCues?: PerformanceCueSummary[];
+  /** Optional Backbone v0.1 inputs for single-shot MVP. When provided, the camera condition will emit Backbone-format payload. */
+  fps?: number;
+  imageSize?: [number, number];
+  cameraPath?: CameraPathParams;
+  lens?: LensParams;
+  /** Pre-validated SMPL-X pose trajectory (Backbone v0.1). */
+  pose?: BackbonePose;
 }
 
 export interface SubjectViewMetadata {
@@ -151,10 +161,41 @@ export class GenerationConditionNormalizer {
     }
 
     if (input.camera) {
+      // Prefer Backbone v0.1 format when cameraPath + lens + imageSize are provided.
+      if (input.cameraPath && input.lens && input.imageSize) {
+        const cameraPayload = BackboneCameraBuilder.buildFromCameraPath({
+          params: input.cameraPath,
+          lens: input.lens,
+          imageSize: input.imageSize,
+          fps: input.fps ?? 16,
+          numFrames: input.camera.frameCount ?? 81,
+        });
+        conditions.push({
+          id: "camera",
+          type: "camera",
+          payload: {
+            format: "backbone_v0.1",
+            camera: cameraPayload,
+            clipId: input.clipId,
+          },
+        });
+      } else {
+        // Legacy minimal payload (preserve tests and call sites without Backbone inputs).
+        conditions.push({
+          id: "camera",
+          type: "camera",
+          payload: { label: input.camera.label, frameCount: input.camera.frameCount, clipId: input.clipId },
+        });
+      }
+    }
+
+    // Optional SMPL-X pose payload (Backbone v0.1). Do not auto-convert previs trajectories here.
+    if (input.pose) {
+      const pose = backbonePoseSchema.parse(input.pose);
       conditions.push({
-        id: "camera",
-        type: "camera",
-        payload: { label: input.camera.label, frameCount: input.camera.frameCount, clipId: input.clipId },
+        id: "pose",
+        type: "pose",
+        payload: { format: "backbone_v0.1", pose },
       });
     }
 

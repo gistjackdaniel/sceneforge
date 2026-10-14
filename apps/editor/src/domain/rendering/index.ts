@@ -63,3 +63,10 @@ export {
   type ConditionNormalizationResult,
   type SubjectViewMetadata,
 } from "./conditionNormalizer";
+export {
+  BackboneCameraBuilder,
+  backboneCameraSchema,
+  backbonePoseSchema,
+  type BackboneCamera,
+  type BackbonePose,
+} from "./backboneV01";
