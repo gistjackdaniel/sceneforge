@@ -37,6 +37,18 @@ export type DomainCommand =
       presetId: "t_pose" | "a_pose" | "idle" | "walk_contact" | "sit" | "point";
       hand?: { side: "left" | "right"; preset: "open" | "fist" | "point" | "relaxed" };
     }
+  | {
+      type: "SET_JOINT_ROTATION";
+      nodeId: string;
+      frame: number;
+      target:
+        | { kind: "global_orient" }
+        | { kind: "jaw" }
+        | { kind: "body"; index: number }
+        | { kind: "left_hand"; index: number }
+        | { kind: "right_hand"; index: number };
+      axisAngle: [number, number, number];
+    }
   | { type: "UPDATE_NODE_UI"; nodeId: string; ui: NonNullable<NodeBase["ui"]>; previous?: NodeBase["ui"] }
   | { type: "RENAME_NODE"; nodeId: string; name: string; previous?: string }
   | { type: "CONNECT_NODES"; clipGraphId: string; edge: GraphEdge }

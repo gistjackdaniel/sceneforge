@@ -15,6 +15,7 @@ import { buildSceneConditioning } from "../../domain/rendering/sceneConditioning
 import { OUTPUT_ASPECT_PRESETS, outputAspectRatio, type OutputAspectPreset } from "../../domain/rendering";
 import { CAMERA_RIG_PRESETS, type CameraRigPreset } from "../../domain/graph/cameraRig";
 import "./sceneWorkspace.css";
+import { PoseAuthoringController } from "../../presentation/pose/PoseAuthoringController";
 
 type Drawer = "assets" | "layers" | "light" | "camera" | "settings" | null;
 const tools: Array<{ id: ViewportTool; icon: SceneIconName; label: string }> = [
@@ -188,6 +189,16 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           playheadFrame={frame} lookAtTargetId={cameraParams.lookAtTargetElementId}
           onSelectionChange={(selection: ViewportSelection | undefined) => { if (selection && selection.kind !== "camera") { setSelectedId(selection.id); setDrawer("layers"); } }}
           onTransformCommit={(payload) => { const object = sceneObjects.find((item) => item.id === payload.worldElementId); if (object) commitPose(object, { position: payload.position, rotation: payload.rotation, scale: payload.scale ?? object.scale }); }}
+          onJointRotateCommit={(payload) => {
+            if (!clip) return;
+            const cmd = PoseAuthoringController.setJointRotation(
+              { clipId: clip.id, actorElementId: payload.actorElementId, frame },
+              payload.target as any,
+              payload.axisAngle,
+            );
+            dispatch({ type: "agent-execute-commands", commands: [cmd], logMessage: "Joint rotation applied." });
+            setNotice(`${payload.actorElementId} joint rotated · ${frame}f`);
+          }}
           onLoadStateChange={(state, message) => setLoad({ state, message })}
           onCapturePose={captureCamera} captureSignal={captureSignal} focusSignal={focusSignal} resetSignal={resetSignal} />
       </div>

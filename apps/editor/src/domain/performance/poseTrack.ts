@@ -101,3 +101,45 @@ export const sampleSmplxTrack = (track: SmplxTrack | undefined, frame: number): 
   return smplxPoseSchema.parse(out);
 };
 
+export type JointTarget =
+  | { kind: "global_orient" }
+  | { kind: "body"; index: number } // 0..20
+  | { kind: "left_hand"; index: number } // 0..14
+  | { kind: "right_hand"; index: number } // 0..14
+  | { kind: "jaw" };
+
+/** Set one joint axis-angle (absolute) at a frame; create keyframe if missing. Returns updated track and previous [x,y,z]. */
+export const setJointAxisAngleAtFrame = (
+  track: SmplxTrack,
+  frame: number,
+  target: JointTarget,
+  axisAngle: [number, number, number],
+): { track: SmplxTrack; previous: [number, number, number] | undefined } => {
+  const existing = track.keyframes.find((k) => k.frame === frame)?.pose ?? defaultSmplxPose();
+  const pose = JSON.parse(JSON.stringify(existing)) as SmplxPose;
+  let previous: [number, number, number] | undefined;
+  const setTriplet = (arr: number[], tripletIndex: number) => {
+    const base = tripletIndex * 3;
+    previous = [arr[base], arr[base + 1], arr[base + 2]];
+    arr[base] = axisAngle[0];
+    arr[base + 1] = axisAngle[1];
+    arr[base + 2] = axisAngle[2];
+  };
+  if (target.kind === "global_orient") {
+    previous = [pose.global_orient[0], pose.global_orient[1], pose.global_orient[2]];
+    pose.global_orient = axisAngle.slice() as [number, number, number];
+  } else if (target.kind === "jaw") {
+    previous = [pose.jaw_pose[0], pose.jaw_pose[1], pose.jaw_pose[2]];
+    pose.jaw_pose = axisAngle.slice() as [number, number, number];
+  } else if (target.kind === "body") {
+    setTriplet(pose.body_pose, target.index);
+  } else if (target.kind === "left_hand") {
+    setTriplet(pose.left_hand_pose, target.index);
+  } else if (target.kind === "right_hand") {
+    setTriplet(pose.right_hand_pose, target.index);
+  }
+  const updated = upsertSmplxKeyframe(track, { frame, pose });
+  return { track: updated, previous };
+};
+
+

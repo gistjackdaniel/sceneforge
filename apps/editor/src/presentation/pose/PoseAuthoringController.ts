@@ -72,5 +72,15 @@ export class PoseAuthoringController {
       hand,
     };
   }
+
+  static setJointRotation(ctx: PoseAuthoringContext, joint: JointId, axisAngle: [number, number, number]): DomainCommand {
+    return {
+      type: "SET_JOINT_ROTATION",
+      nodeId: this.poseNodeId(ctx),
+      frame: ctx.frame,
+      target: joint as any,
+      axisAngle,
+    };
+  }
 }
 

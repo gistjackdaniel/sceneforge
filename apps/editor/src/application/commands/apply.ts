@@ -9,7 +9,7 @@ import { createClipVariant, setActiveVariant } from "../../domain/timeline/varia
 import { linkWorldToClip } from "../services/worldLinking";
 import { applyCameraRigToProject } from "../services/cameraCraft";
 import type { CommandResult, DomainCommand, DomainEvent } from "./types";
-import { smplxTrackSchema, upsertSmplxKeyframe, removeSmplxKeyframe } from "../../domain/performance/poseTrack";
+import { smplxTrackSchema, upsertSmplxKeyframe, removeSmplxKeyframe, setJointAxisAngleAtFrame } from "../../domain/performance/poseTrack";
 import { posePreset, applyHandPreset } from "../../domain/performance/presets";
 import { performancePlanNodeIdForClip, performancePlanFromNode } from "../../domain/performance";
 
@@ -230,6 +230,47 @@ export const applyCommand = (
           },
           events: [
             event("NodeParamsChanged", { nodeId: node.id, preset: command.presetId, frame: command.frame }, timestamp),
+            event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
+          ],
+        },
+      };
+    }
+    case "SET_JOINT_ROTATION": {
+      const node = project.nodes[command.nodeId];
+      if (!node || node.kind !== "ActorPoseNode") {
+        return fail("ActorPoseNode not found.");
+      }
+      const parsed = smplxTrackSchema.safeParse(node.parameters);
+      const track = parsed.success
+        ? parsed.data
+        : { actorElementId: String((node.parameters as any)?.actorElementId ?? "actor"), interpolation: "slerp", keyframes: [] };
+      const before = track.keyframes;
+      const { track: nextTrack } = setJointAxisAngleAtFrame(track, command.frame, command.target as any, command.axisAngle);
+      const patched = {
+        ...node,
+        parameters: { ...node.parameters, keyframes: nextTrack.keyframes },
+        params: { ...node.params, keyframes: nextTrack.keyframes },
+        updatedAt: timestamp,
+      };
+      patched.contentHash = computeNodeContentHash(patched);
+      const withNode: Project = { ...project, nodes: { ...project.nodes, [node.id]: patched } };
+      const { nodes, result: dirty } = applyDirtyEventToNodes(
+        { nodes: withNode.nodes, references: withNode.references, clipGraphs: withNode.clipGraphs, dependencyMap: withNode.dependencyMap },
+        { sourceNodeId: node.id, reason: "params_changed", timestamp },
+      );
+      return {
+        project: { ...withNode, nodes },
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UPDATE_NODE_PARAMS",
+            nodeId: node.id,
+            patch: { keyframes: before },
+            previous: { keyframes: nextTrack.keyframes },
+          },
+          events: [
+            event("NodeParamsChanged", { nodeId: node.id, joint: command.target, frame: command.frame }, timestamp),
             event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
           ],
         },

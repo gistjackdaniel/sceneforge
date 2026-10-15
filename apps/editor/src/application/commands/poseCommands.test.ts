@@ -97,5 +97,21 @@ describe("pose authoring commands", () => {
     const frames = (executed.project.nodes.pose.parameters as any).keyframes as Array<{ frame: number; pose: { body_pose: number[] } }>;
     expect(frames[0]?.pose?.body_pose?.length).toBe(63);
   });
+
+  it("sets one joint rotation per drag (single command) and supports undo", () => {
+    const project = projectFixture();
+    const executed = executeCommand(
+      project,
+      emptyCommandBusState(),
+      { type: "SET_JOINT_ROTATION", nodeId: "pose", frame: 5, target: { kind: "body", index: 0 }, axisAngle: [0, 0, Math.PI / 4] },
+      now,
+    );
+    expect(executed.result.ok).toBe(true);
+    const frames = (executed.project.nodes.pose.parameters as any).keyframes as Array<{ frame: number; pose: { body_pose: number[] } }>;
+    expect(frames.find((k) => k.frame === 5)?.pose.body_pose[2]).toBeCloseTo(Math.PI / 4, 1e-6);
+    const undone = undoCommand(executed.project, executed.bus, now);
+    const framesAfterUndo = (undone.project.nodes.pose.parameters as any).keyframes as Array<{ frame: number }>;
+    expect(framesAfterUndo.find((k) => k.frame === 5)).toBeFalsy();
+  });
 });
 
