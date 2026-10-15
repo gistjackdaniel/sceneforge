@@ -9,7 +9,12 @@ export type ConditionType =
   | "mask"
   | "camera"
   | "motion"
-  | "world_reference";
+  | "world_reference"
+  // Reserved extension slots for future v0.2 — optional, passthrough only
+  | "identity"
+  | "speech"
+  | "contact_events"
+  | "render_settings";
 
 export interface ModelCondition {
   id: string;
