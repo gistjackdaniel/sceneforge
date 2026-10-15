@@ -85,7 +85,30 @@ export type DomainCommand =
         rigNodeId: string;
         pathNodeId: string;
       };
-    };
+    }
+  // ClipDraft commands — generation drafts are separate from blocking plan
+  | { type: "CREATE_CLIP_DRAFT"; clipId: string; modelId?: string }
+  | {
+      type: "UPDATE_CLIP_DRAFT";
+      clipId: string;
+      patch: Partial<{
+        prompt: string;
+        width: number;
+        height: number;
+        fps: number;
+        durationSeconds: number;
+        outputCount: number;
+        cameraMovementSuggestion?: string;
+      }>;
+    }
+  | { type: "DISCARD_CLIP_DRAFT"; clipId: string }
+  | {
+      type: "ADD_DRAFT_REFERENCE";
+      clipId: string;
+      reference: import("../../domain/generation/clipDraft").DraftReference;
+    }
+  | { type: "REMOVE_DRAFT_REFERENCE"; clipId: string; referenceId: string }
+  | { type: "SET_DRAFT_MODEL"; clipId: string; modelId: string };
 
 export type DomainEventType =
   | "NodeCreated"
