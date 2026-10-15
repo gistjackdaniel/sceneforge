@@ -258,6 +258,19 @@ describe("Generation handoff DTO", () => {
   });
 });
 
+describe("Backbone v0.1 unchanged when extensions are absent", () => {
+  it("does not emit identity/speech/contact_events/render_settings by default", () => {
+    const { project, clip } = projectFixture();
+    const draft = createEmptyClipDraft(clip, { durationSeconds: 4, fps: 16, width: 1280, height: 720 });
+    const { request } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft });
+    const newTypes = new Set(["identity", "speech", "contact_events", "render_settings"]);
+    expect(request.conditions.some((c) => newTypes.has(c.type as string))).toBe(false);
+    // Ensure existing v0.1 conditions still present
+    expect(request.conditions.some((c) => c.type === "camera")).toBe(true);
+    expect(request.conditions.some((c) => c.type === "pose")).toBe(true);
+  });
+});
+
 describe("Draft and plan separation", () => {
   it("does not mutate camera path or lens when editing draft", () => {
     const { project, clip } = projectFixture();
