@@ -9,6 +9,8 @@ import { createClipVariant, setActiveVariant } from "../../domain/timeline/varia
 import { linkWorldToClip } from "../services/worldLinking";
 import { applyCameraRigToProject } from "../services/cameraCraft";
 import type { CommandResult, DomainCommand, DomainEvent } from "./types";
+import { cameraPathParamsFromNode, deleteCameraKeyframe, keyframeAtExactFrame, upsertCameraKeyframe } from "../../domain/graph/cameraPath";
+import { lensNodeIdForClip, lensParamsFromNode } from "../../domain/graph/lens";
 
 const event = (type: DomainEvent["type"], payload: Record<string, unknown>, timestamp: string): DomainEvent => ({
   type,
@@ -73,6 +75,122 @@ export const applyCommand = (
           command,
           inverse: { type: "DELETE_NODE", nodeId: node.id },
           events: [event("NodeCreated", { nodeId: node.id }, timestamp)],
+        },
+      };
+    }
+    case "ADD_CAMERA_KEYFRAME":
+    case "UPDATE_CAMERA_KEYFRAME":
+    case "REMOVE_CAMERA_KEYFRAME": {
+      const clip = project.clips[command.clipId];
+      if (!clip) {
+        return fail("Clip not found.");
+      }
+      const pathNodeId = clip.cameraPathNodeId ?? clip.cameraTrajectoryNodeId ?? `node-${clip.id}-trajectory`;
+      const node = project.nodes[pathNodeId];
+      if (!node) {
+        return fail("CameraPathNode not found.");
+      }
+      const previousParams = cameraPathParamsFromNode(node.parameters);
+      const lens = lensParamsFromNode(project.nodes[lensNodeIdForClip(clip.id)]?.parameters ?? {});
+      const frame = Math.max(0, Math.floor(command.t));
+      let nextParams = previousParams;
+      let inverse: DomainCommand | undefined = undefined;
+      if (command.type === "REMOVE_CAMERA_KEYFRAME") {
+        const existing = keyframeAtExactFrame(previousParams, frame);
+        if (!existing) {
+          // No-op removal is still ok; nothing changes.
+          return {
+            project,
+            result: { ok: true, command, events: [] },
+          };
+        }
+        nextParams = deleteCameraKeyframe(previousParams, frame);
+        inverse = {
+          type: "ADD_CAMERA_KEYFRAME",
+          clipId: clip.id,
+          t: frame,
+          position: existing.position,
+          quaternion: existing.rotation,
+          focalLengthMm: existing.focalLengthMm,
+          focusDistanceM: existing.focusDistanceM,
+          aperture: existing.aperture,
+        };
+      } else {
+        const keyframe = {
+          frame,
+          position: command.position,
+          rotation: command.quaternion,
+          focalLengthMm: command.focalLengthMm ?? lens.focalLengthMm ?? 35,
+          focusDistanceM: command.focusDistanceM ?? lens.focusDistanceM,
+          aperture: command.aperture ?? lens.aperture,
+        };
+        const existing = keyframeAtExactFrame(previousParams, frame);
+        nextParams = upsertCameraKeyframe(previousParams, keyframe);
+        if (command.type === "ADD_CAMERA_KEYFRAME" && existing) {
+          // Treat add on colliding frame as update for invertibility.
+          inverse = {
+            type: "UPDATE_CAMERA_KEYFRAME",
+            clipId: clip.id,
+            t: frame,
+            position: existing.position,
+            quaternion: existing.rotation,
+            focalLengthMm: existing.focalLengthMm,
+            focusDistanceM: existing.focusDistanceM,
+            aperture: existing.aperture,
+            previous: {
+              position: command.position,
+              quaternion: command.quaternion,
+              focalLengthMm: keyframe.focalLengthMm,
+              focusDistanceM: keyframe.focusDistanceM,
+              aperture: keyframe.aperture,
+            },
+          };
+        } else if (command.type === "ADD_CAMERA_KEYFRAME") {
+          inverse = { type: "REMOVE_CAMERA_KEYFRAME", clipId: clip.id, t: frame };
+        } else {
+          // UPDATE
+          inverse = {
+            type: "UPDATE_CAMERA_KEYFRAME",
+            clipId: clip.id,
+            t: frame,
+            position: existing?.position ?? command.position,
+            quaternion: existing?.rotation ?? command.quaternion,
+            focalLengthMm: existing?.focalLengthMm,
+            focusDistanceM: existing?.focusDistanceM,
+            aperture: existing?.aperture,
+            previous: {
+              position: command.position,
+              quaternion: command.quaternion,
+              focalLengthMm: keyframe.focalLengthMm,
+              focusDistanceM: keyframe.focusDistanceM,
+              aperture: keyframe.aperture,
+            },
+          };
+        }
+      }
+      const parameters = { ...node.parameters, ...nextParams };
+      const patched = { ...node, parameters, params: parameters, updatedAt: timestamp };
+      patched.contentHash = computeNodeContentHash(patched);
+      const withNode: Project = { ...project, nodes: { ...project.nodes, [node.id]: patched } };
+      const { nodes, result: dirty } = applyDirtyEventToNodes(
+        {
+          nodes: withNode.nodes,
+          references: withNode.references,
+          clipGraphs: withNode.clipGraphs,
+          dependencyMap: withNode.dependencyMap,
+        },
+        { sourceNodeId: node.id, reason: "params_changed", timestamp },
+      );
+      return {
+        project: { ...withNode, nodes },
+        result: {
+          ok: true,
+          command,
+          inverse,
+          events: [
+            event("NodeParamsChanged", { nodeId: node.id, keyframeFrame: frame }, timestamp),
+            event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
+          ],
         },
       };
     }
@@ -547,6 +665,32 @@ export const applyCommand = (
             event("NodeParamsChanged", { nodeId: applied.rigNodeId, preset: command.preset }, timestamp),
             event("NodeMarkedDirty", { nodeId: applied.pathNodeId }, timestamp),
           ],
+        },
+      };
+    }
+    case "APPLY_COMMANDS": {
+      let nextProject: Project = project;
+      const inverses: DomainCommand[] = [];
+      const events: DomainEvent[] = [];
+      for (const sub of command.commands) {
+        const applied = applyCommand(nextProject, sub, { timestamp });
+        if (!applied.result.ok) {
+          // On failure, stop and return failure without partial rollback (caller may handle).
+          return fail(applied.result.reason ?? "Batch command failed.");
+        }
+        nextProject = applied.project;
+        events.push(...applied.result.events);
+        if (applied.result.inverse) {
+          inverses.push(applied.result.inverse);
+        }
+      }
+      return {
+        project: nextProject,
+        result: {
+          ok: true,
+          command,
+          inverse: inverses.length ? { type: "APPLY_COMMANDS", commands: inverses.reverse(), logMessage: command.logMessage } : undefined,
+          events,
         },
       };
     }
