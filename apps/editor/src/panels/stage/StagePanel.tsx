@@ -17,6 +17,7 @@ import { CAMERA_RIG_PRESETS, type CameraRigPreset } from "../../domain/graph/cam
 import "./sceneWorkspace.css";
 import { createLoopClock } from "../../application/ports/LoopClock";
 import type { DomainCommand } from "../../application/commands";
+import { validateOutputAspect } from "./recordingPreflight";
 
 type Drawer = "assets" | "layers" | "light" | "camera" | "settings" | null;
 const tools: Array<{ id: ViewportTool; icon: SceneIconName; label: string }> = [
@@ -315,7 +316,19 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       {showHelp && <div className="scene-help"><strong>{cameraView ? "Move the camera" : "Explore the scene"}</strong><p>{cameraView ? "WASD 이동 · Q/E 높이 · 우클릭 드래그 시선 · Shift 빠르게" : "Orbit: 드래그 회전 · 휠 줌 · 우클릭 이동 · W/E/R 변형 · F 선택 보기"}</p><p>Motion: K 포즈 저장 · Space 재생 · Esc 패널 닫기</p></div>}
     </div>
     {recording && <SceneTimeline tracks={tracks} activeId={selectedId} frame={frame} duration={duration} fps={fps} playing={playing} onSelect={select} onScrub={scrub}
-      onPlay={() => { setDraft(undefined); if (frame >= duration - 1) scrub(0); setPlaying((value) => !value); }} onKey={stamp} onDelete={deletePose} disabled={!canEdit || Boolean(selected?.locked)} />}
+      onPlay={() => {
+        setDraft(undefined);
+        if (frame >= duration - 1) scrub(0);
+        // Preflight: ensure valid aspect and camera view before starting playback
+        if (!playing) {
+          if (!validateOutputAspect(ui.outputAspect)) {
+            setNotice("Choose a valid output aspect before recording.");
+            return;
+          }
+          setFreeView(false); // switch to Camera view
+        }
+        setPlaying((value) => !value);
+      }} onKey={stamp} onDelete={deletePose} disabled={!canEdit || Boolean(selected?.locked)} />}
     <footer className="scene-status"><span>{previewOnly ? "Preview only · editing disabled" : notice || (draft ? "Unsaved object pose · K to save" : world ? `${world.name} · shared world / local shot` : "Persistent world · editable shot")}</span><span>{fps} fps · {ui.outputAspect}</span></footer>
   </section>;
 };
