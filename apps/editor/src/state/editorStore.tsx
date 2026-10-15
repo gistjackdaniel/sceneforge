@@ -2323,9 +2323,46 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
       if (!undone.result.ok) {
         return { ...state, ui: appendWorkflowLog(state.ui, undone.result.reason ?? "Nothing to undo.") };
       }
+      // Bridge render events and CANCEL_RENDER command through the job queue
+      let domainJobQueue = state.ui.domainJobQueue;
+      for (const evt of undone.result.events) {
+        if (evt.type === "RenderQueued") {
+          const clipId = String(evt.payload.clipId ?? "");
+          if (clipId) {
+            const jobId = String(evt.payload.jobId ?? makeId("render"));
+            const quality = (evt.payload.quality as "proxy" | "final") ?? "final";
+            const renderNodeId = String(evt.payload.renderNodeId ?? `node-${clipId}-render`);
+            const priority = typeof evt.payload.priority === "number" ? (evt.payload.priority as number) : 1000;
+            const cacheKey =
+              typeof evt.payload.cacheKey === "string"
+                ? (evt.payload.cacheKey as string)
+                : `${quality}:${clipId}:${project.dependencyMap.cacheHashesByClipId[clipId] ?? "no-hash"}`;
+            domainJobQueue = enqueueRenderJob(domainJobQueue, {
+              id: jobId,
+              clipId,
+              renderNodeId,
+              quality,
+              priority,
+              cacheKey,
+              status: "queued",
+              createdAt: now(),
+            });
+          }
+        } else if (evt.type === "RenderFailed") {
+          const jobId = String(evt.payload.jobId ?? "");
+          const errorMessage = String(evt.payload.error ?? "Render failed");
+          const retryable = Boolean(evt.payload.retryable);
+          if (jobId) {
+            domainJobQueue = failRenderJob(domainJobQueue, jobId, errorMessage, retryable);
+          }
+        }
+      }
+      if (undone.result.command.type === "CANCEL_RENDER") {
+        domainJobQueue = cancelRenderJob(domainJobQueue, undone.result.command.jobId);
+      }
       return {
         project: updateProjectMetadata(undone.project),
-        ui: appendWorkflowLog({ ...state.ui, commandBus: undone.bus }, "Undo."),
+        ui: appendWorkflowLog({ ...state.ui, commandBus: undone.bus, domainJobQueue }, "Undo."),
       };
     }
     case "redo": {
@@ -2333,9 +2370,46 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
       if (!redone.result.ok) {
         return { ...state, ui: appendWorkflowLog(state.ui, redone.result.reason ?? "Nothing to redo.") };
       }
+      // Bridge render events and CANCEL_RENDER command through the job queue
+      let domainJobQueue = state.ui.domainJobQueue;
+      for (const evt of redone.result.events) {
+        if (evt.type === "RenderQueued") {
+          const clipId = String(evt.payload.clipId ?? "");
+          if (clipId) {
+            const jobId = String(evt.payload.jobId ?? makeId("render"));
+            const quality = (evt.payload.quality as "proxy" | "final") ?? "final";
+            const renderNodeId = String(evt.payload.renderNodeId ?? `node-${clipId}-render`);
+            const priority = typeof evt.payload.priority === "number" ? (evt.payload.priority as number) : 1000;
+            const cacheKey =
+              typeof evt.payload.cacheKey === "string"
+                ? (evt.payload.cacheKey as string)
+                : `${quality}:${clipId}:${project.dependencyMap.cacheHashesByClipId[clipId] ?? "no-hash"}`;
+            domainJobQueue = enqueueRenderJob(domainJobQueue, {
+              id: jobId,
+              clipId,
+              renderNodeId,
+              quality,
+              priority,
+              cacheKey,
+              status: "queued",
+              createdAt: now(),
+            });
+          }
+        } else if (evt.type === "RenderFailed") {
+          const jobId = String(evt.payload.jobId ?? "");
+          const errorMessage = String(evt.payload.error ?? "Render failed");
+          const retryable = Boolean(evt.payload.retryable);
+          if (jobId) {
+            domainJobQueue = failRenderJob(domainJobQueue, jobId, errorMessage, retryable);
+          }
+        }
+      }
+      if (redone.result.command.type === "CANCEL_RENDER") {
+        domainJobQueue = cancelRenderJob(domainJobQueue, redone.result.command.jobId);
+      }
       return {
         project: updateProjectMetadata(redone.project),
-        ui: appendWorkflowLog({ ...state.ui, commandBus: redone.bus }, "Redo."),
+        ui: appendWorkflowLog({ ...state.ui, commandBus: redone.bus, domainJobQueue }, "Redo."),
       };
     }
     case "create-variant": {
@@ -2479,10 +2553,11 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
 };
 
 const runVideoRenderJob = async (
-  state: EditorState,
+  getState: () => EditorState,
   clipId: string,
   dispatch: Dispatch<EditorAction>,
 ) => {
+  const state = getState();
   const clip = state.project.clips[clipId];
   const graph = state.project.clipGraphs[clip.clipGraphId];
   const world = clip.linkedWorldId ? state.project.worlds[clip.linkedWorldId] : undefined;
@@ -2533,10 +2608,33 @@ const runVideoRenderJob = async (
     dispatch({ type: "set-video-render-job", job });
 
     while (job.status === "queued" || job.status === "running") {
+      // Stop early if the domain job was cancelled by undo
+      const cancelled = getState()
+        .ui.domainJobQueue.jobs.some((j) => j.clipId === clipId && j.status === "cancelled");
+      if (cancelled) {
+        dispatch({
+          type: "set-video-render-job",
+          job: {
+            jobId: job.jobId,
+            status: "failed",
+            progress: job.progress,
+            message: "Render cancelled",
+            input: job.input,
+            error: "cancelled",
+          },
+        });
+        return;
+      }
       job = await lyraAdapter.pollVideoRenderJob(job.jobId);
       dispatch({ type: "set-video-render-job", job });
     }
 
+    // If cancelled between last poll and completion update, ignore result
+    const cancelledAtEnd = getState()
+      .ui.domainJobQueue.jobs.some((j) => j.clipId === clipId && j.status === "cancelled");
+    if (cancelledAtEnd) {
+      return;
+    }
     dispatch({ type: "complete-video-render", clipId, job });
   } catch (error) {
     dispatch({
@@ -2643,7 +2741,7 @@ export const EditorStoreProvider = ({ children }: { children: ReactNode }) => {
 
   const dispatch = useCallback((action: EditorAction) => {
     if (action.type === "submit-video-render") {
-      void runVideoRenderJob(stateRef.current, action.clipId, baseDispatch);
+      void runVideoRenderJob(() => stateRef.current, action.clipId, baseDispatch);
       return;
     }
     baseDispatch(action);
@@ -2656,9 +2754,11 @@ export const EditorStoreProvider = ({ children }: { children: ReactNode }) => {
     }
     const composed = composePersistedEditor(state);
     writeAtomicLocalStorage(STORAGE_KEY, composed);
-    const channel = new BroadcastChannel("sceneforge-editor-sync");
-    channel.postMessage({ origin: syncOriginRef.current, body: composed });
-    channel.close();
+    if (typeof BroadcastChannel !== "undefined") {
+      const channel = new BroadcastChannel("sceneforge-editor-sync");
+      channel.postMessage({ origin: syncOriginRef.current, body: composed });
+      channel.close();
+    }
   }, [state]);
 
   // Bridge: kick off render jobs when a domain RenderQueued event is recorded
@@ -2675,12 +2775,24 @@ export const EditorStoreProvider = ({ children }: { children: ReactNode }) => {
       if (evt.type === "RenderQueued") {
         const clipId = String(evt.payload.clipId ?? "");
         if (clipId) {
-          void runVideoRenderJob(stateRef.current, clipId, baseDispatch);
+          void runVideoRenderJob(() => stateRef.current, clipId, baseDispatch);
         }
       }
     }
     lastEventIndexRef.current = events.length;
   }, [state.ui.commandBus.events]);
+
+  // Also observe the domain job queue to ensure each queued job starts exactly once
+  const startedJobsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const jobs = state.ui.domainJobQueue.jobs;
+    for (const job of jobs) {
+      if (job.status === "queued" && !startedJobsRef.current.has(job.id)) {
+        startedJobsRef.current.add(job.id);
+        void runVideoRenderJob(() => stateRef.current, job.clipId, baseDispatch);
+      }
+    }
+  }, [state.ui.domainJobQueue.jobs]);
 
   useEffect(() => {
     const applyRemote = (raw: string) => {
@@ -2697,19 +2809,25 @@ export const EditorStoreProvider = ({ children }: { children: ReactNode }) => {
       }
       applyRemote(event.newValue);
     };
-    const channel = new BroadcastChannel("sceneforge-editor-sync");
-    const onMessage = (event: MessageEvent<{ origin?: string; body?: string }>) => {
-      if (!event.data?.body || event.data.origin === syncOriginRef.current) {
-        return;
-      }
-      applyRemote(event.data.body);
-    };
+    let channel: BroadcastChannel | undefined;
+    let onMessage: ((event: MessageEvent<{ origin?: string; body?: string }>) => void) | undefined;
+    if (typeof BroadcastChannel !== "undefined") {
+      channel = new BroadcastChannel("sceneforge-editor-sync");
+      onMessage = (event: MessageEvent<{ origin?: string; body?: string }>) => {
+        if (!event.data?.body || event.data.origin === syncOriginRef.current) {
+          return;
+        }
+        applyRemote(event.data.body);
+      };
+      channel.addEventListener("message", onMessage as any);
+    }
     window.addEventListener("storage", onStorage);
-    channel.addEventListener("message", onMessage);
     return () => {
       window.removeEventListener("storage", onStorage);
-      channel.removeEventListener("message", onMessage);
-      channel.close();
+      if (channel && onMessage) {
+        channel.removeEventListener("message", onMessage as any);
+        channel.close();
+      }
     };
   }, []);
 
