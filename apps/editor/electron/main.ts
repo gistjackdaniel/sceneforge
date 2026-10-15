@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, session } from "electron";
 import { join } from "node:path";
 
 const createWindow = () => {
@@ -9,6 +9,9 @@ const createWindow = () => {
     minHeight: 720,
     webPreferences: {
       preload: join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
     },
   });
 
@@ -16,6 +19,17 @@ const createWindow = () => {
 };
 
 app.whenReady().then(() => {
+  // Limit permissions: allow audio-only media capture when explicitly requested by the page.
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    if (permission === "media") {
+      const audio = details.mediaTypes?.includes("audio") ?? false;
+      const video = details.mediaTypes?.includes("video") ?? false;
+      callback(audio && !video);
+      return;
+    }
+    callback(false);
+  });
+
   createWindow();
 
   app.on("activate", () => {
