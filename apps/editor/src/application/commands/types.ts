@@ -13,6 +13,30 @@ export type DomainCommand =
       patch: Record<string, unknown>;
       previous?: Record<string, unknown>;
     }
+  // Pose authoring commands (SMPL-X)
+  | {
+      type: "ADD_POSE_KEYFRAME";
+      nodeId: string;
+      frame: number;
+      pose: {
+        global_orient: [number, number, number];
+        transl: [number, number, number];
+        body_pose: number[];
+        left_hand_pose: number[];
+        right_hand_pose: number[];
+        jaw_pose: [number, number, number];
+        expression: number[];
+      };
+    }
+  | { type: "REMOVE_POSE_KEYFRAME"; nodeId: string; frame: number }
+  | { type: "MOVE_POSE_KEYFRAME"; nodeId: string; from: number; to: number }
+  | {
+      type: "APPLY_POSE_PRESET";
+      nodeId: string;
+      frame: number;
+      presetId: "t_pose" | "a_pose" | "idle" | "walk_contact" | "sit" | "point";
+      hand?: { side: "left" | "right"; preset: "open" | "fist" | "point" | "relaxed" };
+    }
   | { type: "UPDATE_NODE_UI"; nodeId: string; ui: NonNullable<NodeBase["ui"]>; previous?: NodeBase["ui"] }
   | { type: "RENAME_NODE"; nodeId: string; name: string; previous?: string }
   | { type: "CONNECT_NODES"; clipGraphId: string; edge: GraphEdge }

@@ -19,6 +19,7 @@ export const INVALIDATION_TARGETS_BY_KIND: Partial<Record<NodeKind, CacheKind[]>
   ImageToWorldNode: ["world_reconstruction", "generated_segment", "spatial_memory"],
   ActorPlacementNode: ["node_evaluation", "stage_render_pass", "proxy", "final"],
   PlacementNode: ["node_evaluation", "stage_render_pass", "proxy", "final"],
+  ActorPoseNode: ["proxy", "final"],
   ObjectTrajectoryNode: ["proxy", "final"],
   ActionBlockNode: ["proxy", "final"],
   KeyframeNode: ["stage_render_pass", "proxy"],
@@ -45,6 +46,7 @@ export const getDirectionInvalidations = (nodeKind: NodeKind): DirectionChannelI
     case "ImageToWorldNode":
       return full("structure");
     case "ObjectTrajectoryNode":
+    case "ActorPoseNode":
     case "ActionBlockNode":
       return full("performance_body");
     case "PerformancePlanNode":
