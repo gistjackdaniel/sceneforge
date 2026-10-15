@@ -102,6 +102,30 @@ export const applyCommand = (
         },
       };
     }
+    case "SET_ACTIVE_RENDER_TAKE": {
+      const clip = project.clips[command.clipId];
+      if (!clip) {
+        return fail("Clip not found.");
+      }
+      const cache = project.caches[command.cacheId];
+      if (!cache || cache.kind !== "final" || (cache.clipId && cache.clipId !== clip.id)) {
+        return fail("Invalid render take for this clip.");
+      }
+      return {
+        project: {
+          ...project,
+          clips: {
+            ...project.clips,
+            [clip.id]: { ...clip, finalCacheId: command.cacheId },
+          },
+        },
+        result: {
+          ok: true,
+          command,
+          events: [],
+        },
+      };
+    }
     case "CANCEL_RENDER": {
       // Domain layer emits no events for cancel; UI bridge marks the job as cancelled.
       return {

@@ -34,6 +34,7 @@ export type DomainCommand =
   | { type: "REQUEST_RENDER"; clipId: string; quality: "proxy" | "final" }
   | { type: "CANCEL_RENDER"; jobId: string }
   | { type: "LINK_CLIP_WORLD"; clipId: string; worldId: string | null }
+  | { type: "SET_ACTIVE_RENDER_TAKE"; clipId: string; cacheId: string }
   | {
       type: "APPLY_CAMERA_RIG";
       clipId: string;

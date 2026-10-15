@@ -169,5 +169,29 @@ describe("shot workflow readiness", () => {
     expect(result.steps.find((step) => step.id === "stage")?.state).toBe("optional");
     expect(result.steps.find((step) => step.id === "performance")?.state).toBe("optional");
   });
+
+  it("warns when a staged subject likely leaves frame along the camera path", () => {
+    // Stage one actor off to the side
+    const actor = node("actor", "ActorPlacementNode", {
+      worldElementId: "actor-a",
+      position: { x: 10, y: 0, z: 0 },
+    });
+    const actorGraph = { ...graph, nodeIds: [...graph.nodeIds, actor.id] };
+    // Camera looks along -Z, then rotates away from the actor significantly
+    const cameraKeys = [
+      { frame: 0, position: [0, 1, 4], rotation: [0, 0, 0, 1], focalLengthMm: 35 },
+      // 120-degree yaw away from actor on X axis roughly
+      { frame: 12, position: [0, 1, 4], rotation: [0, Math.sin(Math.PI / 3), 0, Math.cos(Math.PI / 3)], focalLengthMm: 35 },
+    ];
+    const result = evaluateShotWorkflow({
+      clip,
+      graph: actorGraph,
+      nodes: nodesWith(cameraKeys, {}, { actor }),
+      worlds: { [world.id]: world },
+      caches: {},
+    });
+    const cameraStep = result.steps.find((step) => step.id === "camera");
+    expect(cameraStep?.warnings.some((w) => /leave frame/.test(w))).toBe(true);
+  });
 });
 

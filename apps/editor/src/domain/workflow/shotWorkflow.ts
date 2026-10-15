@@ -7,6 +7,7 @@ import type { RenderCacheEntry } from "../rendering/types";
 import { clipDurationFrames } from "../timeline/timing";
 import type { TimelineClip } from "../timeline/types";
 import type { WorldAsset } from "../worlds/types";
+import { lensNodeIdForClip, lensParamsFromNode, verticalFovFromLens } from "../graph/lens";
 
 export const SHOT_WORKFLOW_STEP_IDS = ["world", "stage", "camera", "performance", "render"] as const;
 export type ShotWorkflowStepId = (typeof SHOT_WORKFLOW_STEP_IDS)[number];
@@ -167,6 +168,55 @@ export const evaluateShotWorkflow = (input: ShotWorkflowInput): ShotWorkflowRead
   const cameraWarnings = continuity.status === "warning" || continuity.status === "invalid"
     ? continuity.issues
     : [];
+  // Basic framing heuristic: warn if any staged subject likely leaves frame along the recorded path.
+  // Approximates a view-cone test using the lesser of vertical/horizontal FOV.
+  if (actorAnchors.length > 0 && cameraParams.keyframes.length > 0) {
+    const lensNodeId = lensNodeIdForClip(clip.id);
+    const lens = lensParamsFromNode(nodes[lensNodeId]?.parameters ?? {});
+    const vFov = verticalFovFromLens(lens) * (Math.PI / 180);
+    const aspect = 16 / 9; // UI default; domain has no UI aspect
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+    const halfCone = Math.min(vFov, hFov) / 2;
+    const forwardFromQuat = ([x, y, z, w]: [number, number, number, number]): [number, number, number] => {
+      // Rotate world -Z by quaternion (camera looks down -Z in right-handed Three.js)
+      // q * v * q^-1 where v=(0,0,-1)
+      const vx = 0, vy = 0, vz = -1;
+      const ix =  w * vx + y * vz - z * vy;
+      const iy =  w * vy + z * vx - x * vz;
+      const iz =  w * vz + x * vy - y * vx;
+      const iw = -x * vx - y * vy - z * vz;
+      const rx = ix * w + iw * -x + iy * -z - iz * -y;
+      const ry = iy * w + iw * -y + iz * -x - ix * -z;
+      const rz = iz * w + iw * -z + ix * -y - iy * -x;
+      const mag = Math.hypot(rx, ry, rz) || 1;
+      return [rx / mag, ry / mag, rz / mag];
+    };
+    const dot = (a: [number, number, number], b: [number, number, number]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const norm = (v: [number, number, number]): [number, number, number] => {
+      const m = Math.hypot(v[0], v[1], v[2]) || 1;
+      return [v[0] / m, v[1] / m, v[2] / m];
+    };
+    const offFrames = new Set<number>();
+    for (const kf of cameraParams.keyframes) {
+      const forward = forwardFromQuat(kf.rotation);
+      for (const anchor of actorAnchors) {
+        const toActor: [number, number, number] = [
+          anchor.position[0] - kf.position[0],
+          anchor.position[1] - kf.position[1],
+          anchor.position[2] - kf.position[2],
+        ];
+        const angle = Math.acos(Math.max(-1, Math.min(1, dot(forward, norm(toActor)))));
+        if (angle > halfCone + (5 * Math.PI) / 180) {
+          offFrames.add(kf.frame);
+        }
+      }
+    }
+    if (offFrames.size > 0) {
+      cameraWarnings.push(
+        `One or more staged subjects likely leave frame at ${Array.from(offFrames).sort((a, b) => a - b).map((f) => `${f}f`).join(", ")}.`,
+      );
+    }
+  }
   const cameraStep = baseStep(
     "camera",
     "Camera",
