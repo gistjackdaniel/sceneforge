@@ -8,6 +8,10 @@ const createWindow = () => {
     minWidth: 1280,
     minHeight: 720,
     webPreferences: {
+      // Electron security defaults
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
       preload: join(__dirname, "preload.js"),
     },
   });

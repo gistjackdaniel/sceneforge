@@ -48,6 +48,15 @@ export const PlaybackPanel = () => {
   const renderBusy = videoRenderJob?.status === "running" || videoRenderJob?.status === "queued";
   const renderDisabled = renderBusy || !shotWorkflow.readyForRender;
 
+  const finalTakes = useMemo(
+    () =>
+      Object.values(project.caches)
+        .filter((c) => c.kind === "final" && c.clipId === clip.id)
+        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)),
+    [project.caches, clip.id],
+  );
+  const isOutdated = finalCache?.status === "invalid";
+
   const exportOtio = () => {
     const performanceNodeId = clip.performancePlanNodeId ?? performancePlanNodeIdForClip(clip.id);
     const otioDocument = exportPerformancePlanToOtio({
@@ -145,6 +154,7 @@ export const PlaybackPanel = () => {
           </button>
         </div>
         <span className="transport-timecode">{timecode}</span>
+        {isOutdated && <span className="badge badge-rerender" title="Scene changed since the last render.">Outdated</span>}
         <button
           id="playback-render-button"
           type="button"
@@ -181,6 +191,42 @@ export const PlaybackPanel = () => {
         )}
         {videoRenderJob?.status === "failed" && (
           <span className="look-at-error" title={videoRenderJob.error}>{videoRenderJob.message}</span>
+        )}
+      </div>
+      <div className="playback-history">
+        <h3>Render history</h3>
+        {finalTakes.length === 0 ? (
+          <p className="muted">No final takes yet.</p>
+        ) : (
+          <ul className="render-history-list">
+            {finalTakes.map((entry) => (
+              <li key={entry.id}>
+                <strong>{entry.label}</strong>{" "}
+                <span className={`badge badge-cache badge-cache-${entry.status}`}>{entry.status}</span>{" "}
+                {clip.finalCacheId === entry.id && <span className="badge">Current</span>}
+                {entry.status === "failed" ? (
+                  <button type="button" onClick={() => dispatch({ type: "retry-failed-render", clipId: clip.id, kind: "final" })}>
+                    Retry
+                  </button>
+                ) : (
+                  clip.finalCacheId !== entry.id && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        dispatch({
+                          type: "agent-execute-commands",
+                          commands: [{ type: "SET_ACTIVE_RENDER_TAKE", clipId: clip.id, cacheId: entry.id }],
+                          logMessage: `Use take ${entry.label}`,
+                        })
+                      }
+                    >
+                      Use this take
+                    </button>
+                  )
+                )}
+              </li>
+            ))}
+          </ul>
         )}
       </div>
     </section>

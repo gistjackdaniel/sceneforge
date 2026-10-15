@@ -217,6 +217,18 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           </div>)}
           {selected && <><div className="scene-section-label">{selected.name} · {selected.representation === "marker" ? "placement marker" : "3D object"}</div>
             <button onClick={() => setFocusSignal((value) => value + 1)}>Focus selection <kbd>F</kbd></button>
+            {selected && selected.kind !== "light" && (
+              <button
+                onClick={() => {
+                  if (!clip || !canEdit) return;
+                  const y0 = 0;
+                  commitPose(selected, { position: [selected.position[0], y0, selected.position[2]], rotation: selected.rotation, scale: selected.scale });
+                  setNotice(`${selected.name} moved to floor`);
+                }}
+              >
+                To floor
+              </button>
+            )}
             {selected.kind !== "light" && <label>Pose prompt<textarea aria-label={`${selected.name} pose prompt`} rows={3} placeholder="How this subject moves. Leave empty and record an explicit pose in Motion with K." value={selected.posePrompt ?? ""} disabled={!canEdit || selected.locked} onChange={(event) => patchObject(selected, { posePrompt: event.target.value })} /></label>}
             {(["position", "rotation", "scale"] as const).map((property) => <fieldset key={property} disabled={!canEdit || selected.locked || playing}><legend>{property}</legend><div className="scene-vector">
               {selected[property].map((value, axis) => <label key={axis}>{["X", "Y", "Z"][axis]}<input aria-label={`${property} ${["X", "Y", "Z"][axis]}`} type="number" step={property === "rotation" ? 5 : 0.1} value={Number((property === "rotation" ? value * 180 / Math.PI : value).toFixed(3))}
