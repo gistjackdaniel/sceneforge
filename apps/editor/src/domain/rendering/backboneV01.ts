@@ -109,13 +109,34 @@ export class BackboneCameraBuilder {
 
   /**
    * Convert Lens (focal in mm, sensor preset) + image size to intrinsics K in pixels.
+   * Uses a single focal length in pixels (square pixels) with a sensor-fit rule.
+   * - fit = 'horizontal' (default): fx_base = f / sensorWidth * widthPx
+   * - fit = 'vertical'            : fy_base = f / sensorHeight * heightPx
+   * - fit = 'auto'                : choose dimension with larger px/mm ratio (Blender AUTO-like)
    */
-  static computeIntrinsicsK(lens: LensParams, imageSize: [number, number]): [[number, number, number], [number, number, number], [number, number, number]] {
+  static computeIntrinsicsK(
+    lens: LensParams,
+    imageSize: [number, number],
+    fit: "horizontal" | "vertical" | "auto" = "horizontal",
+  ): [[number, number, number], [number, number, number], [number, number, number]] {
     const sensor = BackboneCameraBuilder.SENSOR_SIZE_MM[lens.sensorPreset ?? "full-frame"];
     const [widthPx, heightPx] = imageSize;
     const f = Math.max(1e-6, lens.focalLengthMm);
-    const fx = (f / sensor.width) * widthPx;
-    const fy = (f / sensor.height) * heightPx;
+    const fxBase = (f / sensor.width) * widthPx;
+    const fyBase = (f / sensor.height) * heightPx;
+    let fpx: number;
+    if (fit === "auto") {
+      // Choose the dimension with larger px/mm (tighter fit), like Blender AUTO.
+      const pxPerMmX = widthPx / sensor.width;
+      const pxPerMmY = heightPx / sensor.height;
+      fpx = pxPerMmX >= pxPerMmY ? fxBase : fyBase;
+    } else if (fit === "vertical") {
+      fpx = fyBase;
+    } else {
+      fpx = fxBase;
+    }
+    const fx = fpx;
+    const fy = fpx;
     const cx = widthPx / 2;
     const cy = heightPx / 2;
     return [
@@ -182,17 +203,22 @@ export class BackboneCameraBuilder {
     numFrames?: number;
     near?: number;
     far?: number;
+    sensorFit?: "horizontal" | "vertical" | "auto";
   }): BackboneCamera {
     const fps = options.fps ?? 16;
     const numFrames = Math.max(1, Math.floor(options.numFrames ?? options.params.frameCount ?? 81));
     const near = options.near ?? 0.05;
     const far = options.far ?? 100.0;
-    const K = BackboneCameraBuilder.computeIntrinsicsK(options.lens, options.imageSize);
+    const K = BackboneCameraBuilder.computeIntrinsicsK(options.lens, options.imageSize, options.sensorFit ?? "horizontal");
     const frames: Array<z.infer<typeof backboneCameraFrameSchema>> = [];
+    let lastPose: CameraKeyframe | undefined;
+    if (!options.params.keyframes || options.params.keyframes.length === 0) {
+      throw new Error("BackboneCameraBuilder: no camera keyframes available to build trajectory.");
+    }
     for (let t = 0; t < numFrames; t += 1) {
-      const pose: CameraKeyframe | undefined = interpolateCameraPose(options.params, t);
+      const pose: CameraKeyframe | undefined = interpolateCameraPose(options.params, t) ?? lastPose;
       if (!pose) {
-        continue;
+        throw new Error(`BackboneCameraBuilder: cannot resolve camera pose at frame ${t}.`);
       }
       const Rgl = BackboneCameraBuilder.quatToMat3(pose.rotation);
       const Rcv = BackboneCameraBuilder.glToOpenCvRotation(Rgl);
@@ -204,14 +230,24 @@ export class BackboneCameraBuilder {
         near,
         far,
       });
+      lastPose = pose;
     }
-    const result = {
+    const result: BackboneCamera = {
       version: "0.1" as const,
       fps,
-      num_frames: frames.length,
+      num_frames: frames.length, // guaranteed == numFrames
       image_size: options.imageSize,
       convention: "opencv_c2w" as const,
       frames,
+      metadata: {
+        label: options.params.label,
+        lookAtTargetElementId: options.params.lookAtTargetElementId,
+        continuity: options.params.continuity && {
+          lineOfActionLabel: options.params.continuity.lineOfActionLabel,
+          cameraSide: options.params.continuity.cameraSide,
+          screenDirection: options.params.continuity.screenDirection,
+        },
+      },
     };
     return backboneCameraSchema.parse(result);
   }

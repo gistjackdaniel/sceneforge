@@ -8,11 +8,11 @@ describe("Backbone v0.1 camera builder", () => {
   const imageSize: [number, number] = [1280, 704];
 
   it("computes K from focal length and sensor preset", () => {
-    const K = BackboneCameraBuilder.computeIntrinsicsK(lens, imageSize);
-    // For full-frame 36x24mm with 36mm focal length:
-    // fx = 36/36*1280 = 1280, fy = 36/24*704 = 1056
+    const K = BackboneCameraBuilder.computeIntrinsicsK(lens, imageSize, "horizontal");
+    // Sensor-fit horizontal with square pixels → fx == fy
+    // For 36mm focal on full-frame width: fx = 36/36*1280 = 1280
     expect(Math.abs(K[0][0] - 1280)).toBeLessThan(1e-6);
-    expect(Math.abs(K[1][1] - 1056)).toBeLessThan(1e-6);
+    expect(Math.abs(K[1][1] - 1280)).toBeLessThan(1e-6);
     expect(K[0][2]).toBeCloseTo(imageSize[0] / 2, 6);
     expect(K[1][2]).toBeCloseTo(imageSize[1] / 2, 6);
   });
@@ -62,6 +62,44 @@ describe("Backbone v0.1 camera builder", () => {
     const linearY = 5; // (0 → 10) at t=0.5
     // Catmull-Rom should deviate from strict linear interpolation when there is a following keyframe
     expect(Math.abs(posY - linearY)).toBeGreaterThan(1e-3);
+    // Frames must be contiguous and match requested count.
+    expect(cam.frames.length).toBe(81);
+    expect(cam.frames[0].t).toBe(0);
+    expect(cam.frames[80].t).toBe(80);
+  });
+
+  it("throws when no keyframes exist", () => {
+    const params: CameraPathParams = {
+      keyframes: [],
+      interpolation: "linear",
+      stabilization: 0,
+      frameCount: 10,
+    };
+    expect(() =>
+      BackboneCameraBuilder.buildFromCameraPath({ params, lens, imageSize, fps: 16, numFrames: 10 }),
+    ).toThrow(/no camera keyframes/i);
+  });
+
+  it("fills metadata for look-at and continuity when present", () => {
+    const params: CameraPathParams = {
+      keyframes: [{ frame: 0, position: [0, 0, 0], rotation: [0, 0, 0, 1], focalLengthMm: 36 }],
+      interpolation: "linear",
+      stabilization: 0,
+      frameCount: 1,
+      label: "Shot A",
+      lookAtTargetElementId: "actor-a",
+      continuity: {
+        lineOfActionLabel: "A→B",
+        cameraSide: "left",
+        screenDirection: "left_to_right",
+      },
+    };
+    const cam = BackboneCameraBuilder.buildFromCameraPath({ params, lens, imageSize, fps: 16, numFrames: 1 });
+    expect(cam.metadata?.label).toBe("Shot A");
+    expect(cam.metadata?.lookAtTargetElementId).toBe("actor-a");
+    expect(cam.metadata?.continuity?.lineOfActionLabel).toBe("A→B");
+    expect(cam.metadata?.continuity?.cameraSide).toBe("left");
+    expect(cam.metadata?.continuity?.screenDirection).toBe("left_to_right");
   });
 });
 
