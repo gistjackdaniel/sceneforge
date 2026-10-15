@@ -15,6 +15,8 @@ import { buildSceneConditioning } from "../../domain/rendering/sceneConditioning
 import { OUTPUT_ASPECT_PRESETS, outputAspectRatio, type OutputAspectPreset } from "../../domain/rendering";
 import { CAMERA_RIG_PRESETS, type CameraRigPreset } from "../../domain/graph/cameraRig";
 import "./sceneWorkspace.css";
+import { createLoopClock } from "../../application/ports/LoopClock";
+import type { DomainCommand } from "../../application/commands";
 
 type Drawer = "assets" | "layers" | "light" | "camera" | "settings" | null;
 const tools: Array<{ id: ViewportTool; icon: SceneIconName; label: string }> = [
@@ -39,6 +41,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [showPreview, setShowPreview] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [playing, setPlaying] = useState(false);
+  const loopRef = useRef<ReturnType<typeof createLoopClock> | null>(null);
+  const takeRef = useRef<Map<number, { position: [number, number, number]; rotation: [number, number, number] }>>(new Map());
   const [captureSignal, setCaptureSignal] = useState(0);
   const [focusSignal, setFocusSignal] = useState(0);
   const [resetSignal, setResetSignal] = useState(0);
@@ -122,19 +126,45 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   useEffect(() => { if (!recording) setPlaying(false); }, [recording]);
   const playbackStart = useRef(0);
   useEffect(() => {
-    if (!playing) return;
-    playbackStart.current = performance.now() - frame / fps * 1000;
-    let request = 0;
-    let lastFrame = -1;
-    const tick = () => {
-      const next = Math.min(duration - 1, Math.floor((performance.now() - playbackStart.current) / 1000 * fps));
-      if (next !== lastFrame) { lastFrame = next; dispatch({ type: "scrub-playhead", playhead: start + next }); }
-      if (next >= duration - 1) { setPlaying(false); return; }
-      request = requestAnimationFrame(tick);
+    if (!playing) {
+      loopRef.current?.stop();
+      loopRef.current = null;
+      // Commit take when stopping
+      if (recording && takeRef.current.size > 0 && clip) {
+        const cmds: DomainCommand[] = [];
+        const lensParams = lens;
+        Array.from(takeRef.current.entries())
+          .sort((a, b) => a[0] - b[0])
+          .forEach(([t, pose]) => {
+            cmds.push({
+              type: "ADD_CAMERA_KEYFRAME",
+              clipId: clip.id,
+              t,
+              position: pose.position,
+              quaternion: eulerToQuaternionApprox(pose.rotation),
+              focalLengthMm: lensParams.focalLengthMm,
+              focusDistanceM: lensParams.focusDistanceM,
+              aperture: lensParams.aperture,
+            });
+          });
+        takeRef.current.clear();
+        dispatch({ type: "agent-execute-commands", commands: [{ type: "APPLY_COMMANDS", commands: cmds, logMessage: `Recorded camera take (${cmds.length} keys)` }] });
+      }
+      return;
+    }
+    // Start loop
+    const loop = createLoopClock({ duration: Math.max(0.001, duration / Math.max(1, fps)), fps, autoplay: true });
+    loopRef.current = loop;
+    const unsub = loop.subscribe((tSec) => {
+      const next = Math.max(0, Math.min(duration - 1, Math.floor(tSec * fps)));
+      dispatch({ type: "scrub-playhead", playhead: start + next });
+    });
+    return () => {
+      unsub();
+      loop.stop();
+      loopRef.current = null;
     };
-    request = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(request);
-  }, [playing, duration, start, fps, dispatch]);
+  }, [playing, duration, start, fps, dispatch, recording, clip, lens]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (typing(event.target) || (!alwaysActive && ui.panelTab !== "viewport") || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -205,7 +235,14 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
             if (object) commitPose(object, { position: payload.position, rotation: payload.rotation, scale: payload.scale ?? object.scale });
           }}
           onLoadStateChange={(state, message) => setLoad({ state, message })}
-          onCapturePose={captureCamera} captureSignal={captureSignal} focusSignal={focusSignal} resetSignal={resetSignal} />
+          onCapturePose={captureCamera}
+          onLiveCameraPose={(camera) => {
+            if (!playing || !recording || !clip) return;
+            // Record one pose per integer frame within the loop
+            const localFrame = Math.max(0, Math.min(duration - 1, Math.floor(((project.sequences[project.activeSequenceId]?.playhead ?? start) - start))));
+            takeRef.current.set(localFrame, { position: camera.position, rotation: camera.rotation });
+          }}
+          captureSignal={captureSignal} focusSignal={focusSignal} resetSignal={resetSignal} />
       </div>
       <nav className="scene-rail" aria-label="Scene tools">
         {([["assets", "plus", "Add assets"], ["layers", "layers", "Subjects"], ["camera", "camera", "Camera trajectory"]] as const).map(([id, icon, title]) =>

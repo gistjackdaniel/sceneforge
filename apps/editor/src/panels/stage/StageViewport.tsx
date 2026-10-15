@@ -101,6 +101,12 @@ type FlyKeys = {
   q: boolean;
   e: boolean;
   shift: boolean;
+  yawL: boolean;
+  yawR: boolean;
+  pitchU: boolean;
+  pitchD: boolean;
+  rollL: boolean;
+  rollR: boolean;
 };
 
 const emptyFlyKeys = (): FlyKeys => ({
@@ -111,6 +117,12 @@ const emptyFlyKeys = (): FlyKeys => ({
   q: false,
   e: false,
   shift: false,
+  yawL: false,
+  yawR: false,
+  pitchU: false,
+  pitchD: false,
+  rollL: false,
+  rollR: false,
 });
 
 const isTypingTarget = (target: EventTarget | null): boolean => {
@@ -122,7 +134,19 @@ const isTypingTarget = (target: EventTarget | null): boolean => {
 };
 
 const applyRecordFly = (camera: THREE.PerspectiveCamera, keys: FlyKeys, delta: number): boolean => {
-  const moving = keys.w || keys.a || keys.s || keys.d || keys.q || keys.e;
+  const moving =
+    keys.w ||
+    keys.a ||
+    keys.s ||
+    keys.d ||
+    keys.q ||
+    keys.e ||
+    keys.yawL ||
+    keys.yawR ||
+    keys.pitchU ||
+    keys.pitchD ||
+    keys.rollL ||
+    keys.rollR;
   if (!moving) {
     return false;
   }
@@ -143,6 +167,19 @@ const applyRecordFly = (camera: THREE.PerspectiveCamera, keys: FlyKeys, delta: n
   if (keys.a) camera.position.addScaledVector(right, -speed);
   if (keys.e) camera.position.addScaledVector(worldUp, speed);
   if (keys.q) camera.position.addScaledVector(worldUp, -speed);
+  // constant-velocity rotations
+  const rot = new THREE.Euler().setFromQuaternion(camera.quaternion, "YXZ");
+  const rotSpeed = 1.6 * delta; // rad/sec
+  if (keys.yawL) rot.y += rotSpeed;
+  if (keys.yawR) rot.y -= rotSpeed;
+  if (keys.pitchU) rot.x += rotSpeed;
+  if (keys.pitchD) rot.x -= rotSpeed;
+  if (keys.rollL) rot.z -= rotSpeed * 0.8;
+  if (keys.rollR) rot.z += rotSpeed * 0.8;
+  if (keys.yawL || keys.yawR || keys.pitchU || keys.pitchD || keys.rollL || keys.rollR) {
+    rot.x = Math.max(-Math.PI / 2 + 0.04, Math.min(Math.PI / 2 - 0.04, rot.x));
+    camera.quaternion.setFromEuler(rot);
+  }
   return true;
 };
 
@@ -197,10 +234,12 @@ export const StageViewport = ({
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onLoadStateChangeRef = useRef(onLoadStateChange);
   const onCapturePoseRef = useRef(onCapturePose);
+  const onLiveCameraPoseRef = useRef(onLiveCameraPose);
   onTransformCommitRef.current = onTransformCommit;
   onSelectionChangeRef.current = onSelectionChange;
   onLoadStateChangeRef.current = onLoadStateChange;
   onCapturePoseRef.current = onCapturePose;
+  onLiveCameraPoseRef.current = onLiveCameraPose;
   const workspaceRef = useRef(workspace);
   const toolRef = useRef(tool);
   const outputAspectRef = useRef(outputAspect);
@@ -561,6 +600,12 @@ export const StageViewport = ({
       if (key === "q") flyKeysRef.current.q = pressed;
       if (key === "e") flyKeysRef.current.e = pressed;
       if (key === "Shift") flyKeysRef.current.shift = pressed;
+      if (key === "arrowleft") flyKeysRef.current.yawL = pressed;
+      if (key === "arrowright") flyKeysRef.current.yawR = pressed;
+      if (key === "arrowup") flyKeysRef.current.pitchU = pressed;
+      if (key === "arrowdown") flyKeysRef.current.pitchD = pressed;
+      if (key === "z") flyKeysRef.current.rollL = pressed;
+      if (key === "x") flyKeysRef.current.rollR = pressed;
       if (pressed && ["w", "a", "s", "d", "q", "e"].includes(key)) {
         event.preventDefault();
       }
@@ -620,6 +665,13 @@ export const StageViewport = ({
         api.shotCamera.quaternion.copy(camera.quaternion);
         api.shotCamera.rotation.setFromQuaternion(camera.quaternion);
         api.shotCamera.updateMatrixWorld(true);
+        if (onLiveCameraPoseRef.current) {
+          onLiveCameraPoseRef.current({
+            position: [api.shotCamera.position.x, api.shotCamera.position.y, api.shotCamera.position.z],
+            rotation: [api.shotCamera.rotation.x, api.shotCamera.rotation.y, api.shotCamera.rotation.z],
+            focalLength: 35,
+          });
+        }
       } else {
         orbit.update();
       }

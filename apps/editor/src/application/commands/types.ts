@@ -94,6 +94,13 @@ export type DomainCommand =
         focusDistanceM?: number;
         aperture?: number;
       };
+    }
+  | {
+      /** Apply a batch of domain commands atomically as one undoable unit. */
+      type: "APPLY_COMMANDS";
+      commands: DomainCommand[];
+      /** Optional message for logs/UI; callers may log separately. */
+      logMessage?: string;
     };
 
 export type DomainEventType =

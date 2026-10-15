@@ -668,6 +668,32 @@ export const applyCommand = (
         },
       };
     }
+    case "APPLY_COMMANDS": {
+      let nextProject: Project = project;
+      const inverses: DomainCommand[] = [];
+      const events: DomainEvent[] = [];
+      for (const sub of command.commands) {
+        const applied = applyCommand(nextProject, sub, { timestamp });
+        if (!applied.result.ok) {
+          // On failure, stop and return failure without partial rollback (caller may handle).
+          return fail(applied.result.reason ?? "Batch command failed.");
+        }
+        nextProject = applied.project;
+        events.push(...applied.result.events);
+        if (applied.result.inverse) {
+          inverses.push(applied.result.inverse);
+        }
+      }
+      return {
+        project: nextProject,
+        result: {
+          ok: true,
+          command,
+          inverse: inverses.length ? { type: "APPLY_COMMANDS", commands: inverses.reverse(), logMessage: command.logMessage } : undefined,
+          events,
+        },
+      };
+    }
     default:
       return fail(`Unhandled command ${command.type}.`);
   }
