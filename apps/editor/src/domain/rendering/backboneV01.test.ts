@@ -43,6 +43,31 @@ describe("Backbone v0.1 camera builder", () => {
     expect(m[1][0]).toBeCloseTo(0, 6);
     expect(m[2][0]).toBeCloseTo(0, 6);
   });
+  it("converts yaw 90° correctly (GL yaw +90 → OpenCV flip + rotation)", () => {
+    const params: CameraPathParams = {
+      keyframes: [
+        {
+          frame: 0,
+          position: [0, 0, 0],
+          // Quaternion for yaw 90 degrees around Y: [x, y, z, w] = [0, sin(θ/2), 0, cos(θ/2)]
+          rotation: [0, Math.sin(Math.PI / 4), 0, Math.cos(Math.PI / 4)],
+          focalLengthMm: 36,
+        },
+      ],
+      interpolation: "linear",
+      stabilization: 0,
+      frameCount: 1,
+    };
+    const cam = BackboneCameraBuilder.buildFromCameraPath({ params, lens, imageSize, fps: 16, numFrames: 1 });
+    const m = cam.frames[0].c2w;
+    // The OpenCV rotation Rcv = Rgl * diag(1,-1,-1).
+    // For a +90° yaw, Rgl ≈ [[0,0,1],[0,1,0],[-1,0,0]].
+    // After conversion: Rcv ≈ [[0,0,-1],[0,-1,0],[-1,0,0]]
+    expect(m[0][0]).toBeCloseTo(0, 6);
+    expect(m[0][2]).toBeCloseTo(-1, 6);
+    expect(m[1][1]).toBeCloseTo(-1, 6);
+    expect(m[2][0]).toBeCloseTo(-1, 6);
+  });
 
   it("uses Catmull-Rom for position interpolation when requested", () => {
     const params: CameraPathParams = {

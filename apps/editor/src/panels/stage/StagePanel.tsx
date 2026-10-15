@@ -187,7 +187,23 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           keyframes={cameraParams.keyframes} pathSamples={pathSamples} fovDegrees={verticalFovFromLens({ ...lens, focalLengthMm: cameraPose?.focalLength ?? lens.focalLengthMm })}
           playheadFrame={frame} lookAtTargetId={cameraParams.lookAtTargetElementId}
           onSelectionChange={(selection: ViewportSelection | undefined) => { if (selection && selection.kind !== "camera") { setSelectedId(selection.id); setDrawer("layers"); } }}
-          onTransformCommit={(payload) => { const object = sceneObjects.find((item) => item.id === payload.worldElementId); if (object) commitPose(object, { position: payload.position, rotation: payload.rotation, scale: payload.scale ?? object.scale }); }}
+          onTransformCommit={(payload) => {
+            if (!clip || !canEdit) return;
+            if (payload.kind === "camera") {
+              dispatch({
+                type: "commit-object-transform",
+                clipId: clip.id,
+                worldElementId: "shot-camera",
+                kind: "camera",
+                position: payload.position,
+                rotation: payload.rotation,
+                scale: payload.scale,
+              });
+              return;
+            }
+            const object = sceneObjects.find((item) => item.id === payload.worldElementId);
+            if (object) commitPose(object, { position: payload.position, rotation: payload.rotation, scale: payload.scale ?? object.scale });
+          }}
           onLoadStateChange={(state, message) => setLoad({ state, message })}
           onCapturePose={captureCamera} captureSignal={captureSignal} focusSignal={focusSignal} resetSignal={resetSignal} />
       </div>
