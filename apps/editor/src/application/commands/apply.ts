@@ -41,14 +41,7 @@ export const applyCommand = (
     case "REQUEST_RENDER": {
       const clip = project.clips[command.clipId];
       if (!clip) {
-        return {
-          project,
-          result: {
-            ok: true,
-            command,
-            events: [event("RenderFailed", { clipId: command.clipId, quality: command.quality, error: "Clip not found", retryable: false }, timestamp)],
-          },
-        };
+        return fail("Clip not found.");
       }
       const graph = project.clipGraphs[clip.clipGraphId];
       const readiness = evaluateShotWorkflow({
@@ -79,7 +72,8 @@ export const applyCommand = (
           },
         };
       }
-      const jobId = `render-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+      const tsToken = timestamp.replace(/[^0-9A-Za-z]/g, "");
+      const jobId = `render-${clip.id}-${command.quality}-${tsToken}`;
       const activeSequence = project.sequences[project.activeSequenceId];
       const inVisibleRange =
         activeSequence.visibleRange[0] <= clip.start && clip.end <= activeSequence.visibleRange[1];
