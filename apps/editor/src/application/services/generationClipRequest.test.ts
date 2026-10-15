@@ -7,6 +7,7 @@ import { getModelProfile, validateDraftAgainstProfile } from "../../domain/rende
 import { CameraMovementDescriber } from "../../domain/rendering/cameraMovement";
 import { buildGenerationRequestFromDraft } from "./generationClipRequest";
 import type { NodeBase } from "../../domain/graph/types";
+import { prepareGenerationHandoff } from "./generationHandoff";
 
 const now = "2026-01-01T00:00:00.000Z";
 
@@ -155,6 +156,27 @@ describe("ClipDraft to GenerationRequest", () => {
     const pose = request.conditions.find((c) => c.type === "pose");
     expect(pose?.payload?.format).toBe("backbone_v0.1");
     expect(validation.ok).toBe(true);
+  });
+});
+
+describe("Generation handoff DTO", () => {
+  it("includes clipId, depHash, and final:clipId:depHash cacheKey; returns failure when invalid", () => {
+    const { project, clip } = projectFixture();
+    const valid = createEmptyClipDraft(clip, { durationSeconds: 4, fps: 16, width: 1280, height: 720, prompt: "" });
+    const ok = prepareGenerationHandoff({ project, clip, nodes: project.nodes, draft: valid });
+    if (!ok.ok) throw new Error("expected ok handoff");
+    expect(ok.dto.clipId).toBe(clip.id);
+    expect(ok.dto.depHash).toBe("h1");
+    expect(ok.dto.cacheKey).toBe(`final:${clip.id}:h1`);
+
+    const invalid = createEmptyClipDraft(clip, { durationSeconds: 999, fps: 120, width: 1024, height: 1024 });
+    const fail = prepareGenerationHandoff({ project, clip, nodes: project.nodes, draft: invalid });
+    expect(fail.ok).toBe(false);
+    if (fail.ok) return;
+    expect(fail.failure.code).toBe("VALIDATION_ERROR");
+    expect(fail.failure.clipId).toBe(clip.id);
+    expect(fail.failure.cacheKey).toBe(`final:${clip.id}:h1`);
+    expect(fail.failure.retryable).toBe(false);
   });
 });
 
