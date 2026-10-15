@@ -24,6 +24,10 @@ export interface ModelCapabilityProfile {
   maxOutputCount: number;
   /** Reference limits by kind plus total cap. */
   referenceLimits: ReferenceLimits;
+  /** Whether the model supports soft image guidance (reference images with guidance weight). */
+  supportsSoftImageGuidance: boolean;
+  /** Whether the model supports hard image conditioning (strict keyframe images). */
+  supportsHardImageConditioning: boolean;
 }
 
 export const modelCapabilityProfileSchema = z.object({
@@ -52,6 +56,8 @@ export const modelCapabilityProfileSchema = z.object({
       })
       .default({}),
   }),
+  supportsSoftImageGuidance: z.boolean().default(true),
+  supportsHardImageConditioning: z.boolean().default(true),
 });
 
 /** Simple in-memory profile registry. Connectors may override at runtime in infrastructure later. */
@@ -69,6 +75,8 @@ export const MODEL_PROFILES: Record<string, ModelCapabilityProfile> = {
       total: 12,
       perKind: { image: 8, video: 2, audio: 1, mesh: 6, world: 1 },
     },
+    supportsSoftImageGuidance: true,
+    supportsHardImageConditioning: true,
   }),
 };
 
@@ -83,9 +91,10 @@ export const validateDraftAgainstProfile = (input: {
   fps: number;
   durationSeconds: number;
   outputCount: number;
-  references: Array<{ kind: DraftReferenceKind }>;
-}): DraftValidationResult => {
+  references: Array<{ kind: DraftReferenceKind; imageMode?: "reference" | "hard" }>;
+}): DraftValidationResult & { warnings: string[] } => {
   const issues: DraftValidationIssue[] = [];
+  const warnings: string[] = [];
   const match = input.model.allowedResolutions.find((r) => r.width === input.width && r.height === input.height);
   if (!match) {
     issues.push({
@@ -124,6 +133,15 @@ export const validateDraftAgainstProfile = (input: {
       issues.push({ field: `references.${kind}`, message: `${kind} references exceed ${cap}.`, severity: "error" });
     }
   });
-  return { ok: issues.length === 0, issues };
+  // Image guidance support checks
+  const hasHardImage = input.references.some((r) => r.kind === "image" && r.imageMode === "hard");
+  if (hasHardImage && !input.model.supportsHardImageConditioning) {
+    issues.push({ field: "references.image", message: `${input.model.label} does not support hard image conditioning.`, severity: "error" });
+  }
+  const hasSoftImage = input.references.some((r) => r.kind === "image" && (r.imageMode ?? "reference") === "reference");
+  if (hasSoftImage && !input.model.supportsSoftImageGuidance) {
+    warnings.push(`${input.model.label} does not support soft image guidance. Image references will be ignored.`);
+  }
+  return { ok: issues.length === 0, issues, warnings };
 };
 

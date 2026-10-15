@@ -891,6 +891,45 @@ export const applyCommand = (
         },
       };
     }
+    case "SET_DRAFT_IMAGE_MODE": {
+      const draft = project.clipDrafts?.[command.clipId];
+      if (!draft) return fail("Draft not found.");
+      const refs = draft.references.slice();
+      const index = refs.findIndex((r) => r.id === command.referenceId && r.kind === "image");
+      if (index < 0) return fail("Image reference not found.");
+      const previous = refs[index].imageMode ?? "reference";
+      refs[index] = { ...refs[index], imageMode: command.mode };
+      const next = { ...draft, references: refs, updatedAt: timestamp };
+      return {
+        project: { ...project, clipDrafts: { ...(project.clipDrafts ?? {}), [command.clipId]: next } },
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "SET_DRAFT_IMAGE_MODE", clipId: command.clipId, referenceId: command.referenceId, mode: previous },
+          events: [{ type: "NodeUiChanged", timestamp, payload: { clipId: command.clipId, referenceId: command.referenceId, imageMode: command.mode } }],
+        },
+      };
+    }
+    case "SET_DRAFT_IMAGE_GUIDANCE": {
+      const draft = project.clipDrafts?.[command.clipId];
+      if (!draft) return fail("Draft not found.");
+      const refs = draft.references.slice();
+      const index = refs.findIndex((r) => r.id === command.referenceId && r.kind === "image");
+      if (index < 0) return fail("Image reference not found.");
+      const bounded = Math.max(0, Math.min(1, command.guidance));
+      const previous = typeof refs[index].guidance === "number" ? refs[index].guidance! : 0.3;
+      refs[index] = { ...refs[index], guidance: bounded };
+      const next = { ...draft, references: refs, updatedAt: timestamp };
+      return {
+        project: { ...project, clipDrafts: { ...(project.clipDrafts ?? {}), [command.clipId]: next } },
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "SET_DRAFT_IMAGE_GUIDANCE", clipId: command.clipId, referenceId: command.referenceId, guidance: previous },
+          events: [{ type: "NodeUiChanged", timestamp, payload: { clipId: command.clipId, referenceId: command.referenceId, guidance: bounded } }],
+        },
+      };
+    }
     case "SET_DRAFT_MODEL": {
       const draft = project.clipDrafts?.[command.clipId];
       if (!draft) return fail("Draft not found.");

@@ -8,6 +8,10 @@ import { CameraMovementDescriber } from "../../domain/rendering/cameraMovement";
 import { buildGenerationRequestFromDraft } from "./generationClipRequest";
 import type { NodeBase } from "../../domain/graph/types";
 import { prepareGenerationHandoff } from "./generationHandoff";
+import { applyCommand } from "../commands/apply";
+import type { ApplyCommandContext } from "../commands/apply";
+import type { DomainCommand } from "../commands/types";
+import { MODEL_PROFILES } from "../../domain/rendering/modelProfile";
 
 const now = "2026-01-01T00:00:00.000Z";
 
@@ -156,6 +160,80 @@ describe("ClipDraft to GenerationRequest", () => {
     const pose = request.conditions.find((c) => c.type === "pose");
     expect(pose?.payload?.format).toBe("backbone_v0.1");
     expect(validation.ok).toBe(true);
+  });
+});
+
+describe("Image anchors: reference mode by default, hard only on toggle", () => {
+  it("excludes images from hard conditions by default and sends soft guidance; toggling to hard moves to conditions", () => {
+    const { project, clip } = projectFixture();
+    let draft = createEmptyClipDraft(clip, { durationSeconds: 4, fps: 16, width: 1280, height: 720 });
+    draft = { ...draft, references: [...(draft.references ?? []), { id: "img-1", kind: "image", assetId: "asset-img-1" }] };
+    const { request, validation } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft });
+    expect(validation.ok).toBe(true);
+    // No hard image conditions by default
+    expect(request.conditions.some((c) => c.type === "image")).toBe(false);
+    // Soft guidance present
+    expect((request.backendOptions as any).softGuidanceImages?.length).toBe(1);
+    expect((request.backendOptions as any).softGuidanceImages[0].assetId).toBe("asset-img-1");
+
+    // Toggle to hard via DomainCommand (undoable)
+    const ctx: ApplyCommandContext = { timestamp: now };
+    const created = applyCommand({ ...project, clipDrafts: { [clip.id]: draft } } as Project, { type: "SET_DRAFT_IMAGE_MODE", clipId: clip.id, referenceId: "img-1", mode: "hard" } as DomainCommand, ctx);
+    const hardened = created.project.clipDrafts![clip.id]!;
+    const { request: req2, validation: val2 } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft: hardened });
+    expect(val2.ok).toBe(true);
+    expect(req2.conditions.some((c) => c.type === "image" && c.assetId === "asset-img-1")).toBe(true);
+    expect(((req2.backendOptions as any).softGuidanceImages ?? []).length).toBe(0);
+
+    // Undo toggle
+    const inverse = created.result.inverse!;
+    const undone = applyCommand(created.project, inverse as DomainCommand, ctx);
+    const reverted = undone.project.clipDrafts![clip.id]!;
+    const { request: req3 } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft: reverted });
+    expect(req3.conditions.some((c) => c.type === "image")).toBe(false);
+    expect((req3.backendOptions as any).softGuidanceImages?.length).toBe(1);
+  });
+});
+
+describe("Model capability for image guidance/conditioning", () => {
+  it("warns and drops soft guidance when unsupported; errors on hard when unsupported", () => {
+    // Register a test-only profile without soft guidance and hard conditioning
+    (MODEL_PROFILES as any)["no-soft"] = {
+      id: "no-soft",
+      label: "NoSoft",
+      allowedResolutions: [{ width: 1280, height: 720, fps: [16, 24] }],
+      maxDurationSeconds: 10,
+      maxOutputCount: 4,
+      referenceLimits: { total: 10, perKind: { image: 5 } },
+      supportsSoftImageGuidance: false,
+      supportsHardImageConditioning: true,
+    };
+    (MODEL_PROFILES as any)["no-hard"] = {
+      id: "no-hard",
+      label: "NoHard",
+      allowedResolutions: [{ width: 1280, height: 720, fps: [16, 24] }],
+      maxDurationSeconds: 10,
+      maxOutputCount: 4,
+      referenceLimits: { total: 10, perKind: { image: 5 } },
+      supportsSoftImageGuidance: true,
+      supportsHardImageConditioning: false,
+    };
+
+    const { project, clip } = projectFixture();
+    // Soft guidance unsupported
+    let draft = createEmptyClipDraft(clip, { durationSeconds: 4, fps: 16, width: 1280, height: 720, modelId: "no-soft" });
+    draft = { ...draft, references: [{ id: "img-1", kind: "image", assetId: "asset-img-1" }] };
+    const { request, validation } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft });
+    expect(validation.ok).toBe(true);
+    expect(validation.warnings.some((w) => /does not support soft image guidance/i.test(w))).toBe(true);
+    expect(((request.backendOptions as any).softGuidanceImages ?? []).length).toBe(0);
+
+    // Hard conditioning unsupported
+    let draft2 = createEmptyClipDraft(clip, { durationSeconds: 4, fps: 16, width: 1280, height: 720, modelId: "no-hard" });
+    draft2 = { ...draft2, references: [{ id: "img-2", kind: "image", assetId: "asset-img-2", imageMode: "hard" }] };
+    const { validation: v2 } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft: draft2 });
+    expect(v2.ok).toBe(false);
+    expect(v2.issues.some((i) => /does not support hard image conditioning/i.test(i.message))).toBe(true);
   });
 });
 

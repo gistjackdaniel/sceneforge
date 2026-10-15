@@ -11,6 +11,12 @@ export interface DraftReference {
   assetId?: string;
   /** Optional label shown in UI. */
   label?: string;
+  /** Optional link to external storyboard/keyframe metadata in timeline (never a condition). */
+  metadataRefId?: string;
+  /** Image-only: conditioning mode — reference (soft guidance) vs hard (strict). Default reference. */
+  imageMode?: "reference" | "hard";
+  /** Image-only: soft guidance strength (0..1), default ~0.3. Ignored in hard mode. */
+  guidance?: number;
 }
 
 export const draftReferenceSchema = z.object({
@@ -26,6 +32,9 @@ export const draftReferenceSchema = z.object({
   ]),
   assetId: z.string().min(1).optional(),
   label: z.string().min(1).optional(),
+  metadataRefId: z.string().min(1).optional(),
+  imageMode: z.union([z.literal("reference"), z.literal("hard")]).optional(),
+  guidance: z.number().min(0).max(1).optional(),
 });
 
 export interface ClipDraft {
@@ -111,10 +120,17 @@ export interface DraftValidationResult {
 }
 
 export const upsertReference = (references: DraftReference[], ref: DraftReference): DraftReference[] => {
+  // Default image guidance to reference mode with gentle strength when not specified.
+  const normalized: DraftReference = (() => {
+    if (ref.kind !== "image") return ref;
+    const safeGuidance =
+      typeof ref.guidance === "number" && isFinite(ref.guidance) ? Math.max(0, Math.min(1, ref.guidance)) : 0.3;
+    return { imageMode: "reference", ...ref, guidance: safeGuidance };
+  })();
   const index = references.findIndex((r) => r.id === ref.id && r.kind === ref.kind);
   const next = [...references];
-  if (index >= 0) next[index] = ref;
-  else next.push(ref);
+  if (index >= 0) next[index] = normalized;
+  else next.push(normalized);
   return next;
 };
 
