@@ -2761,27 +2761,6 @@ export const EditorStoreProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [state]);
 
-  // Bridge: kick off render jobs when a domain RenderQueued event is recorded
-  const lastEventIndexRef = useRef(0);
-  useEffect(() => {
-    const events = state.ui.commandBus.events;
-    if (!Array.isArray(events) || events.length === 0) {
-      lastEventIndexRef.current = 0;
-      return;
-    }
-    const start = lastEventIndexRef.current;
-    const slice = events.slice(start);
-    for (const evt of slice) {
-      if (evt.type === "RenderQueued") {
-        const clipId = String(evt.payload.clipId ?? "");
-        if (clipId) {
-          void runVideoRenderJob(() => stateRef.current, clipId, baseDispatch);
-        }
-      }
-    }
-    lastEventIndexRef.current = events.length;
-  }, [state.ui.commandBus.events]);
-
   // Also observe the domain job queue to ensure each queued job starts exactly once
   const startedJobsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
