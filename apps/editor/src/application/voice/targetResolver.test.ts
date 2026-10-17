@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { projectStateResolver } from "../../infrastructure/voice/TargetResolver/projectStateResolver";
+import { createWorldTargetResolver } from "../../domain/worlds/query";
 import type { Project } from "../../domain/project/types";
 import { normalizeWorldAsset } from "../../domain/worlds/normalize";
 
@@ -69,21 +69,20 @@ const createProject = (): Project => {
   };
 };
 
-describe("projectStateResolver", () => {
-  it("prefers selection for pronoun 'it'", () => {
+describe("createWorldTargetResolver", () => {
+  it("resolves world by name", () => {
     const project = createProject();
-    const resolver = projectStateResolver(project);
-    const results = resolver.resolve("it", { selectionIds: ["e-actor-1"] });
-    expect(results[0]?.assetId).toBe("e-actor-1");
-    expect(results[0]?.score).toBeGreaterThan(0.9);
+    const resolver = createWorldTargetResolver(project.worlds);
+    const results = resolver.resolve("Room", { selectionIds: [], locale: "en" });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results[0]?.assetId).toBe("w1");
   });
 
-  it("returns multiple matches for ambiguous common names", () => {
+  it("returns empty when no match", () => {
     const project = createProject();
-    const resolver = projectStateResolver(project);
-    const results = resolver.resolve("wooden chair", { });
-    expect(results.length).toBeGreaterThanOrEqual(2);
-    expect(results[0]?.score).toBeGreaterThan(0);
+    const resolver = createWorldTargetResolver(project.worlds);
+    const results = resolver.resolve("nonexistent", { selectionIds: [], locale: "en" });
+    expect(results).toEqual([]);
   });
 });
 

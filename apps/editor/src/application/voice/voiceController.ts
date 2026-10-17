@@ -1,7 +1,7 @@
 import type { SpeechInput } from "../ports/SpeechInput";
 import type { IntentParser, VoiceIntent } from "../ports/IntentParser";
-import type { TargetResolver } from "../ports/TargetResolver";
 import type { LoopClock } from "../ports/LoopClock";
+import type { TargetResolver } from "../../domain/worlds/query";
 import type { DomainCommand } from "../commands/types";
 import type { Project } from "../../domain/project/types";
 import { mapVoiceIntentToCommands } from "./intentToCommands";
@@ -38,7 +38,7 @@ export const createVoiceController = (deps: VoiceControllerDeps) => {
     if (!intent) return;
     const candidates =
       intent.targetRefs.length > 0
-        ? resolver.resolve(intent.targetRefs[0], { selectionIds, locale })
+        ? resolver.resolve(intent.targetRefs[0], { selectionIds: selectionIds ?? [], locale: (locale ?? "en") })
         : [];
     const tSeconds = clock.getTime();
     const { commands, confirmation } = mapVoiceIntentToCommands(intent, candidates, {

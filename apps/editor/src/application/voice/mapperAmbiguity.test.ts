@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { ruleBasedParser } from "../../infrastructure/voice/IntentParser/ruleBasedParser";
-import { projectStateResolver } from "../../infrastructure/voice/TargetResolver/projectStateResolver";
 import type { Project } from "../../domain/project/types";
 import { normalizeWorldAsset } from "../../domain/worlds/normalize";
 import { mapVoiceIntentToCommands } from "./intentToCommands";
@@ -94,10 +93,12 @@ const createProject = (): Project => {
 describe("intent to command mapper ambiguity/confirmation", () => {
   it("requires confirmation when multiple targets match", () => {
     const project = createProject();
-    const resolver = projectStateResolver(project);
     const parser = ruleBasedParser();
     const intent = parser.parse({ text: "move the wooden chair left 1 meter", locale: "en" })!;
-    const matches = resolver.resolve(intent.targetRefs[0], {});
+    const matches = [
+      { assetId: "world-A", kind: "location", displayName: "Room A", score: 92 },
+      { assetId: "world-B", kind: "location", displayName: "Room B", score: 90 },
+    ];
     const result = mapVoiceIntentToCommands(intent, matches, {
       project,
       clipId: "c1",

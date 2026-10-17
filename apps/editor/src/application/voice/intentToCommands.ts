@@ -1,6 +1,6 @@
 import type { VoiceIntent } from "../ports/IntentParser";
-import type { ResolvedTarget } from "../ports/TargetResolver";
-import { cameraPathParamsFromNode, upsertCameraKeyframe } from "../../domain/graph/cameraPath";
+import type { TargetMatch as ResolvedTarget } from "../../domain/worlds/query";
+import { cameraPathParamsFromNode } from "../../domain/graph/cameraPath";
 import type { Project } from "../../domain/project/types";
 import { placementNodeIdForElement } from "../services/viewportCommit";
 import { objectTrackNodeId, objectKeyframeSchema, readObjectTrack, upsertObjectKeyframe } from "../../domain/worlds/sceneObjects";
@@ -60,7 +60,7 @@ export const mapVoiceIntentToCommands = (
     };
   }
 
-  const frame = toFrame(tSeconds, fps); // Temporary: main uses frame-based keyframes
+  const frame = toFrame(tSeconds, fps); // Object tracks remain frame-based; camera uses t-seconds DomainCommands
   const commands: DomainCommand[] = [];
 
   if (intent.verb === "look-at") {
@@ -113,13 +113,14 @@ export const mapVoiceIntentToCommands = (
         else if (axis === "z") v[2] += delta;
         return v;
       };
-      const next = upsertCameraKeyframe(current, {
-        frame,
-        position: intent.verb === "move" ? move(last.position) : last.position,
-        rotation: last.rotation,
-        focalLengthMm: last.focalLengthMm,
+      const nextPosition = intent.verb === "move" ? move(last.position) : last.position;
+      commands.push({
+        type: "UPDATE_CAMERA_KEYFRAME",
+        clipId,
+        t: tSeconds,
+        position: nextPosition,
+        quaternion: last.rotation,
       });
-      commands.push({ type: "UPDATE_NODE_PARAMS", nodeId, patch: { ...next } });
       return { commands };
     }
     // Object pose keyframe on track node
