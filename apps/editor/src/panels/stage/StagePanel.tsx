@@ -60,6 +60,10 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const cameraNode = clip ? project.nodes[cameraPathNodeIdForClip(clip)] : undefined;
   const cameraParams = useMemo(() => cameraPathParamsFromNode(cameraNode?.parameters ?? {}), [cameraNode]);
   const lens = lensParamsFromNode(clip ? project.nodes[lensNodeIdForClip(clip.id)]?.parameters ?? {} : {});
+  const lensRef = useRef(lens);
+  const clipRef = useRef(clip);
+  lensRef.current = lens;
+  clipRef.current = clip;
   const cameraPose = useMemo((): StageCameraPose | undefined => {
     const pose = interpolateCameraPose(cameraParams, frame);
     return pose ? { position: pose.position, rotation: quaternionToEulerApprox(pose.rotation), focalLength: pose.focalLengthMm || lens.focalLengthMm } : undefined;
@@ -131,15 +135,16 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       loopRef.current?.stop();
       loopRef.current = null;
       // Commit take when stopping
-      if (recording && takeRef.current.size > 0 && clip) {
+      const currentClip = clipRef.current;
+      if (recording && takeRef.current.size > 0 && currentClip) {
         const cmds: DomainCommand[] = [];
-        const lensParams = lens;
+        const lensParams = lensRef.current;
         Array.from(takeRef.current.entries())
           .sort((a, b) => a[0] - b[0])
           .forEach(([t, pose]) => {
             cmds.push({
               type: "ADD_CAMERA_KEYFRAME",
-              clipId: clip.id,
+              clipId: currentClip.id,
               t,
               position: pose.position,
               quaternion: eulerToQuaternionApprox(pose.rotation),
@@ -165,7 +170,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       loop.stop();
       loopRef.current = null;
     };
-  }, [playing, duration, start, fps, dispatch, recording, clip, lens]);
+  }, [playing, duration, start, fps, dispatch, recording]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (typing(event.target) || (!alwaysActive && ui.panelTab !== "viewport") || event.ctrlKey || event.metaKey || event.altKey) return;

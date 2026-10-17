@@ -42,6 +42,15 @@ export interface ViewportSelection {
   rotation: [number, number, number];
 }
 
+interface CameraDrag {
+  mode: "rotate" | "translate" | "both";
+  handle: "ring-x" | "ring-y" | "ring-z" | "axis-x" | "axis-y" | "axis-z" | "center";
+  startX: number;
+  startY: number;
+  startPosition: THREE.Vector3;
+  startRotation: THREE.Euler;
+}
+
 interface StageViewportProps {
   sceneObjects?: SceneObject[];
   selectedId?: string;
@@ -75,6 +84,7 @@ interface StageViewportProps {
   onSelectionChange?: (selection: ViewportSelection | undefined) => void;
   onLoadStateChange?: (state: ViewportLoadState, message?: string) => void;
   onCapturePose?: (payload: { camera: StageCameraPose; objects: StageObjectTransform[] }) => void;
+  onLiveCameraPose?: (camera: StageCameraPose) => void;
   captureSignal?: number;
   focusSignal?: number;
   resetSignal?: number;
@@ -220,6 +230,7 @@ export const StageViewport = ({
   onSelectionChange,
   onLoadStateChange,
   onCapturePose,
+  onLiveCameraPose,
   captureSignal = 0,
   focusSignal = 0,
   resetSignal = 0,
@@ -276,16 +287,7 @@ export const StageViewport = ({
     dragging: boolean;
     keyLight: THREE.DirectionalLight;
     cameraGizmo: THREE.Group;
-    cameraDrag:
-      | null
-      | {
-          mode: "rotate" | "translate" | "both";
-          handle: "ring-x" | "ring-y" | "ring-z" | "axis-x" | "axis-y" | "axis-z" | "center";
-          startX: number;
-          startY: number;
-          startPosition: THREE.Vector3;
-          startRotation: THREE.Euler;
-        };
+    cameraDrag: CameraDrag | null;
   } | null>(null);
   const loadTokenRef = useRef(0);
   const [hud, setHud] = useState(worldName ?? "No world");
@@ -435,7 +437,7 @@ export const StageViewport = ({
       dragging: false,
       keyLight,
       cameraGizmo,
-      cameraDrag: null,
+      cameraDrag: null as CameraDrag | null,
     };
     sceneApiRef.current = api;
 
@@ -478,10 +480,6 @@ export const StageViewport = ({
           return;
         }
       }
-      const rect = renderer.domElement.getBoundingClientRect();
-      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(pointer, camera);
       const pickables = Array.from(objects.values()).filter((object) => object.visible && !object.userData.locked);
       const hits = raycaster.intersectObjects(pickables, true);
       const raw = hits[0]?.object;
