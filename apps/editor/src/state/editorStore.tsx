@@ -1825,15 +1825,18 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
           return { ...state, ui: appendWorkflowLog(state.ui, "Keyframe is outside clip duration.") };
         }
         const lens = lensParamsFromNode(project.nodes[lensNodeIdForClip(clip.id)]?.parameters ?? {});
-        const patch = buildCameraKeyframePatch(node.parameters, {
-          frame: localFrame,
-          position: action.position,
-          rotation: eulerToQuaternionApprox(action.rotation),
-          focalLengthMm: lens.focalLengthMm,
-        });
         return runDomainCommand(
           state,
-          { type: "UPDATE_NODE_PARAMS", nodeId, patch: { ...patch } },
+          {
+            type: "UPDATE_CAMERA_KEYFRAME",
+            clipId: clip.id,
+            t: localFrame,
+            position: action.position,
+            quaternion: eulerToQuaternionApprox(action.rotation),
+            focalLengthMm: lens.focalLengthMm,
+            focusDistanceM: lens.focusDistanceM,
+            aperture: lens.aperture,
+          },
           `Camera pose saved at ${localFrame}f.`,
         );
       }

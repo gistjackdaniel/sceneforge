@@ -15,6 +15,9 @@ import { buildSceneConditioning } from "../../domain/rendering/sceneConditioning
 import { OUTPUT_ASPECT_PRESETS, outputAspectRatio, type OutputAspectPreset } from "../../domain/rendering";
 import { CAMERA_RIG_PRESETS, type CameraRigPreset } from "../../domain/graph/cameraRig";
 import "./sceneWorkspace.css";
+import { createLoopClock } from "../../application/ports/LoopClock";
+import type { DomainCommand } from "../../application/commands";
+import { validateOutputAspect } from "./recordingPreflight";
 
 type Drawer = "assets" | "layers" | "light" | "camera" | "settings" | null;
 const tools: Array<{ id: ViewportTool; icon: SceneIconName; label: string }> = [
@@ -39,6 +42,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [showPreview, setShowPreview] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [playing, setPlaying] = useState(false);
+  const loopRef = useRef<ReturnType<typeof createLoopClock> | null>(null);
+  const takeRef = useRef<Map<number, { position: [number, number, number]; rotation: [number, number, number] }>>(new Map());
   const [captureSignal, setCaptureSignal] = useState(0);
   const [focusSignal, setFocusSignal] = useState(0);
   const [resetSignal, setResetSignal] = useState(0);
@@ -122,19 +127,45 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   useEffect(() => { if (!recording) setPlaying(false); }, [recording]);
   const playbackStart = useRef(0);
   useEffect(() => {
-    if (!playing) return;
-    playbackStart.current = performance.now() - frame / fps * 1000;
-    let request = 0;
-    let lastFrame = -1;
-    const tick = () => {
-      const next = Math.min(duration - 1, Math.floor((performance.now() - playbackStart.current) / 1000 * fps));
-      if (next !== lastFrame) { lastFrame = next; dispatch({ type: "scrub-playhead", playhead: start + next }); }
-      if (next >= duration - 1) { setPlaying(false); return; }
-      request = requestAnimationFrame(tick);
+    if (!playing) {
+      loopRef.current?.stop();
+      loopRef.current = null;
+      // Commit take when stopping
+      if (recording && takeRef.current.size > 0 && clip) {
+        const cmds: DomainCommand[] = [];
+        const lensParams = lens;
+        Array.from(takeRef.current.entries())
+          .sort((a, b) => a[0] - b[0])
+          .forEach(([t, pose]) => {
+            cmds.push({
+              type: "ADD_CAMERA_KEYFRAME",
+              clipId: clip.id,
+              t,
+              position: pose.position,
+              quaternion: eulerToQuaternionApprox(pose.rotation),
+              focalLengthMm: lensParams.focalLengthMm,
+              focusDistanceM: lensParams.focusDistanceM,
+              aperture: lensParams.aperture,
+            });
+          });
+        takeRef.current.clear();
+        dispatch({ type: "agent-execute-commands", commands: [{ type: "APPLY_COMMANDS", commands: cmds, logMessage: `Recorded camera take (${cmds.length} keys)` }] });
+      }
+      return;
+    }
+    // Start loop
+    const loop = createLoopClock({ duration: Math.max(0.001, duration / Math.max(1, fps)), fps, autoplay: true });
+    loopRef.current = loop;
+    const unsub = loop.subscribe((tSec) => {
+      const next = Math.max(0, Math.min(duration - 1, Math.floor(tSec * fps)));
+      dispatch({ type: "scrub-playhead", playhead: start + next });
+    });
+    return () => {
+      unsub();
+      loop.stop();
+      loopRef.current = null;
     };
-    request = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(request);
-  }, [playing, duration, start, fps, dispatch]);
+  }, [playing, duration, start, fps, dispatch, recording, clip, lens]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (typing(event.target) || (!alwaysActive && ui.panelTab !== "viewport") || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -187,9 +218,32 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           keyframes={cameraParams.keyframes} pathSamples={pathSamples} fovDegrees={verticalFovFromLens({ ...lens, focalLengthMm: cameraPose?.focalLength ?? lens.focalLengthMm })}
           playheadFrame={frame} lookAtTargetId={cameraParams.lookAtTargetElementId}
           onSelectionChange={(selection: ViewportSelection | undefined) => { if (selection && selection.kind !== "camera") { setSelectedId(selection.id); setDrawer("layers"); } }}
-          onTransformCommit={(payload) => { const object = sceneObjects.find((item) => item.id === payload.worldElementId); if (object) commitPose(object, { position: payload.position, rotation: payload.rotation, scale: payload.scale ?? object.scale }); }}
+          onTransformCommit={(payload) => {
+            if (!clip || !canEdit) return;
+            if (payload.kind === "camera") {
+              dispatch({
+                type: "commit-object-transform",
+                clipId: clip.id,
+                worldElementId: "shot-camera",
+                kind: "camera",
+                position: payload.position,
+                rotation: payload.rotation,
+                scale: payload.scale,
+              });
+              return;
+            }
+            const object = sceneObjects.find((item) => item.id === payload.worldElementId);
+            if (object) commitPose(object, { position: payload.position, rotation: payload.rotation, scale: payload.scale ?? object.scale });
+          }}
           onLoadStateChange={(state, message) => setLoad({ state, message })}
-          onCapturePose={captureCamera} captureSignal={captureSignal} focusSignal={focusSignal} resetSignal={resetSignal} />
+          onCapturePose={captureCamera}
+          onLiveCameraPose={(camera) => {
+            if (!playing || !recording || !clip) return;
+            // Record one pose per integer frame within the loop
+            const localFrame = Math.max(0, Math.min(duration - 1, Math.floor(((project.sequences[project.activeSequenceId]?.playhead ?? start) - start))));
+            takeRef.current.set(localFrame, { position: camera.position, rotation: camera.rotation });
+          }}
+          captureSignal={captureSignal} focusSignal={focusSignal} resetSignal={resetSignal} />
       </div>
       <nav className="scene-rail" aria-label="Scene tools">
         {([["assets", "plus", "Add assets"], ["layers", "layers", "Subjects"], ["camera", "camera", "Camera trajectory"]] as const).map(([id, icon, title]) =>
@@ -262,7 +316,19 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       {showHelp && <div className="scene-help"><strong>{cameraView ? "Move the camera" : "Explore the scene"}</strong><p>{cameraView ? "WASD 이동 · Q/E 높이 · 우클릭 드래그 시선 · Shift 빠르게" : "Orbit: 드래그 회전 · 휠 줌 · 우클릭 이동 · W/E/R 변형 · F 선택 보기"}</p><p>Motion: K 포즈 저장 · Space 재생 · Esc 패널 닫기</p></div>}
     </div>
     {recording && <SceneTimeline tracks={tracks} activeId={selectedId} frame={frame} duration={duration} fps={fps} playing={playing} onSelect={select} onScrub={scrub}
-      onPlay={() => { setDraft(undefined); if (frame >= duration - 1) scrub(0); setPlaying((value) => !value); }} onKey={stamp} onDelete={deletePose} disabled={!canEdit || Boolean(selected?.locked)} />}
+      onPlay={() => {
+        setDraft(undefined);
+        if (frame >= duration - 1) scrub(0);
+        // Preflight: ensure valid aspect and camera view before starting playback
+        if (!playing) {
+          if (!validateOutputAspect(ui.outputAspect)) {
+            setNotice("Choose a valid output aspect before recording.");
+            return;
+          }
+          setFreeView(false); // switch to Camera view
+        }
+        setPlaying((value) => !value);
+      }} onKey={stamp} onDelete={deletePose} disabled={!canEdit || Boolean(selected?.locked)} />}
     <footer className="scene-status"><span>{previewOnly ? "Preview only · editing disabled" : notice || (draft ? "Unsaved object pose · K to save" : world ? `${world.name} · shared world / local shot` : "Persistent world · editable shot")}</span><span>{fps} fps · {ui.outputAspect}</span></footer>
   </section>;
 };

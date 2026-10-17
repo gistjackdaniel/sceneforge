@@ -49,6 +49,58 @@ export type DomainCommand =
         rigNodeId: string;
         pathNodeId: string;
       };
+    }
+  | {
+      /** Add a camera keyframe at t with position + quaternion (6DoF). */
+      type: "ADD_CAMERA_KEYFRAME";
+      clipId: string;
+      t: number;
+      position: [number, number, number];
+      quaternion: [number, number, number, number];
+      /** Optional; when omitted, lens node focal length is used. */
+      focalLengthMm?: number;
+      focusDistanceM?: number;
+      aperture?: number;
+    }
+  | {
+      /** Update or insert a camera keyframe at t with position + quaternion (6DoF). */
+      type: "UPDATE_CAMERA_KEYFRAME";
+      clipId: string;
+      t: number;
+      position: [number, number, number];
+      quaternion: [number, number, number, number];
+      focalLengthMm?: number;
+      focusDistanceM?: number;
+      aperture?: number;
+      /** When present, used to compute inverse precisely. */
+      previous?: {
+        position: [number, number, number];
+        quaternion: [number, number, number, number];
+        focalLengthMm?: number;
+        focusDistanceM?: number;
+        aperture?: number;
+      };
+    }
+  | {
+      /** Remove camera keyframe at t if present. */
+      type: "REMOVE_CAMERA_KEYFRAME";
+      clipId: string;
+      t: number;
+      /** Optional previous payload for precise inverse. */
+      previous?: {
+        position: [number, number, number];
+        quaternion: [number, number, number, number];
+        focalLengthMm?: number;
+        focusDistanceM?: number;
+        aperture?: number;
+      };
+    }
+  | {
+      /** Apply a batch of domain commands atomically as one undoable unit. */
+      type: "APPLY_COMMANDS";
+      commands: DomainCommand[];
+      /** Optional message for logs/UI; callers may log separately. */
+      logMessage?: string;
     };
 
 export type DomainEventType =
