@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import React, { useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { lyraAdapter } from "../core/lyra/cloudAdapter";
 
 // No need to mock Lyra adapter for this test since we assert bridge-side effects
 
@@ -61,9 +62,11 @@ describe("EditorStore render bridge", () => {
     } catch {}
     root = null;
     document.body.removeChild(container);
+    vi.restoreAllMocks();
   });
 
   it("enqueues and starts exactly one render for REQUEST_RENDER", async () => {
+    const submitSpy = vi.spyOn(lyraAdapter, "submitVideoRenderJob");
     let jobsLen = -1;
     let queuedEvents = 0;
     const Reader = () => {
@@ -83,6 +86,8 @@ describe("EditorStore render bridge", () => {
     await flush();
     expect(jobsLen).toBe(1);
     expect(queuedEvents).toBe(1);
+    await waitFor(() => submitSpy.mock.calls.length === 1, 30);
+    expect(submitSpy).toHaveBeenCalledTimes(1);
   });
 
   it("undo cancels the queued render job", async () => {
