@@ -4,6 +4,7 @@ import { useEditorStore } from "../../state/editorStore";
 import { lyraModelConnector } from "../../infrastructure/connectors/lyra/modelConnector";
 import { findWorldReferenceNode } from "../../application/services/worldLinking";
 import type { WorldAsset } from "../../domain/worlds/types";
+import { WorldLibrary } from "./WorldLibrary";
 
 const artifactKinds = (world: WorldAsset) =>
   [
@@ -133,6 +134,7 @@ export const WorldGenerationPanel = () => {
 
   return (
     <section className="world-generation-panel">
+      <WorldLibrary />
       <div className="panel-header">
         <div>
           <p className="eyebrow">World Generation</p>
@@ -285,29 +287,7 @@ export const WorldGenerationPanel = () => {
           )}
         </div>
 
-        <div className="stack compact">
-          <h3>Worlds</h3>
-          {worlds.length === 0 ? (
-            <p className="muted">생성된 월드가 없습니다.</p>
-          ) : (
-            worlds.map((world) => {
-              const alreadyLinked = Boolean(
-                clip && (clip.linkedWorldId === world.id || findWorldReferenceNode(project, clip.id, world.id)),
-              );
-              return (
-                <WorldResultCard
-                  key={world.id}
-                  world={world}
-                  clipId={clip?.id}
-                  alreadyLinked={alreadyLinked}
-                  clipMissing={!clip}
-                  onPreview={() => previewWorld(world.id)}
-                  onUse={() => useInCurrentClip(world.id)}
-                />
-              );
-            })
-          )}
-        </div>
+        {/* World list moved to WorldLibrary */}
       </div>
     </section>
   );
