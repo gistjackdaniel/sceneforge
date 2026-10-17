@@ -8,6 +8,8 @@ import { clipStartFrame, clipDurationFrames, withClipTiming } from "../../domain
 import { createClipVariant, setActiveVariant } from "../../domain/timeline/variants";
 import { linkWorldToClip } from "../services/worldLinking";
 import { applyCameraRigToProject } from "../services/cameraCraft";
+import { evaluateShotWorkflow } from "../../domain/workflow";
+import { renderJobPriority } from "../../domain/rendering/request";
 import type { CommandResult, DomainCommand, DomainEvent } from "./types";
 
 const event = (type: DomainEvent["type"], payload: Record<string, unknown>, timestamp: string): DomainEvent => ({
@@ -36,6 +38,81 @@ export const applyCommand = (
   });
 
   switch (command.type) {
+    case "REQUEST_RENDER": {
+      const clip = project.clips[command.clipId];
+      if (!clip) {
+        return fail("Clip not found.");
+      }
+      const graph = project.clipGraphs[clip.clipGraphId];
+      const readiness = evaluateShotWorkflow({
+        clip,
+        graph,
+        nodes: project.nodes,
+        worlds: project.worlds,
+        caches: project.caches,
+      });
+      if (!readiness.readyForRender) {
+        return {
+          project,
+          result: {
+            ok: true,
+            command,
+            events: [
+              event(
+                "RenderFailed",
+                {
+                  clipId: clip.id,
+                  quality: command.quality,
+                  error: readiness.blockingIssues.join(" ") || "Shot is not ready to render.",
+                  retryable: false,
+                },
+                timestamp,
+              ),
+            ],
+          },
+        };
+      }
+      const tsToken = timestamp.replace(/[^0-9A-Za-z]/g, "");
+      const jobId = `render-${clip.id}-${command.quality}-${tsToken}`;
+      const activeSequence = project.sequences[project.activeSequenceId];
+      const inVisibleRange =
+        activeSequence.visibleRange[0] <= clip.start && clip.end <= activeSequence.visibleRange[1];
+      const nearPlayhead = activeSequence.playhead >= clip.start && activeSequence.playhead <= clip.end;
+      const priority = renderJobPriority({
+        nearPlayhead,
+        inVisibleRange,
+        affected: false,
+      });
+      const cacheKeyBase = project.dependencyMap.cacheHashesByClipId[clip.id] ?? "no-hash";
+      const cacheKey = `${command.quality}:${clip.id}:${cacheKeyBase}`;
+      const renderNodeId = `node-${clip.id}-render`;
+      return {
+        project,
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "CANCEL_RENDER", jobId },
+          events: [
+            event(
+              "RenderQueued",
+              { jobId, clipId: clip.id, quality: command.quality, cacheKey, priority, renderNodeId },
+              timestamp,
+            ),
+          ],
+        },
+      };
+    }
+    case "CANCEL_RENDER": {
+      // Domain layer emits no events for cancel; UI bridge marks the job as cancelled.
+      return {
+        project,
+        result: {
+          ok: true,
+          command,
+          events: [],
+        },
+      };
+    }
     case "CREATE_NODE": {
       if (project.nodes[command.node.id]) {
         return fail("Node already exists.");
