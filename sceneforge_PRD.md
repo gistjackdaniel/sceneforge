@@ -37,8 +37,8 @@
 
 1. **Stage** — 3D 자산을 놓고 본다.
 2. **Subjects** — 사람·사물을 고르고, 포즈 프롬프트를 쓰거나 Motion에서 explicit pose를 `K`로 남긴다.
-3. **Camera** — Motion에서 궤적을 `K`로 남긴다.
-4. **Generate video** — 자산, 포즈, 카메라 궤적을 모델에 보낸다.
+3. **Camera** — Motion에서 `Record`로 Take를 남기거나 `K`로 희소 포즈를 남긴다. Take 1, Take 2… 중 Generate에 쓸 궤적을 고른다.
+4. **Generate video** — 자산, 포즈, **선택된 Take**의 카메라 궤적을 모델에 보낸다.
 
 World Gen, Direction, Graph, Inspector, Assistant, Timeline, Shot Workflow는 이 화면에서 빼 둔다.
 
@@ -58,7 +58,7 @@ World Gen, Direction, Graph, Inspector, Assistant, Timeline, Shot Workflow는 �
 
 - 사람 또는 사물 3D 자산을 샷에 넣을 수 있다.
 - 그 주체의 동작을 텍스트 프롬프트로 적거나, 프레임별 포즈로 남길 수 있다. 둘 중 하나만 있으면 된다.
-- 카메라 궤적을 남길 수 있다. 궤적이 없으면 Generate는 막힌다.
+- 카메라 Take를 Record 또는 `K`로 남길 수 있다. 선택된 Take의 궤적이 없으면 Generate는 막힌다.
 - Generate는 같은 자산 id, 포즈, 카메라 궤적을 모델 입력으로 보낸다.
 - 새로고침 후에도 자산, 포즈, 카메라가 남는다.
 
@@ -76,5 +76,5 @@ World Gen, Direction, Graph, Inspector, Assistant, Timeline, Shot Workflow는 �
 1. 화면은 Stage뿐이다. Graph, Inspector, Direction, World Gen, Timeline이 보이지 않는다.
 2. 3D 자산(블록, 구체, 또는 GLB)을 추가하면 Subjects에 남고, 새로고침 후에도 남는다.
 3. Pose prompt를 적으면 그 문장이 주체 기록에 남는다. 비우고 Motion에서 `K`를 누르면 explicit pose가 그 프레임에 남는다.
-4. 카메라 키가 없으면 Generate video가 비활성이다. Motion에서 `K`로 궤적을 남기면 버튼이 켜진다.
+4. 카메라 Take가 없으면 Generate video가 비활성이다. Record 또는 `K`로 Take를 남기고 선택하면 버튼이 켜진다.
 5. Generate는 비디오 잡으로 이어지고, 실패하면 이유가 상단에 보인다.

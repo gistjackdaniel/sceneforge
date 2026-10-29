@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { BackboneCameraBuilder, BackbonePoseValidator } from "./backboneV01";
-import type { CameraPathParams } from "../graph/cameraPath";
+import { defaultCameraPathParams, type CameraPathParams } from "../graph/cameraPath";
 import type { LensParams } from "../graph/lens";
+
+const path = (partial: Partial<CameraPathParams> & Pick<CameraPathParams, "keyframes">): CameraPathParams => ({
+  ...defaultCameraPathParams(),
+  ...partial,
+});
 
 describe("Backbone v0.1 camera builder", () => {
   const lens: LensParams = { focalLengthMm: 36, sensorPreset: "full-frame" };
@@ -18,7 +23,7 @@ describe("Backbone v0.1 camera builder", () => {
   });
 
   it("converts GL camera orientation to OpenCV (identity → diag(1,-1,-1))", () => {
-    const params: CameraPathParams = {
+    const params = path({
       keyframes: [
         {
           frame: 0,
@@ -27,10 +32,8 @@ describe("Backbone v0.1 camera builder", () => {
           focalLengthMm: 36,
         },
       ],
-      interpolation: "linear",
-      stabilization: 0,
       frameCount: 1,
-    };
+    });
     const cam = BackboneCameraBuilder.buildFromCameraPath({ params, lens, imageSize, fps: 16, numFrames: 1 });
     expect(cam.frames.length).toBe(1);
     const m = cam.frames[0].c2w;
@@ -44,7 +47,7 @@ describe("Backbone v0.1 camera builder", () => {
     expect(m[2][0]).toBeCloseTo(0, 6);
   });
   it("converts yaw 90° correctly (GL yaw +90 → OpenCV flip + rotation)", () => {
-    const params: CameraPathParams = {
+    const params = path({
       keyframes: [
         {
           frame: 0,
@@ -54,10 +57,8 @@ describe("Backbone v0.1 camera builder", () => {
           focalLengthMm: 36,
         },
       ],
-      interpolation: "linear",
-      stabilization: 0,
       frameCount: 1,
-    };
+    });
     const cam = BackboneCameraBuilder.buildFromCameraPath({ params, lens, imageSize, fps: 16, numFrames: 1 });
     const m = cam.frames[0].c2w;
     // The OpenCV rotation Rcv = Rgl * diag(1,-1,-1).
@@ -70,16 +71,15 @@ describe("Backbone v0.1 camera builder", () => {
   });
 
   it("uses Catmull-Rom for position interpolation when requested", () => {
-    const params: CameraPathParams = {
+    const params = path({
       keyframes: [
         { frame: 0, position: [0, 0, 0], rotation: [0, 0, 0, 1], focalLengthMm: 36 },
         { frame: 40, position: [10, 10, 0], rotation: [0, 0, 0, 1], focalLengthMm: 36 },
         { frame: 80, position: [20, 0, 0], rotation: [0, 0, 0, 1], focalLengthMm: 36 },
       ],
       interpolation: "catmull_rom",
-      stabilization: 0,
       frameCount: 81,
-    };
+    });
     const cam = BackboneCameraBuilder.buildFromCameraPath({ params, lens, imageSize, fps: 16, numFrames: 81 });
     // Sample mid-way between first two keyframes: frame 20
     const m = cam.frames.find((f) => f.t === 20)?.c2w!;
@@ -94,22 +94,18 @@ describe("Backbone v0.1 camera builder", () => {
   });
 
   it("throws when no keyframes exist", () => {
-    const params: CameraPathParams = {
+    const params = path({
       keyframes: [],
-      interpolation: "linear",
-      stabilization: 0,
       frameCount: 10,
-    };
+    });
     expect(() =>
       BackboneCameraBuilder.buildFromCameraPath({ params, lens, imageSize, fps: 16, numFrames: 10 }),
     ).toThrow(/no camera keyframes/i);
   });
 
   it("fills metadata for look-at and continuity when present", () => {
-    const params: CameraPathParams = {
+    const params = path({
       keyframes: [{ frame: 0, position: [0, 0, 0], rotation: [0, 0, 0, 1], focalLengthMm: 36 }],
-      interpolation: "linear",
-      stabilization: 0,
       frameCount: 1,
       label: "Shot A",
       lookAtTargetElementId: "actor-a",
@@ -118,7 +114,7 @@ describe("Backbone v0.1 camera builder", () => {
         cameraSide: "left",
         screenDirection: "left_to_right",
       },
-    };
+    });
     const cam = BackboneCameraBuilder.buildFromCameraPath({ params, lens, imageSize, fps: 16, numFrames: 1 });
     expect(cam.metadata?.label).toBe("Shot A");
     expect(cam.metadata?.lookAtTargetElementId).toBe("actor-a");

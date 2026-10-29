@@ -22,8 +22,25 @@ export interface CameraKeyframe {
   easing?: string;
 }
 
-export interface CameraPathParams {
+export type CameraTakeSource = "record" | "manual";
+
+/** One recorded or manually authored camera trajectory candidate. */
+export interface CameraTake {
+  id: string;
+  name: string;
+  source: CameraTakeSource;
   keyframes: CameraKeyframe[];
+  createdAt: string;
+}
+
+export interface CameraPathParams {
+  /**
+   * Active take keyframes (mirrored). Generate video and viewport preview read this.
+   * Always kept in sync with `takes[activeTakeId]`.
+   */
+  keyframes: CameraKeyframe[];
+  takes: CameraTake[];
+  activeTakeId?: string;
   lookAtTargetNodeId?: string;
   /** World element ID — never a display name (PRD look-at). */
   lookAtTargetElementId?: string;
@@ -35,25 +52,106 @@ export interface CameraPathParams {
   frameCount?: number;
 }
 
+const takeId = (index: number): string => `take-${index}`;
+
+const sortKeyframes = (keyframes: CameraKeyframe[]): CameraKeyframe[] =>
+  [...keyframes].sort((a, b) => a.frame - b.frame);
+
+const syncActiveKeyframes = (params: CameraPathParams): CameraPathParams => {
+  const active = params.takes.find((take) => take.id === params.activeTakeId) ?? params.takes[0];
+  const keyframes = active ? sortKeyframes(active.keyframes) : [];
+  const lastFrame = keyframes.length > 0 ? keyframes[keyframes.length - 1].frame : 0;
+  return {
+    ...params,
+    activeTakeId: active?.id,
+    keyframes,
+    frameCount: Math.max(params.frameCount ?? 0, lastFrame),
+  };
+};
+
+const withActiveTakeKeyframes = (
+  params: CameraPathParams,
+  keyframes: CameraKeyframe[],
+  source: CameraTakeSource = "manual",
+  createdAt = new Date().toISOString(),
+): CameraPathParams => {
+  const sorted = sortKeyframes(keyframes);
+  if (params.takes.length === 0 || !params.activeTakeId) {
+    const id = takeId(1);
+    return syncActiveKeyframes({
+      ...params,
+      takes: [{ id, name: "Take 1", source, keyframes: sorted, createdAt }],
+      activeTakeId: id,
+    });
+  }
+  const takes = params.takes.map((take) =>
+    take.id === params.activeTakeId ? { ...take, keyframes: sorted } : take,
+  );
+  return syncActiveKeyframes({ ...params, takes });
+};
+
 export const defaultCameraPathParams = (): CameraPathParams => ({
   keyframes: [],
+  takes: [],
   interpolation: "linear",
   stabilization: 0,
   frameCount: 120,
 });
 
+export const listCameraTakes = (params: CameraPathParams): CameraTake[] => params.takes;
+
+export const activeCameraTake = (params: CameraPathParams): CameraTake | undefined =>
+  params.takes.find((take) => take.id === params.activeTakeId) ?? params.takes[0];
+
+export const selectCameraTake = (params: CameraPathParams, takeIdValue: string): CameraPathParams => {
+  if (!params.takes.some((take) => take.id === takeIdValue)) {
+    return params;
+  }
+  return syncActiveKeyframes({ ...params, activeTakeId: takeIdValue });
+};
+
+export const commitCameraTake = (
+  params: CameraPathParams,
+  input: { keyframes: CameraKeyframe[]; source: CameraTakeSource; name?: string; createdAt?: string },
+): CameraPathParams => {
+  const sorted = sortKeyframes(input.keyframes);
+  if (sorted.length === 0) {
+    return params;
+  }
+  const createdAt = input.createdAt ?? new Date().toISOString();
+  const nextIndex = params.takes.length + 1;
+  const id = takeId(nextIndex);
+  const take: CameraTake = {
+    id,
+    name: input.name ?? `Take ${nextIndex}`,
+    source: input.source,
+    keyframes: sorted,
+    createdAt,
+  };
+  return syncActiveKeyframes({
+    ...params,
+    takes: [...params.takes, take],
+    activeTakeId: id,
+  });
+};
+
+export const deleteCameraTake = (params: CameraPathParams, takeIdValue: string): CameraPathParams => {
+  const takes = params.takes.filter((take) => take.id !== takeIdValue);
+  if (takes.length === params.takes.length) {
+    return params;
+  }
+  const activeTakeId =
+    params.activeTakeId === takeIdValue ? takes[takes.length - 1]?.id : params.activeTakeId;
+  return syncActiveKeyframes({ ...params, takes, activeTakeId });
+};
+
 export const upsertCameraKeyframe = (
   params: CameraPathParams,
   keyframe: CameraKeyframe,
 ): CameraPathParams => {
-  const without = params.keyframes.filter((item) => item.frame !== keyframe.frame);
-  const keyframes = [...without, keyframe].sort((a, b) => a.frame - b.frame);
-  const lastFrame = keyframes.length > 0 ? keyframes[keyframes.length - 1].frame : 0;
-  return {
-    ...params,
-    keyframes,
-    frameCount: Math.max(params.frameCount ?? 0, lastFrame),
-  };
+  const base = params.takes.length === 0 ? withActiveTakeKeyframes(params, [], "manual") : params;
+  const without = base.keyframes.filter((item) => item.frame !== keyframe.frame);
+  return withActiveTakeKeyframes(base, [...without, keyframe], activeCameraTake(base)?.source ?? "manual");
 };
 
 /** One resolved keyframe per frame — inserting on an occupied frame replaces it. */
@@ -62,10 +160,12 @@ export const keyframeAtExactFrame = (
   frame: number,
 ): CameraKeyframe | undefined => params.keyframes.find((item) => item.frame === frame);
 
-export const deleteCameraKeyframe = (params: CameraPathParams, frame: number): CameraPathParams => ({
-  ...params,
-  keyframes: params.keyframes.filter((item) => item.frame !== frame),
-});
+export const deleteCameraKeyframe = (params: CameraPathParams, frame: number): CameraPathParams =>
+  withActiveTakeKeyframes(
+    params,
+    params.keyframes.filter((item) => item.frame !== frame),
+    activeCameraTake(params)?.source ?? "manual",
+  );
 
 export const previousKeyframeFrame = (params: CameraPathParams, frame: number): number | undefined => {
   const sorted = [...params.keyframes].map((item) => item.frame).sort((a, b) => a - b);
@@ -85,8 +185,17 @@ export const trimKeyframesToDuration = (
   durationFrames: number,
 ): { params: CameraPathParams; removed: number } => {
   const kept = params.keyframes.filter((item) => isFrameInsideClip(item.frame, durationFrames));
+  const takes = params.takes.map((take) => ({
+    ...take,
+    keyframes: take.keyframes.filter((item) => isFrameInsideClip(item.frame, durationFrames)),
+  }));
   return {
-    params: { ...params, keyframes: kept, frameCount: Math.max(0, durationFrames - 1) },
+    params: syncActiveKeyframes({
+      ...params,
+      takes,
+      keyframes: kept,
+      frameCount: Math.max(0, durationFrames - 1),
+    }),
     removed: params.keyframes.length - kept.length,
   };
 };
@@ -229,12 +338,39 @@ export const cameraPoseAtFrame = (
   return previous ?? sorted[0];
 };
 
+const isKeyframeArray = (value: unknown): value is CameraKeyframe[] => Array.isArray(value);
+
+const parseTakes = (value: unknown): CameraTake[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item, index) => {
+    if (!item || typeof item !== "object") {
+      return [];
+    }
+    const record = item as Record<string, unknown>;
+    if (!Array.isArray(record.keyframes)) {
+      return [];
+    }
+    const id = typeof record.id === "string" && record.id ? record.id : takeId(index + 1);
+    return [
+      {
+        id,
+        name: typeof record.name === "string" && record.name ? record.name : `Take ${index + 1}`,
+        source: record.source === "record" ? "record" : "manual",
+        keyframes: sortKeyframes(record.keyframes as CameraKeyframe[]),
+        createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date(0).toISOString(),
+      },
+    ];
+  });
+};
+
 export const isCameraPathParams = (value: unknown): value is CameraPathParams => {
   if (!value || typeof value !== "object") {
     return false;
   }
   const record = value as Record<string, unknown>;
-  return Array.isArray(record.keyframes);
+  return isKeyframeArray(record.keyframes) || Array.isArray(record.takes);
 };
 
 export const cameraPathParamsFromNode = (parameters: Record<string, unknown>): CameraPathParams => {
@@ -270,27 +406,66 @@ export const cameraPathParamsFromNode = (parameters: Record<string, unknown>): C
             : "neutral",
       }
     : undefined;
-  if (isCameraPathParams(parameters) && parameters.keyframes.length > 0) {
-    return {
-      keyframes: parameters.keyframes,
-      lookAtTargetNodeId: parameters.lookAtTargetNodeId,
-      lookAtTargetElementId:
-        typeof parameters.lookAtTargetElementId === "string" ? parameters.lookAtTargetElementId : undefined,
-      trackingStrength:
-        typeof parameters.trackingStrength === "number"
-          ? parameters.trackingStrength
-          : parameters.stabilization,
-      stabilization: parameters.stabilization,
-      interpolation: parameters.interpolation ?? "linear",
-      continuity,
-      label: parameters.label,
-      frameCount: parameters.frameCount,
-    };
-  }
-  return {
-    ...defaultCameraPathParams(),
+
+  const shared = {
+    lookAtTargetNodeId:
+      typeof parameters.lookAtTargetNodeId === "string" ? parameters.lookAtTargetNodeId : undefined,
+    lookAtTargetElementId:
+      typeof parameters.lookAtTargetElementId === "string" ? parameters.lookAtTargetElementId : undefined,
+    trackingStrength:
+      typeof parameters.trackingStrength === "number"
+        ? parameters.trackingStrength
+        : typeof parameters.stabilization === "number"
+          ? parameters.stabilization
+          : undefined,
+    stabilization: typeof parameters.stabilization === "number" ? parameters.stabilization : undefined,
+    interpolation:
+      parameters.interpolation === "bezier" || parameters.interpolation === "catmull_rom"
+        ? parameters.interpolation
+        : ("linear" as CameraInterpolation),
     continuity,
     label: typeof parameters.label === "string" ? parameters.label : undefined,
     frameCount: typeof parameters.frameCount === "number" ? parameters.frameCount : 120,
+  };
+
+  const parsedTakes = parseTakes(parameters.takes);
+  const legacyKeys = isKeyframeArray(parameters.keyframes)
+    ? sortKeyframes(parameters.keyframes as CameraKeyframe[])
+    : [];
+
+  if (parsedTakes.length > 0) {
+    const activeTakeId =
+      typeof parameters.activeTakeId === "string" &&
+      parsedTakes.some((take) => take.id === parameters.activeTakeId)
+        ? parameters.activeTakeId
+        : parsedTakes[0].id;
+    return syncActiveKeyframes({
+      ...defaultCameraPathParams(),
+      ...shared,
+      takes: parsedTakes,
+      activeTakeId,
+    });
+  }
+
+  if (legacyKeys.length > 0) {
+    return syncActiveKeyframes({
+      ...defaultCameraPathParams(),
+      ...shared,
+      takes: [
+        {
+          id: takeId(1),
+          name: "Take 1",
+          source: "manual",
+          keyframes: legacyKeys,
+          createdAt: new Date(0).toISOString(),
+        },
+      ],
+      activeTakeId: takeId(1),
+    });
+  }
+
+  return {
+    ...defaultCameraPathParams(),
+    ...shared,
   };
 };

@@ -4,9 +4,13 @@ import { StageViewport, type StageCameraPose, type ViewportSelection } from "./S
 import { SceneIcon, type SceneIconName } from "./SceneIcon";
 import { SceneTimeline } from "./SceneTimeline";
 import { SceneAssets } from "./SceneAssets";
-import { cameraPathParamsFromNode, interpolateCameraPose } from "../../domain/graph/cameraPath";
+import {
+  cameraPathParamsFromNode,
+  interpolateCameraPose,
+  sampleCameraPath,
+  type CameraKeyframe,
+} from "../../domain/graph/cameraPath";
 import { lensNodeIdForClip, lensParamsFromNode, verticalFovFromLens } from "../../domain/graph/lens";
-import { sampleCameraPath } from "../../domain/graph/cameraPath";
 import { clipDurationFrames, clipStartFrame } from "../../domain/timeline/timing";
 import { firstViewportImageUri, resolveViewportRepresentation, type ViewportLoadState } from "../../domain/worlds/viewportRepresentation";
 import { cameraPathNodeIdForClip, eulerToQuaternionApprox, quaternionToEulerApprox, placementNodeIdForElement } from "../../application/services/viewportCommit";
@@ -18,6 +22,8 @@ import "./sceneWorkspace.css";
 import { createLoopClock } from "../../application/ports/LoopClock";
 import type { DomainCommand } from "../../application/commands";
 import { validateOutputAspect } from "./recordingPreflight";
+
+type LivePose = { position: [number, number, number]; rotation: [number, number, number] };
 
 type Drawer = "assets" | "layers" | "light" | "camera" | "settings" | null;
 const tools: Array<{ id: ViewportTool; icon: SceneIconName; label: string }> = [
@@ -42,28 +48,35 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [showPreview, setShowPreview] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [playing, setPlaying] = useState(false);
+  const [takeRecording, setTakeRecording] = useState(false);
   const loopRef = useRef<ReturnType<typeof createLoopClock> | null>(null);
-  const takeRef = useRef<Map<number, { position: [number, number, number]; rotation: [number, number, number] }>>(new Map());
+  const takeRef = useRef<Map<number, LivePose>>(new Map());
+  const takeRecordingRef = useRef(false);
+  const takeFinishingRef = useRef(false);
+  const livePoseRef = useRef<LivePose | null>(null);
+  const lensRef = useRef(lensParamsFromNode({}));
+  const playbackRef = useRef({ duration: 1, start: 0, fps: 24, clipId: "" });
+  const finishTakeRecordingRef = useRef<(reason: "stop" | "complete") => void>(() => undefined);
   const [captureSignal, setCaptureSignal] = useState(0);
   const [focusSignal, setFocusSignal] = useState(0);
   const [resetSignal, setResetSignal] = useState(0);
   const [draft, setDraft] = useState<{ id: string; pose: ObjectPose }>();
   const [load, setLoad] = useState<{ state: ViewportLoadState; message?: string }>({ state: "idle" });
   const [notice, setNotice] = useState("");
+  const [selectedFrames, setSelectedFrames] = useState<number[]>([]);
   const duration = clip ? clipDurationFrames(clip) : 1;
   const start = clip ? clipStartFrame(clip) : 0;
   const frame = Math.max(0, Math.min(duration - 1, (sequence?.playhead ?? start) - start));
   const fps = sequence?.fps ?? 24;
+  playbackRef.current = { duration, start, fps, clipId: clip?.id ?? "" };
   const graph = clip ? project.clipGraphs[clip.clipGraphId] : undefined;
   const nodes = useMemo(() => graph?.nodeIds.flatMap((id) => project.nodes[id] ? [project.nodes[id]] : []) ?? [], [graph, project.nodes]);
   const objects = useMemo(() => resolveSceneObjects(world, previewOnly ? [] : nodes), [world, nodes, previewOnly]);
   const cameraNode = clip ? project.nodes[cameraPathNodeIdForClip(clip)] : undefined;
   const cameraParams = useMemo(() => cameraPathParamsFromNode(cameraNode?.parameters ?? {}), [cameraNode]);
   const lens = lensParamsFromNode(clip ? project.nodes[lensNodeIdForClip(clip.id)]?.parameters ?? {} : {});
-  const lensRef = useRef(lens);
-  const clipRef = useRef(clip);
   lensRef.current = lens;
-  clipRef.current = clip;
+  takeRecordingRef.current = takeRecording;
   const cameraPose = useMemo((): StageCameraPose | undefined => {
     const pose = interpolateCameraPose(cameraParams, frame);
     return pose ? { position: pose.position, rotation: quaternionToEulerApprox(pose.rotation), focalLength: pose.focalLengthMm || lens.focalLengthMm } : undefined;
@@ -89,7 +102,12 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
     ...objects.map((object) => ({ id: object.id, name: object.name,
       frames: clip ? readObjectTrack(project.nodes[objectTrackNodeId(clip.id, object.id)]?.parameters)?.keyframes.map((key) => key.frame) ?? [] : [] })),
   ];
-  const select = (id: string) => { setSelectedId(id); setDraft(undefined); if (id !== "camera") dispatch({ type: "set-viewport-tool", tool: "translate" }); };
+  const select = (id: string) => {
+    setSelectedId(id);
+    setDraft(undefined);
+    setSelectedFrames([]);
+    if (id !== "camera") dispatch({ type: "set-viewport-tool", tool: "translate" });
+  };
   const scrub = (value: number) => { setDraft(undefined); dispatch({ type: "scrub-playhead", playhead: start + value }); };
   const patchObject = (object: SceneObject, patch: Record<string, unknown>) => {
     if (!clip || !canEdit || object.locked && !("locked" in patch)) return;
@@ -110,75 +128,189 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
     setNotice(`Camera pose saved · ${frame}f`);
   }, [clip, previewOnly, frame, dispatch, lens.focalLengthMm, lens.focusDistanceM, lens.aperture]);
   const stamp = () => {
-    if (!canEdit || !clip || playing) return;
+    if (!canEdit || !clip || playing || takeRecording) return;
     if (selected) {
       if (selected.locked) return;
       dispatch({ type: "key-object", clipId: clip.id, elementId: selected.id, pose: selected, frame });
       setDraft(undefined); setNotice(`${selected.name} pose saved · ${frame}f`);
     } else setCaptureSignal((value) => value + 1);
   };
+  const finishTakeRecording = useCallback((reason: "stop" | "complete") => {
+    const clipId = playbackRef.current.clipId;
+    if (!clipId || takeFinishingRef.current) return;
+    takeFinishingRef.current = true;
+    takeRecordingRef.current = false;
+    const lensParams = lensRef.current;
+    const live = livePoseRef.current;
+    if (live && takeRef.current.size > 0) {
+      const last = Math.max(...takeRef.current.keys());
+      takeRef.current.set(last, live);
+    }
+    const keyframes: CameraKeyframe[] = Array.from(takeRef.current.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([t, pose]) => ({
+        frame: t,
+        position: pose.position,
+        rotation: eulerToQuaternionApprox(pose.rotation),
+        focalLengthMm: lensParams.focalLengthMm,
+        focusDistanceM: lensParams.focusDistanceM,
+        aperture: lensParams.aperture,
+      }));
+    takeRef.current.clear();
+    setTakeRecording(false);
+    setPlaying(false);
+    if (keyframes.length === 0) {
+      setNotice(reason === "complete" ? "Record finished with no poses." : "Record cancelled.");
+      return;
+    }
+    const spanFrames = keyframes[keyframes.length - 1].frame - keyframes[0].frame + 1;
+    dispatch({ type: "commit-camera-take", clipId, keyframes, source: "record" });
+    setNotice(`Take saved · ${keyframes.length} poses · ${spanFrames}f · selected for Generate`);
+  }, [dispatch]);
+  finishTakeRecordingRef.current = finishTakeRecording;
   const deletePose = () => {
-    if (!clip || !canEdit) return;
-    if (selected) dispatch({ type: "delete-object-key", clipId: clip.id, elementId: selected.id, frame });
-    else dispatch({ type: "delete-camera-keyframe", clipId: clip.id, frame });
+    if (!clip || !canEdit || playing) return;
+    const targets = selectedFrames.length > 0 ? [...selectedFrames].sort((a, b) => a - b) : [frame];
+    if (selected) {
+      targets.forEach((target) =>
+        dispatch({ type: "delete-object-key", clipId: clip.id, elementId: selected.id, frame: target }),
+      );
+      setNotice(
+        targets.length > 1
+          ? `${selected.name}: deleted ${targets.length} poses`
+          : `${selected.name} pose deleted · ${targets[0]}f`,
+      );
+    } else {
+      const commands: DomainCommand[] = targets.map((t) => ({
+        type: "REMOVE_CAMERA_KEYFRAME",
+        clipId: clip.id,
+        t,
+      }));
+      const logMessage =
+        targets.length > 1
+          ? `Deleted ${targets.length} camera poses.`
+          : `Camera keyframe at ${targets[0]}f deleted.`;
+      dispatch({
+        type: "agent-execute-commands",
+        logMessage,
+        commands: [{ type: "APPLY_COMMANDS", commands, logMessage }],
+      });
+      setNotice(
+        targets.length > 1
+          ? `Deleted ${targets.length} camera poses`
+          : `Camera pose deleted · ${targets[0]}f`,
+      );
+    }
+    setSelectedFrames([]);
     setDraft(undefined);
   };
   const switchMode = (mode: "build" | "record") => {
-    setPlaying(false); setDraft(undefined); setDrawer(null); setNotice("");
+    if (takeRecording) finishTakeRecording("stop");
+    setPlaying(false); setDraft(undefined); setDrawer(null); setNotice(""); setSelectedFrames([]);
     dispatch({ type: "set-viewport-workspace", workspace: mode });
   };
-  useEffect(() => { setSelectedId("camera"); setDraft(undefined); setPlaying(false); setNotice(""); }, [clip?.id, world?.id]);
-  useEffect(() => { if (!recording) setPlaying(false); }, [recording]);
-  const playbackStart = useRef(0);
+  useEffect(() => {
+    setSelectedId("camera");
+    setDraft(undefined);
+    setPlaying(false);
+    setTakeRecording(false);
+    takeFinishingRef.current = false;
+    takeRef.current.clear();
+    livePoseRef.current = null;
+    setNotice("");
+    setSelectedFrames([]);
+  }, [clip?.id, world?.id]);
+  useEffect(() => {
+    if (!recording) {
+      if (takeRecordingRef.current) finishTakeRecording("stop");
+      setPlaying(false);
+    }
+  }, [recording, finishTakeRecording]);
+  // Play/Record clock must NOT restart when scrub updates project (new clip object
+  // identity). Only `playing` may remount the clock; timing is read from refs.
   useEffect(() => {
     if (!playing) {
       loopRef.current?.stop();
       loopRef.current = null;
-      // Commit take when stopping
-      const currentClip = clipRef.current;
-      if (recording && takeRef.current.size > 0 && currentClip) {
-        const cmds: DomainCommand[] = [];
-        const lensParams = lensRef.current;
-        Array.from(takeRef.current.entries())
-          .sort((a, b) => a[0] - b[0])
-          .forEach(([t, pose]) => {
-            cmds.push({
-              type: "ADD_CAMERA_KEYFRAME",
-              clipId: currentClip.id,
-              t,
-              position: pose.position,
-              quaternion: eulerToQuaternionApprox(pose.rotation),
-              focalLengthMm: lensParams.focalLengthMm,
-              focusDistanceM: lensParams.focusDistanceM,
-              aperture: lensParams.aperture,
-            });
-          });
-        takeRef.current.clear();
-        dispatch({ type: "agent-execute-commands", commands: [{ type: "APPLY_COMMANDS", commands: cmds, logMessage: `Recorded camera take (${cmds.length} keys)` }] });
-      }
       return;
     }
-    // Start loop
-    const loop = createLoopClock({ duration: Math.max(0.001, duration / Math.max(1, fps)), fps, autoplay: true });
+    const { duration: totalFramesRaw, start: clipStart, fps: clipFps } = playbackRef.current;
+    const totalFrames = Math.max(1, totalFramesRaw);
+    const fpsSafe = Math.max(1, clipFps);
+    const loop = createLoopClock({
+      duration: Math.max(0.001, totalFrames / fpsSafe),
+      fps: fpsSafe,
+      autoplay: true,
+      // Record is one pass through the shot; Play may loop.
+      loop: !takeRecordingRef.current,
+    });
     loopRef.current = loop;
+    let lastStamped = -1;
+    let reachedEnd = false;
+    const stampTakeFrame = (localFrame: number) => {
+      if (!takeRecordingRef.current || takeFinishingRef.current) return;
+      const pose = livePoseRef.current;
+      if (!pose) return;
+      const sample = { position: [...pose.position] as LivePose["position"], rotation: [...pose.rotation] as LivePose["rotation"] };
+      if (lastStamped >= 0 && localFrame > lastStamped + 1) {
+        const hold = takeRef.current.get(lastStamped) ?? sample;
+        for (let frameIndex = lastStamped + 1; frameIndex < localFrame; frameIndex += 1) {
+          takeRef.current.set(frameIndex, hold);
+        }
+      }
+      takeRef.current.set(localFrame, sample);
+      lastStamped = localFrame;
+    };
+    stampTakeFrame(0);
     const unsub = loop.subscribe((tSec) => {
-      const next = Math.max(0, Math.min(duration - 1, Math.floor(tSec * fps)));
-      dispatch({ type: "scrub-playhead", playhead: start + next });
+      const next = Math.max(0, Math.min(totalFrames - 1, Math.floor(tSec * fpsSafe)));
+      stampTakeFrame(next);
+      dispatch({ type: "scrub-playhead", playhead: clipStart + next });
+      if (takeRecordingRef.current && !reachedEnd && next >= totalFrames - 1) {
+        reachedEnd = true;
+        stampTakeFrame(totalFrames - 1);
+        finishTakeRecordingRef.current("complete");
+      }
     });
     return () => {
       unsub();
       loop.stop();
       loopRef.current = null;
     };
-  }, [playing, duration, start, fps, dispatch, recording]);
+  }, [playing, dispatch]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (typing(event.target) || (!alwaysActive && ui.panelTab !== "viewport") || event.ctrlKey || event.metaKey || event.altKey) return;
-      if (event.target instanceof Element && event.target.closest(".assistant-panel, .timeline-panel-compact, .top-bar")) return;
       const key = event.key.toLowerCase();
-      if (key === "k" && recording) { event.preventDefault(); stamp(); }
-      if (key === " " && recording && canEdit) { event.preventDefault(); setDraft(undefined); setPlaying((value) => !value); }
-      if (key === "escape") { setDrawer(null); setDraft(undefined); setPlaying(false); }
+      const deleting = key === "backspace" || key === "delete";
+      const inTextField =
+        event.target instanceof HTMLElement &&
+        (["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName) || event.target.isContentEditable);
+      if (inTextField) return;
+      if (!deleting && typing(event.target)) return;
+      if ((!alwaysActive && ui.panelTab !== "viewport") || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.target instanceof Element && event.target.closest(".assistant-panel, .timeline-panel-compact, .top-bar")) return;
+      if (key === "k" && recording && !takeRecording) { event.preventDefault(); stamp(); }
+      if (key === " " && recording && canEdit && !takeRecording) {
+        event.preventDefault();
+        setDraft(undefined);
+        setPlaying((value) => !value);
+      }
+      if (deleting && recording && canEdit && !playing && !takeRecording) {
+        event.preventDefault();
+        deletePose();
+        return;
+      }
+      if (key === "escape") {
+        if (takeRecording) {
+          event.preventDefault();
+          finishTakeRecording("stop");
+          return;
+        }
+        setDrawer(null);
+        setDraft(undefined);
+        setPlaying(false);
+        setSelectedFrames([]);
+      }
       if (!cameraView) {
         const tool: ViewportTool | undefined = ({ q: "navigate", w: "translate", e: "rotate", r: "scale" } as Record<string, ViewportTool>)[key];
         if (tool) dispatch({ type: "set-viewport-tool", tool });
@@ -218,13 +350,13 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           overlays={ui.viewportOverlays} tool={ui.viewportTool} workspace={cameraView ? "record" : "build"}
           outputAspect={outputAspectRatio(ui.outputAspect)} outputAspectLabel={ui.outputAspect}
           cameraViz={recording ? ui.cameraViz : { frustum: false, path: false, lookAtLine: false, keyframeMarkers: false }}
-          cameraPose={cameraPose} sceneObjects={sceneObjects} selectedId={selectedId === "camera" ? undefined : selectedId}
-          showCameraPreview={showPreview && !cameraView} readOnly={!canEdit || playing} lighting={lighting}
+          cameraPose={takeRecording ? undefined : cameraPose} sceneObjects={sceneObjects} selectedId={selectedId === "camera" ? undefined : selectedId}
+          showCameraPreview={showPreview && !cameraView} readOnly={!canEdit || playing || takeRecording} lighting={lighting}
           keyframes={cameraParams.keyframes} pathSamples={pathSamples} fovDegrees={verticalFovFromLens({ ...lens, focalLengthMm: cameraPose?.focalLength ?? lens.focalLengthMm })}
           playheadFrame={frame} lookAtTargetId={cameraParams.lookAtTargetElementId}
           onSelectionChange={(selection: ViewportSelection | undefined) => { if (selection && selection.kind !== "camera") { setSelectedId(selection.id); setDrawer("layers"); } }}
           onTransformCommit={(payload) => {
-            if (!clip || !canEdit) return;
+            if (!clip || !canEdit || takeRecording) return;
             if (payload.kind === "camera") {
               dispatch({
                 type: "commit-object-transform",
@@ -243,10 +375,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           onLoadStateChange={(state, message) => setLoad({ state, message })}
           onCapturePose={captureCamera}
           onLiveCameraPose={(camera) => {
-            if (!playing || !recording || !clip) return;
-            // Record one pose per integer frame within the loop
-            const localFrame = Math.max(0, Math.min(duration - 1, Math.floor(((project.sequences[project.activeSequenceId]?.playhead ?? start) - start))));
-            takeRef.current.set(localFrame, { position: camera.position, rotation: camera.rotation });
+            livePoseRef.current = { position: camera.position, rotation: camera.rotation };
           }}
           captureSignal={captureSignal} focusSignal={focusSignal} resetSignal={resetSignal} />
       </div>
@@ -318,22 +447,77 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         </>}
       </aside>}
       <button className="scene-help-toggle" aria-label="Navigation help" aria-expanded={showHelp} onClick={() => setShowHelp((value) => !value)}><SceneIcon name="help" /></button>
-      {showHelp && <div className="scene-help"><strong>{cameraView ? "Move the camera" : "Explore the scene"}</strong><p>{cameraView ? "WASD 이동 · Q/E 높이 · 우클릭 드래그 시선 · Shift 빠르게" : "Orbit: 드래그 회전 · 휠 줌 · 우클릭 이동 · W/E/R 변형 · F 선택 보기"}</p><p>Motion: K 포즈 저장 · Space 재생 · Esc 패널 닫기</p></div>}
+      {showHelp && <div className="scene-help"><strong>{cameraView ? "Move the camera" : "Explore the scene"}</strong><p>{cameraView ? "WASD 이동 · Q/E 높이 · 우클릭 드래그 시선 · Shift 빠르게" : "Orbit: 드래그 회전 · 휠 줌 · 우클릭 이동 · W/E/R 변형 · F 선택 보기"}</p><p>Motion: Record로 Take 저장 · Play는 선택 Take 미리보기 · K는 희소 포즈 · Generate는 선택 Take 사용</p></div>}
     </div>
-    {recording && <SceneTimeline tracks={tracks} activeId={selectedId} frame={frame} duration={duration} fps={fps} playing={playing} onSelect={select} onScrub={scrub}
+    {recording && <SceneTimeline
+      tracks={tracks}
+      activeId={selectedId}
+      frame={frame}
+      duration={duration}
+      fps={fps}
+      playing={playing}
+      takeRecording={takeRecording}
+      takes={cameraParams.takes.map((take) => ({
+        id: take.id,
+        name: take.name,
+        keyCount: take.keyframes.length,
+        source: take.source,
+      }))}
+      activeTakeId={cameraParams.activeTakeId}
+      selectedFrames={selectedFrames}
+      onSelect={select}
+      onScrub={scrub}
+      onSelectedFramesChange={setSelectedFrames}
+      onSelectTake={(takeId) => clip && dispatch({ type: "select-camera-take", clipId: clip.id, takeId })}
+      onDeleteTake={(takeId) => clip && dispatch({ type: "delete-camera-take", clipId: clip.id, takeId })}
       onPlay={() => {
+        if (takeRecording) return;
         setDraft(undefined);
+        setSelectedFrames([]);
         if (frame >= duration - 1) scrub(0);
-        // Preflight: ensure valid aspect and camera view before starting playback
         if (!playing) {
           if (!validateOutputAspect(ui.outputAspect)) {
-            setNotice("Choose a valid output aspect before recording.");
+            setNotice("Choose a valid output aspect before playback.");
             return;
           }
-          setFreeView(false); // switch to Camera view
+          setFreeView(false);
+          setNotice(
+            cameraParams.activeTakeId
+              ? `Preview · ${cameraParams.takes.find((take) => take.id === cameraParams.activeTakeId)?.name ?? "selected take"}`
+              : "Preview · no take selected yet",
+          );
         }
         setPlaying((value) => !value);
-      }} onKey={stamp} onDelete={deletePose} disabled={!canEdit || Boolean(selected?.locked)} />}
-    <footer className="scene-status"><span>{previewOnly ? "Preview only · editing disabled" : notice || (draft ? "Unsaved object pose · K to save" : world ? `${world.name} · shared world / local shot` : "Persistent world · editable shot")}</span><span>{fps} fps · {ui.outputAspect}</span></footer>
+      }}
+      onRecord={() => {
+        if (!clip || !canEdit) return;
+        if (takeRecording) {
+          finishTakeRecording("stop");
+          return;
+        }
+        if (!validateOutputAspect(ui.outputAspect)) {
+          setNotice("Choose a valid output aspect before recording.");
+          return;
+        }
+        takeRef.current.clear();
+        takeFinishingRef.current = false;
+        if (!livePoseRef.current && cameraPose) {
+          livePoseRef.current = { position: cameraPose.position, rotation: cameraPose.rotation };
+        }
+        setSelectedFrames([]);
+        setDraft(undefined);
+        setSelectedId("camera");
+        setFreeView(false);
+        scrub(0);
+        takeRecordingRef.current = true;
+        setTakeRecording(true);
+        setPlaying(true);
+        setNotice(`Recording take · ${duration}f @ ${fps} fps · move the camera`);
+      }}
+      onKey={stamp}
+      onDelete={deletePose}
+      disabled={!canEdit || Boolean(selected?.locked)}
+    />}
+    <footer className="scene-status"><span>{previewOnly ? "Preview only · editing disabled" : notice || (draft ? "Unsaved object pose · K to save" : world ? `${world.name} · shared world / local shot` : "Persistent world · editable shot")}</span><span>{cameraParams.activeTakeId ? `${cameraParams.takes.find((take) => take.id === cameraParams.activeTakeId)?.name ?? "Take"} · ${cameraParams.keyframes.length} keys` : "No take"} · {fps} fps · {ui.outputAspect}</span></footer>
   </section>;
 };

@@ -78,20 +78,25 @@ World 선택·생성
 
 ### 3. Camera
 
-사용자는 Record 모드에서 출력 화면비로 샷을 보고, 카메라 포즈와 렌즈를 기록한다. 정적인 샷도 최소 한 개의 카메라 키가 필요하다.
+사용자는 Stage Motion에서 카메라 궤적을 **Take**로 남긴다.
+
+- **Record** — 한 번 재생하며 매 프레임 포즈를 새 Take N으로 저장한다.
+- **Play** — 선택된 Take만 미리보기한다. 키를 찍지 않는다.
+- **K** — 현재 프레임에 희소 포즈를 활성 Take에 남긴다 (없으면 Take 1 생성).
+- **Generate video** — 선택된 Take의 궤적만 모델에 보낸다.
 
 완료 조건:
 
-- `CameraPathNode`에 키프레임이 한 개 이상 있다.
+- 선택된 Take에 키프레임이 한 개 이상 있다.
 
 권고:
 
-- 움직이는 샷은 시작과 종료를 포함해 두 개 이상의 키를 사용한다.
+- 여러 Take를 찍고 Generate 전에 쓸 궤적을 고른다.
 - 두 배우의 대화 장면은 line of action과 보호할 카메라 측을 지정한다.
 
 막힘:
 
-- 카메라 키프레임이 없다.
+- 선택된 Take에 카메라 키가 없다.
 
 경고 (렌더는 막지 않음):
 
@@ -99,8 +104,8 @@ World 선택·생성
 
 화면 이동:
 
-- Workflow의 Camera 또는 Next 버튼을 누르면 `Viewport → Record`로 이동한다.
-- 이때 `Add Keyframe (K)`가 활성화되어야 한다.
+- Workflow의 Camera 또는 Next 버튼을 누르면 Stage Motion으로 이동한다.
+- Record / Play / `K` / Take 선택 바가 보인다.
 
 ### 4. Performance
 

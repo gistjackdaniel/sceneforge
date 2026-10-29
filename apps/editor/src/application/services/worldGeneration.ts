@@ -1,7 +1,6 @@
 import { createAssetRecord } from "../../domain/assets/registry";
 import type { AssetRecord } from "../../domain/assets/types";
-import type { CameraPathParams } from "../../domain/graph/cameraPath";
-import { upsertCameraKeyframe } from "../../domain/graph/cameraPath";
+import { cameraPathParamsFromNode, upsertCameraKeyframe, type CameraPathParams } from "../../domain/graph/cameraPath";
 import type { ModelExecutionRecord } from "../../domain/worlds/modelExecution";
 import { packageWorldFromExecution } from "../../domain/worlds/packageWorld";
 import type { WorldAsset } from "../../domain/worlds/types";
@@ -30,7 +29,7 @@ export const applyTrajectoryToCameraPath = (
 ): CameraPathParams =>
   upsertCameraKeyframe(
     {
-      keyframes: Array.isArray(existing.keyframes) ? (existing.keyframes as CameraPathParams["keyframes"]) : [],
+      ...cameraPathParamsFromNode(existing),
       interpolation: "linear",
       label,
       frameCount,

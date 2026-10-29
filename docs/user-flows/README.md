@@ -37,7 +37,7 @@ Bottom          Timeline (V1 · CAM · AUD · PERF)
 |--------------|---------|
 | 월드 고르거나 생성 | Worlds / World Gen, 또는 Workflow → World |
 | 배우·소품·조명 배치 | Viewport → Build |
-| 카메라·렌즈 기록 | Viewport → Record, `K` |
+| 카메라 Take 기록 | Stage Motion → Record(매 프레임 Take) 또는 `K`(희소 포즈). Take를 고른 뒤 Generate |
 | 연기·오디오·큐 | Direction |
 | 렌더 / 재렌더 | Playback Render, 또는 Workflow → Render |
 | 다음 컷 | Timeline → Add Clip |
