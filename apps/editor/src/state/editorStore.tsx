@@ -75,7 +75,7 @@ import {
   trimKeyframesToDuration,
   upsertCameraKeyframe,
   type CameraKeyframe,
-  type CameraTakeSource,
+  type CommitCameraTakeInput,
 } from "../domain/graph/cameraPath";
 import { clipDurationFrames, clipStartFrame, withClipTiming } from "../domain/timeline/timing";
 import { normalizeLegacyRig, type CameraRigPreset } from "../domain/graph/cameraRig";
@@ -308,13 +308,10 @@ type EditorAction =
     }
   | { type: "set-look-at"; clipId: string; elementId?: string; trackingStrength?: number }
   | { type: "delete-camera-keyframe"; clipId: string; frame: number }
-  | {
+  | ({
       type: "commit-camera-take";
       clipId: string;
-      keyframes: CameraKeyframe[];
-      source: CameraTakeSource;
-      name?: string;
-    }
+    } & CommitCameraTakeInput)
   | { type: "select-camera-take"; clipId: string; takeId: string }
   | { type: "delete-camera-take"; clipId: string; takeId: string }
   | { type: "trim-camera-keyframes"; clipId: string }
@@ -325,6 +322,7 @@ type EditorAction =
       kind: ViewportObjectKind;
       position: [number, number, number];
       rotation: [number, number, number];
+      quaternion?: [number, number, number, number];
       scale?: [number, number, number];
     }
   | { type: "run-stage-pass"; clipId: string }
@@ -1849,7 +1847,7 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
             clipId: clip.id,
             t: localFrame,
             position: action.position,
-            quaternion: eulerToQuaternionApprox(action.rotation),
+            quaternion: action.quaternion ?? eulerToQuaternionApprox(action.rotation),
             focalLengthMm: lens.focalLengthMm,
             focusDistanceM: lens.focusDistanceM,
             aperture: lens.aperture,
@@ -2415,7 +2413,7 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
       if (!clip) {
         return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
       }
-      if (!action.keyframes.length) {
+      if (!action.keyframes.length && !(action.samples && action.samples.length > 0)) {
         return { ...state, ui: appendWorkflowLog(state.ui, "Recorded take has no camera poses.") };
       }
       const nodeId = clip.cameraPathNodeId ?? cameraPathNodeIdForClip(clip.id);
@@ -2428,12 +2426,21 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         keyframes: action.keyframes,
         source: action.source,
         name: action.name,
+        id: action.id,
+        samples: action.samples,
+        intrinsics: action.intrinsics,
+        calibration: action.calibration,
+        trackingEvents: action.trackingEvents,
+        mapping: action.mapping,
+        authoredFps: action.authoredFps,
+        createdAt: action.createdAt,
       });
       const take = next.takes[next.takes.length - 1];
+      const poseCount = take?.samples.length ?? action.keyframes.length;
       return runDomainCommand(
         state,
         { type: "UPDATE_NODE_PARAMS", nodeId, patch: { ...next } },
-        `${take?.name ?? "Take"} saved (${action.keyframes.length} poses).`,
+        `${take?.name ?? "Take"} saved (${poseCount} poses).`,
       );
     }
     case "select-camera-take": {

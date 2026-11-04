@@ -1,7 +1,7 @@
 import type { Project } from "../../domain/project/types";
 import type { CameraRigPreset } from "../../domain/graph/cameraRig";
 import { buildRigPreset, cameraRigNodeIdForClip } from "../../domain/graph/cameraRig";
-import { cameraPathParamsFromNode } from "../../domain/graph/cameraPath";
+import { cameraPathParamsFromNode, commitCameraTake } from "../../domain/graph/cameraPath";
 import { computeNodeContentHash } from "../../domain/graph/cacheKey";
 import { applyDirtyEventToNodes } from "../../domain/graph/dependencyService";
 import { createNodeBase } from "./nodeFactory";
@@ -59,7 +59,12 @@ export const applyCameraRigToProject = (
   const nodes = { ...project.nodes, [rigNodeId]: rigNode };
   if (pathNode) {
     const current = cameraPathParamsFromNode(pathNode.parameters);
-    const nextPath = { ...current, keyframes: built.keyframes, frameCount: built.rig.durationFrames };
+    const committed = commitCameraTake(current, {
+      keyframes: built.keyframes,
+      source: "manual",
+      createdAt: input.timestamp,
+    });
+    const nextPath = { ...committed, frameCount: built.rig.durationFrames };
     nodes[pathNodeId] = {
       ...pathNode,
       parameters: { ...pathNode.parameters, ...nextPath },

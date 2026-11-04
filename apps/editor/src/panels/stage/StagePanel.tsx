@@ -8,12 +8,13 @@ import {
   cameraPathParamsFromNode,
   interpolateCameraPose,
   sampleCameraPath,
-  type CameraKeyframe,
 } from "../../domain/graph/cameraPath";
 import { lensNodeIdForClip, lensParamsFromNode, verticalFovFromLens } from "../../domain/graph/lens";
 import { clipDurationFrames, clipStartFrame } from "../../domain/timeline/timing";
 import { firstViewportImageUri, resolveViewportRepresentation, type ViewportLoadState } from "../../domain/worlds/viewportRepresentation";
 import { cameraPathNodeIdForClip, eulerToQuaternionApprox, quaternionToEulerApprox, placementNodeIdForElement } from "../../application/services/viewportCommit";
+import { commitInputFromCapture, viewportCaptureFromPoses } from "../../application/services/cameraCapture";
+import { resolveAuthoringFps } from "../../domain/graph/authoringFps";
 import { resolveSceneObjects, readObjectTrack, sampleObjectTrack, objectTrackNodeId, type ObjectPose, type SceneObject } from "../../domain/worlds/sceneObjects";
 import { buildSceneConditioning } from "../../domain/rendering/sceneConditioning";
 import { OUTPUT_ASPECT_PRESETS, outputAspectRatio, type OutputAspectPreset } from "../../domain/rendering";
@@ -23,7 +24,10 @@ import { createLoopClock } from "../../application/ports/LoopClock";
 import type { DomainCommand } from "../../application/commands";
 import { validateOutputAspect } from "./recordingPreflight";
 
-type LivePose = { position: [number, number, number]; rotation: [number, number, number] };
+type LivePose = {
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+};
 
 type Drawer = "assets" | "layers" | "light" | "camera" | "settings" | null;
 const tools: Array<{ id: ViewportTool; icon: SceneIconName; label: string }> = [
@@ -67,7 +71,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const duration = clip ? clipDurationFrames(clip) : 1;
   const start = clip ? clipStartFrame(clip) : 0;
   const frame = Math.max(0, Math.min(duration - 1, (sequence?.playhead ?? start) - start));
-  const fps = sequence?.fps ?? 24;
+  const fps = resolveAuthoringFps({ shot: clip, sequence });
   playbackRef.current = { duration, start, fps, clipId: clip?.id ?? "" };
   const graph = clip ? project.clipGraphs[clip.clipGraphId] : undefined;
   const nodes = useMemo(() => graph?.nodeIds.flatMap((id) => project.nodes[id] ? [project.nodes[id]] : []) ?? [], [graph, project.nodes]);
@@ -79,7 +83,14 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   takeRecordingRef.current = takeRecording;
   const cameraPose = useMemo((): StageCameraPose | undefined => {
     const pose = interpolateCameraPose(cameraParams, frame);
-    return pose ? { position: pose.position, rotation: quaternionToEulerApprox(pose.rotation), focalLength: pose.focalLengthMm || lens.focalLengthMm } : undefined;
+    return pose
+      ? {
+          position: pose.position,
+          quaternion: pose.rotation,
+          rotation: quaternionToEulerApprox(pose.rotation),
+          focalLength: pose.focalLengthMm || lens.focalLengthMm,
+        }
+      : undefined;
   }, [cameraParams, frame, lens.focalLengthMm]);
   const sceneObjects = useMemo(() => objects.map((object) => ({
     ...object,
@@ -123,7 +134,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const captureCamera = useCallback(({ camera }: { camera: StageCameraPose }) => {
     if (!clip || previewOnly) return;
     dispatch({ type: "add-camera-keyframe", clipId: clip.id, frame,
-      position: camera.position, rotation: eulerToQuaternionApprox(camera.rotation),
+      position: camera.position,
+      rotation: camera.quaternion ?? eulerToQuaternionApprox(camera.rotation),
       focalLengthMm: lens.focalLengthMm, focusDistanceM: lens.focusDistanceM, aperture: lens.aperture });
     setNotice(`Camera pose saved · ${frame}f`);
   }, [clip, previewOnly, frame, dispatch, lens.focalLengthMm, lens.focusDistanceM, lens.aperture]);
@@ -146,26 +158,31 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       const last = Math.max(...takeRef.current.keys());
       takeRef.current.set(last, live);
     }
-    const keyframes: CameraKeyframe[] = Array.from(takeRef.current.entries())
+    const recorded = Array.from(takeRef.current.entries())
       .sort((a, b) => a[0] - b[0])
-      .map(([t, pose]) => ({
-        frame: t,
+      .map(([frameIndex, pose]) => ({
+        frame: frameIndex,
         position: pose.position,
-        rotation: eulerToQuaternionApprox(pose.rotation),
-        focalLengthMm: lensParams.focalLengthMm,
-        focusDistanceM: lensParams.focusDistanceM,
-        aperture: lensParams.aperture,
+        quaternion: pose.quaternion,
       }));
     takeRef.current.clear();
     setTakeRecording(false);
     setPlaying(false);
-    if (keyframes.length === 0) {
+    if (recorded.length === 0) {
       setNotice(reason === "complete" ? "Record finished with no poses." : "Record cancelled.");
       return;
     }
-    const spanFrames = keyframes[keyframes.length - 1].frame - keyframes[0].frame + 1;
-    dispatch({ type: "commit-camera-take", clipId, keyframes, source: "record" });
-    setNotice(`Take saved · ${keyframes.length} poses · ${spanFrames}f · selected for Generate`);
+    const capture = viewportCaptureFromPoses({
+      poses: recorded,
+      fps: playbackRef.current.fps,
+      lens: lensParams,
+    });
+    const committed = commitInputFromCapture(capture, { source: "record" });
+    const spanFrames = committed.samples
+      ? committed.samples[committed.samples.length - 1].frame - committed.samples[0].frame + 1
+      : recorded.length;
+    dispatch({ type: "commit-camera-take", clipId, ...committed });
+    setNotice(`Take saved · ${committed.samples?.length ?? recorded.length} poses · ${spanFrames}f · selected for Generate`);
   }, [dispatch]);
   finishTakeRecordingRef.current = finishTakeRecording;
   const deletePose = () => {
@@ -251,7 +268,10 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       if (!takeRecordingRef.current || takeFinishingRef.current) return;
       const pose = livePoseRef.current;
       if (!pose) return;
-      const sample = { position: [...pose.position] as LivePose["position"], rotation: [...pose.rotation] as LivePose["rotation"] };
+      const sample = {
+        position: [...pose.position] as LivePose["position"],
+        quaternion: [...pose.quaternion] as LivePose["quaternion"],
+      };
       if (lastStamped >= 0 && localFrame > lastStamped + 1) {
         const hold = takeRef.current.get(lastStamped) ?? sample;
         for (let frameIndex = lastStamped + 1; frameIndex < localFrame; frameIndex += 1) {
@@ -365,6 +385,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
                 kind: "camera",
                 position: payload.position,
                 rotation: payload.rotation,
+                quaternion: payload.quaternion,
                 scale: payload.scale,
               });
               return;
@@ -375,7 +396,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           onLoadStateChange={(state, message) => setLoad({ state, message })}
           onCapturePose={captureCamera}
           onLiveCameraPose={(camera) => {
-            livePoseRef.current = { position: camera.position, rotation: camera.rotation };
+            const quaternion = camera.quaternion ?? eulerToQuaternionApprox(camera.rotation);
+            livePoseRef.current = { position: camera.position, quaternion };
           }}
           captureSignal={captureSignal} focusSignal={focusSignal} resetSignal={resetSignal} />
       </div>
@@ -501,8 +523,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         }
         takeRef.current.clear();
         takeFinishingRef.current = false;
-        if (!livePoseRef.current && cameraPose) {
-          livePoseRef.current = { position: cameraPose.position, rotation: cameraPose.rotation };
+        if (!livePoseRef.current && cameraPose?.quaternion) {
+          livePoseRef.current = { position: cameraPose.position, quaternion: cameraPose.quaternion };
         }
         setSelectedFrames([]);
         setDraft(undefined);

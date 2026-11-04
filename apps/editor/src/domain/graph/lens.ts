@@ -1,5 +1,12 @@
 export type SensorPreset = "full-frame" | "super35" | "micro-four-thirds";
 
+/** Sensor width/height in millimeters. Matches the sizes Backbone export uses. */
+export const SENSOR_SIZE_MM: Record<SensorPreset, [number, number]> = {
+  "full-frame": [36, 24],
+  super35: [24, 13.5],
+  "micro-four-thirds": [17.3, 13],
+};
+
 export interface LensParams {
   focalLengthMm: number;
   focusDistanceM?: number;
@@ -44,8 +51,7 @@ export const lensParamsFromNode = (parameters: Record<string, unknown>): LensPar
 
 /** Through-the-lens vertical FOV in degrees. */
 export const verticalFovFromLens = (lens: LensParams): number => {
-  const sensorHeightMm =
-    lens.sensorPreset === "super35" ? 13.5 : lens.sensorPreset === "micro-four-thirds" ? 13 : 24;
+  const sensorHeightMm = SENSOR_SIZE_MM[lens.sensorPreset ?? "full-frame"][1];
   const focal = Math.max(8, lens.focalLengthMm);
   return (2 * Math.atan(sensorHeightMm / 2 / focal) * 180) / Math.PI;
 };

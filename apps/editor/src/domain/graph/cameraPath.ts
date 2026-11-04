@@ -1,6 +1,29 @@
+import { createCameraTrackId, isPersistentId } from "./persistentId";
+import { migrateZyxEncodedQuaternion, normalizeQuat, type Quat } from "./cameraRotation";
+import {
+  identityCalibration,
+  identityMapping,
+  normalizeStoredTake,
+  resolveVirtualKeyframes,
+  samplesFromKeyframes,
+  type CameraIntrinsics,
+  type CameraMotionMapping,
+  type CameraSample,
+  type DeviceCalibration,
+  type TrackingEvent,
+  type VirtualKeyframe,
+} from "./cameraTrack";
+
 export type CameraInterpolation = "linear" | "bezier" | "catmull_rom";
 export type ScreenDirection = "left_to_right" | "right_to_left" | "neutral";
 export type CameraSide = "left" | "right" | "unlocked";
+export type {
+  CameraIntrinsics,
+  CameraMotionMapping,
+  CameraSample,
+  DeviceCalibration,
+  TrackingEvent,
+};
 
 export interface CameraContinuityRule {
   /** Human-readable axis such as "Actor A → Actor B". */
@@ -15,6 +38,7 @@ export interface CameraContinuityRule {
 export interface CameraKeyframe {
   frame: number;
   position: [number, number, number];
+  /** GL camera orientation, `[x, y, z, w]`. Not an Euler triple. */
   rotation: [number, number, number, number];
   focalLengthMm: number;
   focusDistanceM?: number;
@@ -29,8 +53,21 @@ export interface CameraTake {
   id: string;
   name: string;
   source: CameraTakeSource;
+  /**
+   * Virtual camera in scene space. Viewport playback and Backbone export read this.
+   * Recomputed from `samples` when calibration or mapping changes. Manual edits of an
+   * identity track update both; a non-identity mapping leaves `samples` untouched.
+   */
   keyframes: CameraKeyframe[];
   createdAt: string;
+  /** Original samples. Calibration and mapping never overwrite this list. */
+  samples: CameraSample[];
+  intrinsics?: CameraIntrinsics;
+  calibration: DeviceCalibration;
+  trackingEvents: TrackingEvent[];
+  mapping: CameraMotionMapping;
+  /** Rate the samples were stamped with. Playback and export still read `resolveAuthoringFps`. */
+  authoredFps?: number;
 }
 
 export interface CameraPathParams {
@@ -50,9 +87,92 @@ export interface CameraPathParams {
   continuity?: CameraContinuityRule;
   label?: string;
   frameCount?: number;
+  /**
+   * `quaternion_xyzw` means stored rotations are the GL camera quaternion.
+   * Absence means they were encoded with the old ZYX formula from XYZ Euler components
+   * and must be migrated once.
+   */
+  rotationStorage?: "quaternion_xyzw";
 }
 
-const takeId = (index: number): string => `take-${index}`;
+const legacyTakeId = "take-1";
+
+const vec3 = (value: readonly [number, number, number]): [number, number, number] => [
+  value[0],
+  value[1],
+  value[2],
+];
+
+const toKeyframe = (keyframe: VirtualKeyframe): CameraKeyframe => ({
+  frame: keyframe.frame,
+  position: keyframe.position,
+  rotation: keyframe.rotation,
+  focalLengthMm: keyframe.focalLengthMm,
+  focusDistanceM: keyframe.focusDistanceM,
+  aperture: keyframe.aperture,
+  easing: keyframe.easing,
+});
+
+const takeFromNormalized = (normalized: ReturnType<typeof normalizeStoredTake>): CameraTake | undefined => {
+  if (!normalized) {
+    return undefined;
+  }
+  return {
+    ...normalized,
+    keyframes: normalized.keyframes.map(toKeyframe),
+  };
+};
+
+const identityTakeShell = (
+  id: string,
+  name: string,
+  source: CameraTakeSource,
+  createdAt: string,
+  authoredFps?: number,
+): CameraTake => ({
+  id,
+  name,
+  source,
+  keyframes: [],
+  createdAt,
+  samples: [],
+  calibration: identityCalibration(),
+  trackingEvents: [],
+  mapping: identityMapping(),
+  authoredFps,
+});
+
+const mirrorsSamples = (take: CameraTake): boolean =>
+  take.mapping.mode === "one_to_one" && take.calibration.method === "identity" && take.calibration.scale === 1;
+
+const withTakeKeyframes = (take: CameraTake, keyframes: CameraKeyframe[]): CameraTake => {
+  const sorted = sortKeyframes(keyframes);
+  return {
+    ...take,
+    keyframes: sorted,
+    samples: mirrorsSamples(take) ? samplesFromKeyframes(sorted, take.authoredFps) : take.samples,
+  };
+};
+
+const nextTakeNumber = (takes: CameraTake[]): number => {
+  const used = takes.map((take) => {
+    const match = /^Take (\d+)$/.exec(take.name);
+    return match ? Number(match[1]) : 0;
+  });
+  return Math.max(0, ...used, takes.length) + 1;
+};
+
+const allocateTakeId = (takes: CameraTake[], preferred?: string): string => {
+  const used = new Set(takes.map((take) => take.id));
+  if (preferred && !used.has(preferred) && isPersistentId(preferred)) {
+    return preferred;
+  }
+  let id = createCameraTrackId();
+  while (used.has(id)) {
+    id = createCameraTrackId();
+  }
+  return id;
+};
 
 const sortKeyframes = (keyframes: CameraKeyframe[]): CameraKeyframe[] =>
   [...keyframes].sort((a, b) => a.frame - b.frame);
@@ -77,17 +197,19 @@ const withActiveTakeKeyframes = (
 ): CameraPathParams => {
   const sorted = sortKeyframes(keyframes);
   if (params.takes.length === 0 || !params.activeTakeId) {
-    const id = takeId(1);
+    const id = allocateTakeId(params.takes);
+    const take = withTakeKeyframes(identityTakeShell(id, "Take 1", source, createdAt), sorted);
     return syncActiveKeyframes({
       ...params,
-      takes: [{ id, name: "Take 1", source, keyframes: sorted, createdAt }],
+      takes: [take],
       activeTakeId: id,
+      rotationStorage: "quaternion_xyzw",
     });
   }
   const takes = params.takes.map((take) =>
-    take.id === params.activeTakeId ? { ...take, keyframes: sorted } : take,
+    take.id === params.activeTakeId ? withTakeKeyframes(take, sorted) : take,
   );
-  return syncActiveKeyframes({ ...params, takes });
+  return syncActiveKeyframes({ ...params, takes, rotationStorage: "quaternion_xyzw" });
 };
 
 export const defaultCameraPathParams = (): CameraPathParams => ({
@@ -96,6 +218,7 @@ export const defaultCameraPathParams = (): CameraPathParams => ({
   interpolation: "linear",
   stabilization: 0,
   frameCount: 120,
+  rotationStorage: "quaternion_xyzw",
 });
 
 export const listCameraTakes = (params: CameraPathParams): CameraTake[] => params.takes;
@@ -110,29 +233,171 @@ export const selectCameraTake = (params: CameraPathParams, takeIdValue: string):
   return syncActiveKeyframes({ ...params, activeTakeId: takeIdValue });
 };
 
+export interface CommitCameraTakeInput {
+  keyframes: CameraKeyframe[];
+  source: CameraTakeSource;
+  name?: string;
+  createdAt?: string;
+  /** Stable id for tests. A collision mints a new `cam_<ULID>` instead of reusing it. */
+  id?: string;
+  /** Original samples. When present they are the source of truth and keyframes are resolved from them. */
+  samples?: CameraSample[];
+  intrinsics?: CameraIntrinsics;
+  calibration?: DeviceCalibration;
+  trackingEvents?: TrackingEvent[];
+  mapping?: CameraMotionMapping;
+  authoredFps?: number;
+}
+
+/**
+ * Append a camera track and select it. Does not mutate `params` or the original samples.
+ * Viewport and export keep reading `keyframes`, which are the virtual poses after calibration and mapping.
+ */
 export const commitCameraTake = (
   params: CameraPathParams,
-  input: { keyframes: CameraKeyframe[]; source: CameraTakeSource; name?: string; createdAt?: string },
+  input: CommitCameraTakeInput,
 ): CameraPathParams => {
-  const sorted = sortKeyframes(input.keyframes);
-  if (sorted.length === 0) {
+  const calibration = input.calibration
+    ? {
+        ...input.calibration,
+        rotation: normalizeQuat(input.calibration.rotation),
+        translation: vec3(input.calibration.translation),
+      }
+    : identityCalibration();
+  const mapping = input.mapping
+    ? {
+        ...input.mapping,
+        translationGain: vec3(input.mapping.translationGain),
+      }
+    : identityMapping();
+  const authoredFps = input.authoredFps;
+  const samples =
+    input.samples && input.samples.length > 0
+      ? [...input.samples].sort((a, b) => a.frame - b.frame).map((sample) => ({
+          ...sample,
+          position: vec3(sample.position),
+          rotation: normalizeQuat(sample.rotation),
+        }))
+      : samplesFromKeyframes(sortKeyframes(input.keyframes), authoredFps);
+  if (samples.length === 0) {
+    return params;
+  }
+  const keyframes = resolveVirtualKeyframes({
+    samples,
+    calibration,
+    mapping,
+    intrinsics: input.intrinsics,
+  }).map(toKeyframe);
+  if (keyframes.length === 0) {
     return params;
   }
   const createdAt = input.createdAt ?? new Date().toISOString();
-  const nextIndex = params.takes.length + 1;
-  const id = takeId(nextIndex);
+  const number = nextTakeNumber(params.takes);
+  const id = allocateTakeId(params.takes, input.id);
   const take: CameraTake = {
     id,
-    name: input.name ?? `Take ${nextIndex}`,
+    name: input.name ?? `Take ${number}`,
     source: input.source,
-    keyframes: sorted,
+    keyframes,
     createdAt,
+    samples,
+    intrinsics: input.intrinsics,
+    calibration,
+    trackingEvents: input.trackingEvents ? [...input.trackingEvents] : [],
+    mapping,
+    authoredFps,
   };
   return syncActiveKeyframes({
     ...params,
     takes: [...params.takes, take],
     activeTakeId: id,
+    rotationStorage: "quaternion_xyzw",
   });
+};
+
+/**
+ * Replace the mapping layer and recompute virtual keyframes. The original `samples` array is kept.
+ */
+export const withCameraTrackMapping = (
+  params: CameraPathParams,
+  takeIdValue: string,
+  mapping: CameraMotionMapping,
+): CameraPathParams => {
+  if (!params.takes.some((take) => take.id === takeIdValue)) {
+    return params;
+  }
+  const takes = params.takes.map((take) => {
+    if (take.id !== takeIdValue) {
+      return take;
+    }
+    const next: CameraTake = { ...take, mapping };
+    return {
+      ...next,
+      keyframes: resolveVirtualKeyframes(next).map(toKeyframe),
+    };
+  });
+  return syncActiveKeyframes({ ...params, takes, rotationStorage: "quaternion_xyzw" });
+};
+
+/**
+ * Replace device-to-scene calibration and recompute virtual keyframes. Samples stay as recorded.
+ */
+export const withDeviceCalibration = (
+  params: CameraPathParams,
+  takeIdValue: string,
+  calibration: DeviceCalibration,
+): CameraPathParams => {
+  if (!params.takes.some((take) => take.id === takeIdValue)) {
+    return params;
+  }
+  const takes = params.takes.map((take) => {
+    if (take.id !== takeIdValue) {
+      return take;
+    }
+    const next: CameraTake = { ...take, calibration };
+    return {
+      ...next,
+      keyframes: resolveVirtualKeyframes(next).map(toKeyframe),
+    };
+  });
+  return syncActiveKeyframes({ ...params, takes, rotationStorage: "quaternion_xyzw" });
+};
+
+/**
+ * Poses the viewport applies at integer frames. The quaternion is the stored orientation,
+ * not an Euler round-trip.
+ */
+export const viewportPlaybackPoses = (params: CameraPathParams, frameCount: number): CameraKeyframe[] => {
+  const count = Math.max(0, Math.floor(frameCount));
+  const poses: CameraKeyframe[] = [];
+  for (let frame = 0; frame < count; frame += 1) {
+    const pose = interpolateCameraPose(params, frame);
+    if (pose) {
+      poses.push(pose);
+    }
+  }
+  return poses;
+};
+
+/**
+ * Poses re-derived from the original samples, calibration, and mapping, then interpolated
+ * the same way as viewport playback. Does not read the stored virtual keyframes.
+ */
+export const recordedTakePlaybackPoses = (
+  take: CameraTake,
+  frameCount: number,
+  interpolation: CameraInterpolation = "linear",
+): CameraKeyframe[] => {
+  const keyframes = resolveVirtualKeyframes(take).map(toKeyframe);
+  return viewportPlaybackPoses(
+    {
+      ...defaultCameraPathParams(),
+      keyframes,
+      takes: [],
+      interpolation,
+    },
+    frameCount,
+  );
 };
 
 export const deleteCameraTake = (params: CameraPathParams, takeIdValue: string): CameraPathParams => {
@@ -340,28 +605,31 @@ export const cameraPoseAtFrame = (
 
 const isKeyframeArray = (value: unknown): value is CameraKeyframe[] => Array.isArray(value);
 
-const parseTakes = (value: unknown): CameraTake[] => {
+const finiteNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+const finiteTuple = (value: unknown, length: number): number[] | undefined => {
+  if (!Array.isArray(value) || value.length !== length) {
+    return undefined;
+  }
+  const numbers: number[] = [];
+  for (const item of value) {
+    const parsed = finiteNumber(item);
+    if (parsed === undefined) {
+      return undefined;
+    }
+    numbers.push(parsed);
+  }
+  return numbers;
+};
+
+const parseTakes = (value: unknown, migrateQuaternion: (rotation: Quat) => Quat): CameraTake[] => {
   if (!Array.isArray(value)) {
     return [];
   }
   return value.flatMap((item, index) => {
-    if (!item || typeof item !== "object") {
-      return [];
-    }
-    const record = item as Record<string, unknown>;
-    if (!Array.isArray(record.keyframes)) {
-      return [];
-    }
-    const id = typeof record.id === "string" && record.id ? record.id : takeId(index + 1);
-    return [
-      {
-        id,
-        name: typeof record.name === "string" && record.name ? record.name : `Take ${index + 1}`,
-        source: record.source === "record" ? "record" : "manual",
-        keyframes: sortKeyframes(record.keyframes as CameraKeyframe[]),
-        createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date(0).toISOString(),
-      },
-    ];
+    const normalized = takeFromNormalized(normalizeStoredTake(item, index, migrateQuaternion));
+    return normalized ? [normalized] : [];
   });
 };
 
@@ -428,9 +696,34 @@ export const cameraPathParamsFromNode = (parameters: Record<string, unknown>): C
     frameCount: typeof parameters.frameCount === "number" ? parameters.frameCount : 120,
   };
 
-  const parsedTakes = parseTakes(parameters.takes);
+  const trustQuaternion = parameters.rotationStorage === "quaternion_xyzw";
+  const migrateQuaternion = (rotation: Quat): Quat =>
+    trustQuaternion ? normalizeQuat(rotation) : migrateZyxEncodedQuaternion(rotation);
+  const parsedTakes = parseTakes(parameters.takes, migrateQuaternion);
   const legacyKeys = isKeyframeArray(parameters.keyframes)
-    ? sortKeyframes(parameters.keyframes as CameraKeyframe[])
+    ? parameters.keyframes.flatMap((item) => {
+        if (!item || typeof item !== "object") {
+          return [];
+        }
+        const frame = finiteNumber(Reflect.get(item, "frame"));
+        const position = finiteTuple(Reflect.get(item, "position"), 3);
+        const rotation = finiteTuple(Reflect.get(item, "rotation"), 4);
+        const focalLengthMm = finiteNumber(Reflect.get(item, "focalLengthMm"));
+        if (frame === undefined || !position || !rotation) {
+          return [];
+        }
+        const easingValue = Reflect.get(item, "easing");
+        const keyframe: CameraKeyframe = {
+          frame,
+          position: [position[0], position[1], position[2]],
+          rotation: migrateQuaternion([rotation[0], rotation[1], rotation[2], rotation[3]]),
+          focalLengthMm: focalLengthMm ?? 35,
+          focusDistanceM: finiteNumber(Reflect.get(item, "focusDistanceM")),
+          aperture: finiteNumber(Reflect.get(item, "aperture")),
+          easing: typeof easingValue === "string" ? easingValue : undefined,
+        };
+        return [keyframe];
+      })
     : [];
 
   if (parsedTakes.length > 0) {
@@ -444,28 +737,28 @@ export const cameraPathParamsFromNode = (parameters: Record<string, unknown>): C
       ...shared,
       takes: parsedTakes,
       activeTakeId,
+      rotationStorage: "quaternion_xyzw",
     });
   }
 
   if (legacyKeys.length > 0) {
+    const sorted = sortKeyframes(legacyKeys);
+    const take = withTakeKeyframes(
+      identityTakeShell(legacyTakeId, "Take 1", "manual", new Date(0).toISOString()),
+      sorted,
+    );
     return syncActiveKeyframes({
       ...defaultCameraPathParams(),
       ...shared,
-      takes: [
-        {
-          id: takeId(1),
-          name: "Take 1",
-          source: "manual",
-          keyframes: legacyKeys,
-          createdAt: new Date(0).toISOString(),
-        },
-      ],
-      activeTakeId: takeId(1),
+      takes: [take],
+      activeTakeId: legacyTakeId,
+      rotationStorage: "quaternion_xyzw",
     });
   }
 
   return {
     ...defaultCameraPathParams(),
     ...shared,
+    rotationStorage: "quaternion_xyzw",
   };
 };
