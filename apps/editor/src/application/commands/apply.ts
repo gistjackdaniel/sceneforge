@@ -11,6 +11,13 @@ import { applyCameraRigToProject } from "../services/cameraCraft";
 import type { CommandResult, DomainCommand, DomainEvent } from "./types";
 import { cameraPathParamsFromNode, deleteCameraKeyframe, keyframeAtExactFrame, upsertCameraKeyframe } from "../../domain/graph/cameraPath";
 import { lensNodeIdForClip, lensParamsFromNode } from "../../domain/graph/lens";
+import {
+  changeContactEffector,
+  HANDSHAKE_SCENE_ID,
+  installInteractionScene,
+  setInteractionOverrides,
+  uninstallInteractionScene,
+} from "../../domain/sceneAuthoring";
 
 const event = (type: DomainEvent["type"], payload: Record<string, unknown>, timestamp: string): DomainEvent => ({
   type,
@@ -665,6 +672,65 @@ export const applyCommand = (
             event("NodeParamsChanged", { nodeId: applied.rigNodeId, preset: command.preset }, timestamp),
             event("NodeMarkedDirty", { nodeId: applied.pathNodeId }, timestamp),
           ],
+        },
+      };
+    }
+    case "INSTALL_INTERACTION_SCENE": {
+      const outcome = installInteractionScene(project);
+      if (!outcome.addedScene && outcome.addedWorldIds.length === 0) {
+        return { project, result: { ok: true, command, events: [] } };
+      }
+      return {
+        project: outcome.project,
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UNINSTALL_INTERACTION_SCENE",
+            sceneId: HANDSHAKE_SCENE_ID,
+            removeScene: outcome.addedScene,
+            worldIds: outcome.addedWorldIds,
+          },
+          events: [event("SceneAuthoringChanged", { sceneId: HANDSHAKE_SCENE_ID }, timestamp)],
+        },
+      };
+    }
+    case "UNINSTALL_INTERACTION_SCENE": {
+      return {
+        project: uninstallInteractionScene(project, command.sceneId, command.removeScene, command.worldIds),
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "INSTALL_INTERACTION_SCENE" },
+          events: [event("SceneAuthoringChanged", { sceneId: command.sceneId }, timestamp)],
+        },
+      };
+    }
+    case "CHANGE_CONTACT_EFFECTOR": {
+      const outcome = changeContactEffector(project, command);
+      if ("error" in outcome) return fail(outcome.error);
+      if (!outcome.changed) return { project, result: { ok: true, command, events: [] } };
+      return {
+        project: outcome.project,
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "SET_INTERACTION_OVERRIDES", sceneId: command.sceneId, overrides: outcome.previous },
+          events: [event("SceneAuthoringChanged", { sceneId: command.sceneId, contactId: command.contactId }, timestamp)],
+        },
+      };
+    }
+    case "SET_INTERACTION_OVERRIDES": {
+      const outcome = setInteractionOverrides(project, command.sceneId, command.overrides);
+      if ("error" in outcome) return fail(outcome.error);
+      if (!outcome.changed) return { project, result: { ok: true, command, events: [] } };
+      return {
+        project: outcome.project,
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "SET_INTERACTION_OVERRIDES", sceneId: command.sceneId, overrides: outcome.previous },
+          events: [event("SceneAuthoringChanged", { sceneId: command.sceneId }, timestamp)],
         },
       };
     }

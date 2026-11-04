@@ -22,6 +22,8 @@ import "./sceneWorkspace.css";
 import { createLoopClock } from "../../application/ports/LoopClock";
 import type { DomainCommand } from "../../application/commands";
 import { validateOutputAspect } from "./recordingPreflight";
+import { InteractionPreview } from "../../presentation/scene/InteractionPreview";
+import { HANDSHAKE_SCENE_ID, createHandshakePreviewScene } from "../../domain/sceneAuthoring";
 
 type LivePose = { position: [number, number, number]; rotation: [number, number, number] };
 
@@ -64,6 +66,9 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [load, setLoad] = useState<{ state: ViewportLoadState; message?: string }>({ state: "idle" });
   const [notice, setNotice] = useState("");
   const [selectedFrames, setSelectedFrames] = useState<number[]>([]);
+  const [interactionOn, setInteractionOn] = useState(false);
+  const interactionFallback = useMemo(() => createHandshakePreviewScene(), []);
+  const interactionScene = project.interactiveScenes?.[HANDSHAKE_SCENE_ID] ?? interactionFallback;
   const duration = clip ? clipDurationFrames(clip) : 1;
   const start = clip ? clipStartFrame(clip) : 0;
   const frame = Math.max(0, Math.min(duration - 1, (sequence?.playhead ?? start) - start));
@@ -207,7 +212,32 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const switchMode = (mode: "build" | "record") => {
     if (takeRecording) finishTakeRecording("stop");
     setPlaying(false); setDraft(undefined); setDrawer(null); setNotice(""); setSelectedFrames([]);
+    setInteractionOn(false);
     dispatch({ type: "set-viewport-workspace", workspace: mode });
+  };
+  const editHandshakeHand = (rigPart: "left_hand" | "right_hand") => {
+    const logMessage = rigPart === "right_hand"
+      ? "B의 악수 손을 오른손으로 바꿨습니다. 카메라, 배경, A의 이동은 그대로입니다."
+      : "B의 악수 손을 왼손으로 되돌렸습니다.";
+    dispatch({
+      type: "agent-execute-commands",
+      logMessage,
+      commands: [{
+        type: "APPLY_COMMANDS",
+        logMessage,
+        commands: [
+          { type: "INSTALL_INTERACTION_SCENE" },
+          {
+            type: "CHANGE_CONTACT_EFFECTOR",
+            sceneId: HANDSHAKE_SCENE_ID,
+            subjectRef: "B",
+            locale: "ko",
+            contactId: "handshake_01",
+            rigPart,
+          },
+        ],
+      }],
+    });
   };
   useEffect(() => {
     setSelectedId("camera");
@@ -335,7 +365,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const emptyMessage = !world ? "Start with a world, or place your first object."
     : load.state === "loading" ? "Loading world…"
     : ["missing_artifact", "malformed", "unsupported"].includes(load.state) ? load.message ?? "World preview unavailable." : undefined;
-  const showEmpty = emptyMessage && (objects.length === 0 || Boolean(world));
+  const showEmpty = !interactionOn && emptyMessage && (objects.length === 0 || Boolean(world));
   return <section className="scene-workspace" aria-label="Scene workspace">
     <header className="scene-header">
       <div className="scene-title"><span className="scene-status-dot" /><strong>{clip?.name ?? "No shot selected"}</strong><span>{previewOnly ? "Preview only" : "Shot override"}</span></div>
@@ -343,9 +373,27 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         <button aria-pressed={!recording} onClick={() => switchMode("build")}>Scene</button>
         <button aria-pressed={recording} onClick={() => switchMode("record")}>Motion</button>
       </div>
+      <button
+        type="button"
+        aria-pressed={interactionOn}
+        onClick={() => {
+          setPlaying(false);
+          setInteractionOn((value) => !value);
+        }}
+      >
+        상호작용
+      </button>
     </header>
     <div className="scene-stage-area">
-      <div className={`scene-stage-canvas ${cameraView ? "is-camera-view" : ""}`} style={{ "--scene-aspect": outputAspectRatio(ui.outputAspect) } as React.CSSProperties}>
+      <div className={`scene-stage-canvas ${cameraView && !interactionOn ? "is-camera-view" : ""}`} style={{ "--scene-aspect": outputAspectRatio(ui.outputAspect) } as React.CSSProperties}>
+        {interactionOn ? (
+          <InteractionPreview
+            scene={interactionScene}
+            onEditHand={editHandshakeHand}
+            onUndo={() => dispatch({ type: "undo" })}
+            onRedo={() => dispatch({ type: "redo" })}
+          />
+        ) : (
         <StageViewport world={world} worldName={world?.name} previewPlan={previewPlan} fallbackImageUri={fallbackImageUri}
           overlays={ui.viewportOverlays} tool={ui.viewportTool} workspace={cameraView ? "record" : "build"}
           outputAspect={outputAspectRatio(ui.outputAspect)} outputAspectLabel={ui.outputAspect}
@@ -378,6 +426,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
             livePoseRef.current = { position: camera.position, rotation: camera.rotation };
           }}
           captureSignal={captureSignal} focusSignal={focusSignal} resetSignal={resetSignal} />
+        )}
       </div>
       <nav className="scene-rail" aria-label="Scene tools">
         {([["assets", "plus", "Add assets"], ["layers", "layers", "Subjects"], ["camera", "camera", "Camera trajectory"]] as const).map(([id, icon, title]) =>

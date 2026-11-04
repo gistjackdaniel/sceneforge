@@ -5,6 +5,7 @@ import type { RenderCacheEntry } from "../rendering/types";
 import type { Sequence, TimelineClip } from "../timeline/types";
 import type { WorldAsset } from "../worlds/types";
 import type { ModelExecutionRecord } from "../worlds/modelExecution";
+import type { InteractiveScene } from "../sceneAuthoring/contract";
 import type { ClipGraph, DependencyMap } from "./clipGraph";
 
 export interface ExternalConnector {
@@ -42,4 +43,10 @@ export interface Project {
   connectors: Record<string, ExternalConnector>;
   libraryNodeIds: string[];
   modelExecutions?: Record<string, ModelExecutionRecord>;
+  /**
+   * Interactive viewport scenes. Pose clips and the contact graph stay immutable;
+   * effector edits are stored in each scene's overrides.
+   * Absent on projects saved before this field existed.
+   */
+  interactiveScenes?: Record<string, InteractiveScene>;
 }

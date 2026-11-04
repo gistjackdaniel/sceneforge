@@ -2,6 +2,7 @@ import type { NodeBase } from "../../domain/graph/types";
 import type { NodeReference, ReferenceType } from "../../domain/graph/references";
 import type { GraphEdge } from "../../domain/graph/types";
 import type { CameraRigPreset } from "../../domain/graph/cameraRig";
+import type { ContactEffectorOverride, RigPart } from "../../domain/sceneAuthoring/contract";
 
 /** PRD §13.1 — domain commands. UI-only actions are not commands. */
 export type DomainCommand =
@@ -101,6 +102,32 @@ export type DomainCommand =
       commands: DomainCommand[];
       /** Optional message for logs/UI; callers may log separately. */
       logMessage?: string;
+    }
+  | { type: "INSTALL_INTERACTION_SCENE" }
+  | {
+      /** Inverse of install. Removes only the worlds and scene that install added. */
+      type: "UNINSTALL_INTERACTION_SCENE";
+      sceneId: string;
+      removeScene: boolean;
+      worldIds: string[];
+    }
+  | {
+      /**
+       * Change one contact effector without rewriting the source contact or pose clip.
+       * `subjectRef` is a display name. Apply resolves it with TargetResolver.
+       */
+      type: "CHANGE_CONTACT_EFFECTOR";
+      sceneId: string;
+      subjectRef: string;
+      locale: "ko" | "en";
+      contactId: string;
+      rigPart: RigPart;
+    }
+  | {
+      /** Restore a previous override list. Undo of CHANGE_CONTACT_EFFECTOR. */
+      type: "SET_INTERACTION_OVERRIDES";
+      sceneId: string;
+      overrides: ContactEffectorOverride[];
     };
 
 export type DomainEventType =
@@ -116,7 +143,8 @@ export type DomainEventType =
   | "CacheInvalidated"
   | "RenderQueued"
   | "RenderCompleted"
-  | "RenderFailed";
+  | "RenderFailed"
+  | "SceneAuthoringChanged";
 
 export interface DomainEvent {
   type: DomainEventType;
