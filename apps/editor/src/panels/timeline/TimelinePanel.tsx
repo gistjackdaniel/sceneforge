@@ -5,10 +5,10 @@ import { getAffectedClipIds } from "../../core/dependency/affectedClips";
 import { queueLength } from "../../core/render/queue";
 import { cameraPathParamsFromNode } from "../../domain/graph/cameraPath";
 import { performancePlanFromNode, performancePlanNodeIdForClip } from "../../domain/performance";
+import { shotFpsForClip } from "../../domain/timeline/shot";
 import { clipStartFrame } from "../../domain/timeline/timing";
 import { useEditorStore } from "../../state/editorStore";
 
-const FPS = 24;
 const PIXELS_PER_SECOND = 48;
 
 const collectClipReferenceTypes = (
@@ -61,12 +61,13 @@ export const TimelinePanel = ({ compact = false }: TimelinePanelProps) => {
     ? getAffectedClipIds(project.dependencyMap, selectedRootNode.id)
     : [];
 
+  const fps = shotFpsForClip(project, selectedClip?.id ?? activeSequence.clipIds[0] ?? "");
   const durationSeconds = Math.max(
     12,
-    Math.ceil(activeSequence.visibleRange[1] / FPS),
+    Math.ceil(activeSequence.visibleRange[1] / fps),
   );
   const rulerMarks = Array.from({ length: durationSeconds + 1 }, (_, index) => index);
-  const playheadLeft = (activeSequence.playhead / FPS) * PIXELS_PER_SECOND;
+  const playheadLeft = (activeSequence.playhead / fps) * PIXELS_PER_SECOND;
 
   return (
     <section className={`panel timeline-panel ${compact ? "timeline-panel-compact" : ""}`}>
@@ -140,8 +141,8 @@ export const TimelinePanel = ({ compact = false }: TimelinePanelProps) => {
               {clips.map((clip) => {
                 const graph = project.clipGraphs[clip.clipGraphId];
                 const refTypes = collectClipReferenceTypes(graph?.nodeIds ?? [], project.nodes);
-                const width = (clip.duration / FPS) * PIXELS_PER_SECOND;
-                const left = (clip.start / FPS) * PIXELS_PER_SECOND;
+                const width = (clip.duration / fps) * PIXELS_PER_SECOND;
+                const left = (clip.start / fps) * PIXELS_PER_SECOND;
                 const proxyStatus = clip.proxyCacheId
                   ? project.caches[clip.proxyCacheId]?.status
                   : undefined;
@@ -196,7 +197,7 @@ export const TimelinePanel = ({ compact = false }: TimelinePanelProps) => {
                   key={`camera-${keyframe.frame}`}
                   type="button"
                   className="timeline-keyframe-marker camera-keyframe-marker"
-                  style={{ left: ((clipStartFrame(selectedClip) + keyframe.frame) / FPS) * PIXELS_PER_SECOND }}
+                  style={{ left: ((clipStartFrame(selectedClip) + keyframe.frame) / fps) * PIXELS_PER_SECOND }}
                   title={`Camera keyframe ${keyframe.frame}f · ${keyframe.focalLengthMm}mm`}
                   onClick={() => {
                     dispatch({ type: "scrub-playhead", playhead: clipStartFrame(selectedClip) + keyframe.frame });
@@ -218,10 +219,10 @@ export const TimelinePanel = ({ compact = false }: TimelinePanelProps) => {
                   className="timeline-direction-block timeline-audio-block"
                   style={{
                     left:
-                      ((clipStartFrame(selectedClip) + performancePlan.audioGuide.offsetFrame) / FPS) *
+                      ((clipStartFrame(selectedClip) + performancePlan.audioGuide.offsetFrame) / fps) *
                       PIXELS_PER_SECOND,
                     width:
-                      ((performancePlan.audioGuide.durationFrames ?? selectedClip.duration) / FPS) *
+                      ((performancePlan.audioGuide.durationFrames ?? selectedClip.duration) / fps) *
                       PIXELS_PER_SECOND,
                   }}
                   title={`${performancePlan.audioGuide.label} · offset ${performancePlan.audioGuide.offsetFrame}f`}
@@ -242,8 +243,8 @@ export const TimelinePanel = ({ compact = false }: TimelinePanelProps) => {
                   type="button"
                   className={`timeline-direction-block timeline-performance-block cue-${cue.kind}`}
                   style={{
-                    left: ((clipStartFrame(selectedClip) + cue.startFrame) / FPS) * PIXELS_PER_SECOND,
-                    width: (Math.max(1, cue.endFrame - cue.startFrame) / FPS) * PIXELS_PER_SECOND,
+                    left: ((clipStartFrame(selectedClip) + cue.startFrame) / fps) * PIXELS_PER_SECOND,
+                    width: (Math.max(1, cue.endFrame - cue.startFrame) / fps) * PIXELS_PER_SECOND,
                   }}
                   title={`${cue.label} · ${cue.startFrame}–${cue.endFrame}f · ${cue.direction || "No direction"}`}
                   onClick={() => {

@@ -4,6 +4,7 @@ import { normalizeCacheStatus } from "../rendering/types";
 import { assetFromWorld } from "../assets/registry";
 import { normalizeWorldAsset } from "../worlds/normalize";
 import { sampleViewportWorlds } from "../worlds/sampleWorlds";
+import { ensureShotsForClips, fpsFromLegacySequence } from "../timeline/shot";
 import { migrateClipTiming } from "../timeline/timing";
 import { ensureClipVariants } from "../timeline/variants";
 import type { Project } from "./types";
@@ -57,20 +58,23 @@ export const normalizeNodeBase = (node: NodeBase & Record<string, unknown>): Nod
   };
 };
 
-const normalizeClip = (clip: TimelineClip): TimelineClip => {
+const normalizeClip = (clip: TimelineClip, sequenceFps?: number): TimelineClip => {
   const cameraPathNodeId =
     clip.cameraPathNodeId ?? clip.cameraTrajectoryNodeId ?? `node-${clip.id}-trajectory`;
   const performancePlanNodeId =
     clip.performancePlanNodeId ?? performancePlanNodeIdForClip(clip.id);
   return ensureClipVariants(
-    migrateClipTiming({
-      ...clip,
-      cameraPathNodeId,
-      performancePlanNodeId,
-      cameraTrajectoryNodeId: cameraPathNodeId,
-      graphSnapshotId: clip.graphSnapshotId ?? clip.clipGraphId,
-      trackId: clip.trackId ?? "V1",
-    }),
+    migrateClipTiming(
+      {
+        ...clip,
+        cameraPathNodeId,
+        performancePlanNodeId,
+        cameraTrajectoryNodeId: cameraPathNodeId,
+        graphSnapshotId: clip.graphSnapshotId ?? clip.clipGraphId,
+        trackId: clip.trackId ?? "V1",
+      },
+      fpsFromLegacySequence(sequenceFps),
+    ),
   );
 };
 
@@ -135,9 +139,12 @@ export const migrateProject = (
     }
   }
 
+  const sequenceFpsForClip = (clipId: string): number | undefined =>
+    Object.values(project.sequences ?? {}).find((sequence) => sequence.clipIds?.includes(clipId))?.fps;
+
   const clips = Object.fromEntries(
     Object.entries(project.clips ?? {}).map(([id, clip]) => {
-      const normalized = normalizeClip(clip);
+      const normalized = normalizeClip(clip, sequenceFpsForClip(id));
       return [id, deps.syncClipCacheFields(normalized, caches)];
     }),
   );
@@ -215,7 +222,7 @@ export const migrateProject = (
     ),
   };
 
-  return {
+  const synced: Project = {
     ...migrated,
     clips: Object.fromEntries(
       Object.entries(migrated.clips).map(([id, clip]) => [
@@ -224,4 +231,10 @@ export const migrateProject = (
       ]),
     ),
   };
+  const withShots = ensureShotsForClips({
+    clips: synced.clips,
+    sequences: synced.sequences,
+    shots: synced.shots,
+  });
+  return { ...synced, clips: withShots.clips, shots: withShots.shots };
 };

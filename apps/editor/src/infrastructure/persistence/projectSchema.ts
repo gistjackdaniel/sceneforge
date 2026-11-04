@@ -104,6 +104,11 @@ const projectSchema = z
     activeSequenceId: z.string(),
     sequences: z.record(z.string(), z.unknown()),
     clips: z.record(z.string(), clipSchema),
+    /**
+     * Shot documents are repaired by domain migrate (`ensureShotsForClips` + `shotSchema`).
+     * The envelope stays loose so a pre-migration file still loads.
+     */
+    shots: z.record(z.string(), z.unknown()).optional(),
     clipGraphs: z.record(z.string(), z.unknown()),
     nodes: z.record(z.string(), nodeSchema),
     references: z.record(z.string(), z.unknown()),

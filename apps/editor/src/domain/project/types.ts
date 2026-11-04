@@ -2,6 +2,7 @@ import type { AssetRecord } from "../assets/types";
 import type { NodeBase } from "../graph/types";
 import type { NodeReference } from "../graph/references";
 import type { RenderCacheEntry } from "../rendering/types";
+import type { Shot } from "../timeline/shot";
 import type { Sequence, TimelineClip } from "../timeline/types";
 import type { WorldAsset } from "../worlds/types";
 import type { ModelExecutionRecord } from "../worlds/modelExecution";
@@ -31,6 +32,11 @@ export interface Project {
   activeSequenceId: string;
   sequences: Record<string, Sequence>;
   clips: Record<string, TimelineClip>;
+  /**
+   * Canonical shot records, keyed by shot id. Optional on legacy in-memory fixtures;
+   * `migrateProject` / `ensureShotsForClips` fills it.
+   */
+  shots?: Record<string, Shot>;
   clipGraphs: Record<string, ClipGraph>;
   nodes: Record<string, NodeBase>;
   references: Record<string, NodeReference>;

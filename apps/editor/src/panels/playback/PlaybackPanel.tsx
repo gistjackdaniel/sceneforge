@@ -4,14 +4,13 @@ import { DIRECTION_CHANNEL_LABELS } from "../../domain/direction";
 import { evaluateShotWorkflow } from "../../domain/workflow";
 import { exportPerformancePlanToOtio, serializeOtio } from "../../domain/editorial";
 import { performancePlanFromNode, performancePlanNodeIdForClip } from "../../domain/performance";
+import { shotFpsForClip } from "../../domain/timeline/shot";
 import { clipDurationFrames } from "../../domain/timeline/timing";
 import { downloadTextFile, editorialFilename } from "../editorialDownload";
 
-const FPS = 24;
-
-const formatTimecode = (frame: number): string => {
-  const totalSeconds = Math.floor(frame / FPS);
-  const frames = frame % FPS;
+const formatTimecode = (frame: number, fps: number): string => {
+  const totalSeconds = Math.floor(frame / fps);
+  const frames = frame % fps;
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   const hours = Math.floor(minutes / 60);
@@ -32,12 +31,13 @@ export const PlaybackPanel = () => {
 
   const clip = project.clips[ui.selectedClipId];
   const sequence = project.sequences[project.activeSequenceId];
+  const fps = shotFpsForClip(project, clip.id);
   const proxyCache = clip.proxyCacheId ? project.caches[clip.proxyCacheId] : undefined;
   const finalCache = clip.finalCacheId ? project.caches[clip.finalCacheId] : undefined;
   const videoPath = finalCache?.artifactPath ?? (proxyCache?.status === "valid" ? proxyCache.artifactPath : undefined);
   const videoRenderJob = ui.videoRenderJob;
   const pendingDirectionInvalidations = finalCache?.directionInvalidations ?? [];
-  const timecode = formatTimecode(sequence.playhead);
+  const timecode = formatTimecode(sequence.playhead, fps);
   const shotWorkflow = evaluateShotWorkflow({
     clip,
     graph: project.clipGraphs[clip.clipGraphId],
@@ -54,7 +54,7 @@ export const PlaybackPanel = () => {
       clipId: clip.id,
       clipName: clip.name,
       durationFrames: clipDurationFrames(clip),
-      fps: sequence.fps ?? FPS,
+      fps,
       performancePlan: performancePlanFromNode(project.nodes[performanceNodeId]?.parameters),
     });
     downloadTextFile(
@@ -123,7 +123,7 @@ export const PlaybackPanel = () => {
             onClick={() =>
               dispatch({
                 type: "scrub-playhead",
-                playhead: Math.max(sequence.visibleRange[0], sequence.playhead - FPS),
+                playhead: Math.max(sequence.visibleRange[0], sequence.playhead - fps),
               })
             }
           >
@@ -137,7 +137,7 @@ export const PlaybackPanel = () => {
             onClick={() =>
               dispatch({
                 type: "scrub-playhead",
-                playhead: Math.min(sequence.visibleRange[1], sequence.playhead + FPS),
+                playhead: Math.min(sequence.visibleRange[1], sequence.playhead + fps),
               })
             }
           >

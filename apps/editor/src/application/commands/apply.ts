@@ -4,6 +4,7 @@ import { breakLink, makeLocal, overrideValue } from "../../domain/graph/referenc
 import { applyDirtyEventToNodes } from "../../domain/graph/dependencyService";
 import { collectAllEdges } from "../../domain/graph/dirty";
 import { computeNodeContentHash } from "../../domain/graph/cacheKey";
+import { shotForClip, withShotFrameLength } from "../../domain/timeline/shot";
 import { clipStartFrame, clipDurationFrames, withClipTiming } from "../../domain/timeline/timing";
 import { createClipVariant, setActiveVariant } from "../../domain/timeline/variants";
 import { linkWorldToClip } from "../services/worldLinking";
@@ -494,12 +495,18 @@ export const applyCommand = (
         startFrame: clipStartFrame(clip),
         durationFrames: clipDurationFrames(clip),
       };
+      const nextClip = withClipTiming(clip, command.startFrame, command.durationFrames);
+      const shot = shotForClip(project, clip.id);
+      const shots = shot
+        ? { ...project.shots, [shot.id]: withShotFrameLength(shot, command.durationFrames) }
+        : project.shots;
       return {
         project: {
           ...project,
+          shots,
           clips: {
             ...project.clips,
-            [clip.id]: withClipTiming(clip, command.startFrame, command.durationFrames),
+            [clip.id]: nextClip,
           },
         },
         result: {

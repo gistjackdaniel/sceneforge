@@ -78,6 +78,7 @@ import {
   type CameraTakeSource,
 } from "../domain/graph/cameraPath";
 import { clipDurationFrames, clipStartFrame, withClipTiming } from "../domain/timeline/timing";
+import { createPersistentId, createShotForClip, legacyShotId } from "../domain/timeline";
 import { normalizeLegacyRig, type CameraRigPreset } from "../domain/graph/cameraRig";
 import { defaultLensParams, lensNodeIdForClip, lensParamsFromNode } from "../domain/graph/lens";
 import { validateLookAtElement } from "../application/services/cameraCraft";
@@ -617,6 +618,13 @@ const createInitialProject = (): Project => {
   const worlds = Object.fromEntries(seeded.map((item) => [item.world.id, item.world]));
   const worldAssets = Object.fromEntries(seeded.map((item) => [item.asset.id, item.asset]));
 
+  const shot = createShotForClip({
+    clip,
+    sequenceFps: sequence.fps,
+    id: legacyShotId(clip.id),
+  });
+  clip.shotId = shot.id;
+
   const project: Project = {
     id: "project-sceneforge-editor",
     name: "SceneForge MVP",
@@ -626,6 +634,7 @@ const createInitialProject = (): Project => {
     activeSequenceId: sequence.id,
     sequences: { [sequence.id]: sequence },
     clips: { [clip.id]: clip },
+    shots: { [shot.id]: shot },
     clipGraphs: { [graph.id]: graph },
     nodes: nodeMap,
     references,
@@ -928,8 +937,18 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
       clipNodes.forEach((node) => {
         nodes[node.id] = node;
       });
+      const shot = createShotForClip({
+        clip: {
+          id: clipId,
+          duration: 120,
+          durationFrames: 120,
+        },
+        sequenceFps: activeSequence.fps,
+        id: createPersistentId("sht"),
+      });
       const clip: TimelineClip = {
         id: clipId,
+        shotId: shot.id,
         name: `Empty Clip ${activeSequence.clipIds.length + 1}`,
         trackId: "V1",
         start: activeSequence.visibleRange[1] + 12,
@@ -967,6 +986,7 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
       };
       let nextProject: Project = {
         ...project,
+        shots: { ...(project.shots ?? {}), [shot.id]: shot },
         clips: { ...project.clips, [clipId]: clip },
         clipGraphs,
         nodes,
@@ -1035,6 +1055,12 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
       );
       const clips = { ...project.clips };
       delete clips[clip.id];
+      const shots = { ...(project.shots ?? {}) };
+      for (const [shotId, shot] of Object.entries(shots)) {
+        if (shotId === clip.shotId || shot.clipId === clip.id) {
+          delete shots[shotId];
+        }
+      }
       const clipGraphs = { ...project.clipGraphs };
       delete clipGraphs[clip.clipGraphId];
       const remainingClipIds = activeSequence.clipIds.filter((id) => id !== clip.id);
@@ -1045,6 +1071,7 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         caches,
         references,
         clips,
+        shots,
         clipGraphs,
         sequences: {
           ...project.sequences,
