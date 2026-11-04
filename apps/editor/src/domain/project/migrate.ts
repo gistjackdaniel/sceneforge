@@ -202,6 +202,7 @@ export const migrateProject = (
     worlds,
     clips,
     clipGraphs,
+    clipDrafts: project.clipDrafts ?? {},
   };
 
   migrated = {

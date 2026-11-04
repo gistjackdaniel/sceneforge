@@ -42,4 +42,6 @@ export interface Project {
   connectors: Record<string, ExternalConnector>;
   libraryNodeIds: string[];
   modelExecutions?: Record<string, ModelExecutionRecord>;
+  /** Per-shot generation drafts (one draft per clip id). */
+  clipDrafts?: Record<string, import("../generation/clipDraft").ClipDraft>;
 }
