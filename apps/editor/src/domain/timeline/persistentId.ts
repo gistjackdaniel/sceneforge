@@ -59,3 +59,6 @@ export const legacyShotId = (clipId: string): string => {
   const id = `sht_legacy_${body}_${stableHash(clipId)}`;
   return id.slice(0, 128);
 };
+
+/** Deterministic first revision for a shot created by migration. */
+export const legacyShotRevisionId = (shotId: string): string => `shr_legacy_${stableHash(`rev:${shotId}`)}`;

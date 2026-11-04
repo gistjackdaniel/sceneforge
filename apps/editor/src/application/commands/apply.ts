@@ -5,6 +5,7 @@ import { applyDirtyEventToNodes } from "../../domain/graph/dependencyService";
 import { collectAllEdges } from "../../domain/graph/dirty";
 import { computeNodeContentHash } from "../../domain/graph/cacheKey";
 import { shotForClip, withShotFrameLength } from "../../domain/timeline/shot";
+import { applyShotEditorialCommand } from "./shotEditorial";
 import { clipStartFrame, clipDurationFrames, withClipTiming } from "../../domain/timeline/timing";
 import { createClipVariant, setActiveVariant } from "../../domain/timeline/variants";
 import { linkWorldToClip } from "../services/worldLinking";
@@ -675,6 +676,11 @@ export const applyCommand = (
         },
       };
     }
+    case "ADD_SHOT_OVERRIDE":
+    case "REMOVE_SHOT_OVERRIDE":
+    case "UPDATE_SHOT_OVERRIDE":
+    case "REVERT_SHOT_REVISION":
+      return applyShotEditorialCommand(project, command, timestamp);
     case "APPLY_COMMANDS": {
       let nextProject: Project = project;
       const inverses: DomainCommand[] = [];

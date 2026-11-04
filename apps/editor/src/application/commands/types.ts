@@ -2,6 +2,8 @@ import type { NodeBase } from "../../domain/graph/types";
 import type { NodeReference, ReferenceType } from "../../domain/graph/references";
 import type { GraphEdge } from "../../domain/graph/types";
 import type { CameraRigPreset } from "../../domain/graph/cameraRig";
+import type { ShotEditLocality } from "../../domain/timeline/shotEditorial";
+import type { ShotEditorialSnapshot } from "../../domain/timeline/shotEdit";
 
 /** PRD §13.1 — domain commands. UI-only actions are not commands. */
 export type DomainCommand =
@@ -101,6 +103,40 @@ export type DomainCommand =
       commands: DomainCommand[];
       /** Optional message for logs/UI; callers may log separately. */
       logMessage?: string;
+    }
+  | {
+      /** Append a contact-effector override without writing the base scene. */
+      type: "ADD_SHOT_OVERRIDE";
+      shotId: string;
+      actorRef: string;
+      targetActorRef?: string;
+      contactId: string;
+      newEffector: string;
+      locality: ShotEditLocality;
+      locale?: "ko" | "en";
+      /** Set by undo/redo. When present, the stack is restored instead of appending. */
+      restore?: ShotEditorialSnapshot;
+    }
+  | {
+      type: "REMOVE_SHOT_OVERRIDE";
+      shotId: string;
+      overrideId: string;
+      restore?: ShotEditorialSnapshot;
+    }
+  | {
+      type: "UPDATE_SHOT_OVERRIDE";
+      shotId: string;
+      overrideId: string;
+      newEffector?: string;
+      locality?: ShotEditLocality;
+      restore?: ShotEditorialSnapshot;
+    }
+  | {
+      /** Move the shot head to an existing revision and restore that override stack. */
+      type: "REVERT_SHOT_REVISION";
+      shotId: string;
+      revisionId: string;
+      restore?: ShotEditorialSnapshot;
     };
 
 export type DomainEventType =
@@ -113,6 +149,7 @@ export type DomainEventType =
   | "ClipTimingChanged"
   | "VariantChanged"
   | "AssetVersionChanged"
+  | "ShotOverrideChanged"
   | "CacheInvalidated"
   | "RenderQueued"
   | "RenderCompleted"
