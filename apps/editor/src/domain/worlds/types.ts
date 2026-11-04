@@ -21,6 +21,15 @@ export interface BoundingBox {
   max: [number, number, number];
 }
 
+/** Source-file handedness. The canonical scene is always right-handed. */
+export type WorldHandedness = "right" | "left";
+
+/**
+ * Source-file forward axis. The canonical scene faces +Z.
+ * Z-up sources default to -Y, which is a proper rotation into that frame.
+ */
+export type WorldFrontAxis = "+X" | "-X" | "+Y" | "-Y" | "+Z" | "-Z";
+
 export interface WorldElement {
   id: string;
   name: string;
@@ -57,6 +66,16 @@ export interface WorldAsset {
   rootUri: string;
   previewUri?: string;
   coordinateSystem: "Y_UP" | "Z_UP";
+  /**
+   * Source handedness. Omitted on legacy payloads; `normalizeWorldAsset` fills `"right"`.
+   * Canonical scene handedness lives on `SCENE_COORDINATE_CONTRACT` and stays `"right"`.
+   */
+  handedness?: WorldHandedness;
+  /**
+   * Source asset forward axis. Omitted on legacy payloads.
+   * Y-up defaults to `"+Z"`. Z-up defaults to `"-Y"` so import is a proper rotation into canonical +Z.
+   */
+  frontAxis?: WorldFrontAxis;
   unitScaleMeters: number;
   bounds?: BoundingBox;
   semanticTags: string[];

@@ -1,4 +1,9 @@
+import { worldInstancesPackageSchema, type WorldInstancesPackage } from "../../domain/worlds/instancesPackage";
 import { normalizeWorldAsset } from "../../domain/worlds/normalize";
+import {
+  worldDirectoryManifestSchema,
+  worldElementsPackageSchema,
+} from "../../domain/worlds/packageSchema";
 import type { WorldAsset, WorldElement } from "../../domain/worlds/types";
 /**
  * On-disk World package: manifest.json alongside elements.json and engine artifacts.
@@ -65,45 +70,24 @@ export const serializeWorldDirectoryManifest = (manifest: WorldDirectoryManifest
   JSON.stringify(manifest, null, 2);
 
 export const deserializeWorldDirectoryManifest = (raw: string): WorldDirectoryManifest => {
-  const parsed: unknown = JSON.parse(raw);
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("Invalid world manifest payload.");
-  }
-  const m = parsed as Partial<WorldDirectoryManifest>;
-  if (
-    typeof m.id !== "string" ||
-    typeof m.name !== "string" ||
-    !Array.isArray(m.files) ||
-    typeof m.proxyKind !== "string" ||
-    typeof m.representation !== "string" ||
-    typeof m.rootUri !== "string"
-  ) {
-    throw new Error("Invalid world manifest fields.");
-  }
-  return {
-    id: m.id,
-    name: m.name,
-    files: m.files.filter((p): p is string => typeof p === "string"),
-    proxyKind: m.proxyKind as WorldAsset["proxyKind"],
-    representation: m.representation as WorldAsset["representation"],
-    rootUri: m.rootUri,
-  };
+  const parsed = worldDirectoryManifestSchema.safeParse(JSON.parse(raw));
+  if (!parsed.success) throw new Error("Invalid world manifest payload.");
+  return parsed.data;
 };
 
 export const serializeWorldElements = (pkg: WorldElementsPackage): string => JSON.stringify(pkg, null, 2);
 
 export const deserializeWorldElements = (raw: string): WorldElementsPackage => {
-  const parsed: unknown = JSON.parse(raw);
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("Invalid world elements payload.");
-  }
-  const m = parsed as Partial<WorldElementsPackage>;
-  if (typeof m.worldId !== "string" || !Array.isArray(m.elements)) {
-    throw new Error("Invalid world elements fields.");
-  }
-  return {
-    version: typeof m.version === "number" ? m.version : 1,
-    worldId: m.worldId,
-    elements: m.elements as WorldElement[],
-  };
+  const parsed = worldElementsPackageSchema.safeParse(JSON.parse(raw));
+  if (!parsed.success) throw new Error("Invalid world elements payload.");
+  return parsed.data;
+};
+
+export const serializeWorldInstances = (pkg: WorldInstancesPackage): string =>
+  JSON.stringify(worldInstancesPackageSchema.parse(pkg), null, 2);
+
+export const deserializeWorldInstances = (raw: string): WorldInstancesPackage => {
+  const parsed = worldInstancesPackageSchema.safeParse(JSON.parse(raw));
+  if (!parsed.success) throw new Error("Invalid world instances payload.");
+  return parsed.data;
 };
