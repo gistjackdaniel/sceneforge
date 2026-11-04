@@ -123,9 +123,9 @@ describe("camera path", () => {
     });
     expect(second.takes.map((take) => take.name)).toEqual(["Take 1", "Take 2"]);
     expect(second.keyframes[0]?.position).toEqual([9, 0, 0]);
-    const selected = selectCameraTake(second, "take-1");
+    const selected = selectCameraTake(second, first.takes[0].id);
     expect(selected.keyframes[0]?.position).toEqual([0, 0, 0]);
-    expect(deleteCameraTake(second, "take-2").takes).toHaveLength(1);
+    expect(deleteCameraTake(second, second.takes[1].id).takes).toHaveLength(1);
   });
 
   it("writes K poses into the active take", () => {

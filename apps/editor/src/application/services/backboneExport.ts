@@ -1,4 +1,5 @@
 import type { Project } from "../../domain/project/types";
+import { resolveAuthoringFps } from "../../domain/graph/authoringFps";
 import { cameraPathParamsFromNode } from "../../domain/graph/cameraPath";
 import { lensNodeIdForClip, lensParamsFromNode } from "../../domain/graph/lens";
 import { BackboneCameraBuilder, type BackboneCamera } from "../../domain/rendering/backboneV01";
@@ -36,11 +37,17 @@ export const buildBackboneCameraForClip = (
   const lensNode = project.nodes[lensNodeIdForClip(clip.id)];
   const params = cameraPathParamsFromNode(pathNode.parameters ?? {});
   const lens = lensParamsFromNode(lensNode?.parameters ?? {});
+  const sequence = project.sequences[project.activeSequenceId];
+  const fps = resolveAuthoringFps({
+    override: options?.fps,
+    shot: clip,
+    sequence,
+  });
   return BackboneCameraBuilder.buildFromCameraPath({
     params,
     lens,
     imageSize,
-    fps: options?.fps,
+    fps,
     numFrames: options?.numFrames ?? clip.durationFrames ?? clip.duration,
     near: options?.near,
     far: options?.far,
