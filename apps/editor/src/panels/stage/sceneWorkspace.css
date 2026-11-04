@@ -121,6 +121,17 @@
 .scene-source-image > span.is-negative { background: #a44235; }
 .scene-upload input { max-width: 100%; font-size: 9px; }
 .scene-camera-preview-label { position: absolute; bottom: 17px; right: 17px; padding: 3px 6px; color: #d5e7da; background: #131e18c9; font-size: 8px; pointer-events: none; }
+.interaction-preview { position: absolute; inset: 0; }
+.interaction-stage, .interaction-stage canvas { width: 100%; height: 100%; display: block; }
+.interaction-legend, .interaction-transport { position: absolute; z-index: 5; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.interaction-legend { top: 12px; left: 64px; right: 16px; color: #d5e4dc; font-size: 11px; pointer-events: none; padding: 6px 8px; border-radius: 6px; background: #101511cc; }
+.interaction-legend strong { font-weight: 600; }
+.interaction-contact { padding: 1px 6px; border-radius: 99px; background: #24302b; }
+.interaction-contact.is-hand_hand { color: #ffd166; }
+.interaction-contact.is-hand_object { color: #6ee7ff; }
+.interaction-contact.is-object_surface { color: #b6f5b6; }
+.interaction-transport { left: 64px; right: 16px; bottom: 12px; }
+.interaction-transport input[type="range"] { flex: 1; min-width: 80px; }
 @container (max-width: 560px) {
   .scene-title > span:last-child { display: none; }
   .scene-header { padding: 8px; gap: 8px; }
