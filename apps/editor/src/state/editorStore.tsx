@@ -651,7 +651,7 @@ const createInitialProject = (): Project => {
 const createInitialState = (): EditorState => {
   const project = createInitialProject();
   const forcedPanel =
-    typeof window !== "undefined"
+    import.meta.env.DEV && typeof window !== "undefined"
       ? new URLSearchParams(window.location.search).get("panel")
       : null;
   return {

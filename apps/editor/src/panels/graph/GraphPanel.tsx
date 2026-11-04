@@ -17,7 +17,9 @@ export const GraphPanel = () => {
   const focusNodeId = ui.highlightedNodeIds[0] ?? ui.selectedNodeId;
   const focusNode = project.nodes[focusNodeId];
   const initialQuery =
-    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("q") ?? "" : "";
+    import.meta.env.DEV && typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("q") ?? ""
+      : "";
   const [finderQuery, setFinderQuery] = useState(initialQuery);
   const matches = useMemo(
     () =>
