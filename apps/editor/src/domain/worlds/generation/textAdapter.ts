@@ -1,7 +1,7 @@
 import type { ModelCondition } from "../../rendering/request";
 import { isWorldGenLaneEnabled } from "./featureFlags";
 import { resolveWorldAssetId, type WorldTargetScope } from "./resolveTarget";
-import { worldGenerationRequestSchema, type WorldGenerationRequest } from "./types";
+import { createWorldGenerationRequestId, worldGenerationRequestSchema, type WorldGenerationRequest } from "./types";
 
 export interface TextWorldAdapterInput extends WorldTargetScope {
   prompt: string;
@@ -38,7 +38,7 @@ export const buildTextWorldGenerationRequest = (input: TextWorldAdapterInput): W
   }
 
   const request: WorldGenerationRequest = {
-    requestId: `wreq-${Date.now().toString(36)}`,
+    requestId: createWorldGenerationRequestId(),
     kind: "text_to_world",
     targetWorldAssetId,
     baseWorldAssetId,

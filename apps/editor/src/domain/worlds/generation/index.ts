@@ -4,7 +4,7 @@ export {
   __setWorldGenLaneEnabledForTests,
 } from "./featureFlags";
 export type { WorldGenerationRequest, WorldGenerationRequestKind } from "./types";
-export { worldGenerationRequestSchema } from "./types";
+export { createWorldGenerationRequestId, modelConditionTypes, worldGenerationRequestSchema } from "./types";
 export { resolveWorldAssetId, type WorldTargetScope } from "./resolveTarget";
 export { buildTextWorldGenerationRequest } from "./textAdapter";
 export { buildVideoWorldGenerationRequest } from "./videoAdapter";

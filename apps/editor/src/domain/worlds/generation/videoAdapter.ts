@@ -1,7 +1,7 @@
 import type { ModelCondition } from "../../rendering/request";
 import { isWorldGenLaneEnabled } from "./featureFlags";
 import { resolveWorldAssetId, type WorldTargetScope } from "./resolveTarget";
-import { worldGenerationRequestSchema, type WorldGenerationRequest } from "./types";
+import { createWorldGenerationRequestId, worldGenerationRequestSchema, type WorldGenerationRequest } from "./types";
 
 export interface VideoWorldAdapterInput extends WorldTargetScope {
   /** Name, alias, tag, or an existing WorldAsset.id. */
@@ -73,7 +73,7 @@ export const buildVideoWorldGenerationRequest = (input: VideoWorldAdapterInput):
   });
 
   const request: WorldGenerationRequest = {
-    requestId: `wreq-${Date.now().toString(36)}`,
+    requestId: createWorldGenerationRequestId(),
     kind: "video_to_world",
     targetWorldAssetId,
     baseWorldAssetId,

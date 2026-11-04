@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { WorldAsset } from "../types";
-import type { ModelCondition } from "../../rendering/request";
+import type { ConditionType, ModelCondition } from "../../rendering/request";
 
 export type WorldGenerationRequestKind = "text_to_world" | "video_to_world";
 
@@ -32,22 +32,34 @@ export interface WorldGenerationRequest {
   metadata?: Record<string, unknown>;
 }
 
-// Minimal Zod schema for ModelCondition without re-defining WorldAsset schemas.
-export const modelConditionSchema = z.object({
+/**
+ * Kept in lockstep with `ConditionType`. Adding a condition type without updating
+ * this list fails compilation via `assertConditionTypesInSync`.
+ */
+export const modelConditionTypes = [
+  "text",
+  "image",
+  "video",
+  "depth",
+  "pose",
+  "mask",
+  "camera",
+  "motion",
+  "world_reference",
+] as const satisfies readonly ConditionType[];
+
+const assertConditionTypesInSync = <T extends never>(): void => {
+  void (null as T);
+};
+
+assertConditionTypesInSync<Exclude<ConditionType, (typeof modelConditionTypes)[number]>>();
+assertConditionTypesInSync<Exclude<(typeof modelConditionTypes)[number], ConditionType>>();
+
+// Shape follows ModelCondition. WorldAsset itself is not re-declared here.
+export const modelConditionSchema: z.ZodType<ModelCondition> = z.object({
   id: z.string(),
-  type: z.enum([
-    "text",
-    "image",
-    "video",
-    "depth",
-    "pose",
-    "mask",
-    "camera",
-    "motion",
-    "world_reference",
-  ] as const),
+  type: z.enum(modelConditionTypes),
   assetId: z.string().optional(),
-  // Payload is connector/model-specific; keep permissive but bounded to plain objects.
   payload: z.record(z.string(), z.unknown()).optional(),
   weight: z.number().optional(),
 });
@@ -64,4 +76,16 @@ export const worldGenerationRequestSchema = z.object({
 });
 
 export type WorldGenerationRequestDto = z.infer<typeof worldGenerationRequestSchema>;
+
+let requestSequence = 0;
+
+/**
+ * Id for one lane request. A counter plus `randomUUID` keeps two calls in the
+ * same millisecond distinct. This id is not a WorldAsset id.
+ */
+export const createWorldGenerationRequestId = (): string => {
+  requestSequence += 1;
+  const unique = globalThis.crypto?.randomUUID?.() ?? requestSequence.toString(36);
+  return `wreq-${Date.now().toString(36)}-${requestSequence.toString(36)}-${unique}`;
+};
 

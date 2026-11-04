@@ -51,6 +51,23 @@ describe("TextWorldGenerationAdapter", () => {
     expect(JSON.stringify(req)).not.toContain("거실");
   });
 
+  it("assigns a distinct request id on each build", () => {
+    const { apartment, worlds } = scopedWorlds();
+    const first = buildTextWorldGenerationRequest({
+      prompt: "one",
+      targetRef: apartment.id,
+      worlds,
+    });
+    const second = buildTextWorldGenerationRequest({
+      prompt: "two",
+      targetRef: apartment.id,
+      worlds,
+    });
+    expect(first.requestId).not.toBe(second.requestId);
+    expect(first.requestId.startsWith("wreq-")).toBe(true);
+    expect(second.requestId.startsWith("wreq-")).toBe(true);
+  });
+
   it("is gated by the feature flag and does not resolve while disabled", () => {
     __setWorldGenLaneEnabledForTests(false);
     expect(isWorldGenLaneEnabled()).toBe(false);
