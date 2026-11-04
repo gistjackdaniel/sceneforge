@@ -9,6 +9,7 @@ export {
   type SmplxPose,
   type SmplxKeyframe,
   type SmplxTrack,
+  type JointTarget,
 } from "./poseTrack";
 export { posePreset, applyHandPreset, POSE_PRESETS, type PosePresetId, type HandPresetId } from "./presets";
 export { exportBackboneSmplxForClip, type ExportOptions } from "./exportBackbone";

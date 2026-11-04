@@ -9,16 +9,25 @@ import { createClipVariant, setActiveVariant } from "../../domain/timeline/varia
 import { linkWorldToClip } from "../services/worldLinking";
 import { applyCameraRigToProject } from "../services/cameraCraft";
 import type { CommandResult, DomainCommand, DomainEvent } from "./types";
-import { smplxTrackSchema, upsertSmplxKeyframe, removeSmplxKeyframe, setJointAxisAngleAtFrame } from "../../domain/performance/poseTrack";
+import { smplxTrackSchema, upsertSmplxKeyframe, removeSmplxKeyframe, setJointAxisAngleAtFrame, type SmplxTrack } from "../../domain/performance/poseTrack";
 import { posePreset, applyHandPreset } from "../../domain/performance/presets";
 import { performancePlanNodeIdForClip, performancePlanFromNode } from "../../domain/performance";
 import { createEmptyClipDraft } from "../../domain/generation/clipDraft";
+import { cameraPathParamsFromNode, deleteCameraKeyframe, keyframeAtExactFrame, upsertCameraKeyframe } from "../../domain/graph/cameraPath";
+import { lensNodeIdForClip, lensParamsFromNode } from "../../domain/graph/lens";
 
 const event = (type: DomainEvent["type"], payload: Record<string, unknown>, timestamp: string): DomainEvent => ({
   type,
   timestamp,
   payload,
 });
+
+const fallbackSmplxTrack = (parameters: Record<string, unknown>): SmplxTrack => {
+  const actorElementId = typeof parameters.actorElementId === "string" && parameters.actorElementId.length > 0
+    ? parameters.actorElementId
+    : "actor";
+  return { actorElementId, interpolation: "slerp", keyframes: [] };
+};
 
 export interface ApplyCommandContext {
   timestamp: string;
@@ -48,7 +57,7 @@ export const applyCommand = (
       const parsed = smplxTrackSchema.safeParse(node.parameters);
       const track = parsed.success
         ? parsed.data
-        : { actorElementId: String((node.parameters as any)?.actorElementId ?? "actor"), interpolation: "slerp", keyframes: [] };
+        : fallbackSmplxTrack(node.parameters);
       const previous = track.keyframes;
       const nextTrack = upsertSmplxKeyframe(track, { frame: command.frame, pose: command.pose });
       const patched = {
@@ -115,7 +124,7 @@ export const applyCommand = (
       const parsed = smplxTrackSchema.safeParse(node.parameters);
       const track = parsed.success
         ? parsed.data
-        : { actorElementId: String((node.parameters as any)?.actorElementId ?? "actor"), interpolation: "slerp", keyframes: [] };
+        : fallbackSmplxTrack(node.parameters);
       const previous = track.keyframes;
       const nextTrack = removeSmplxKeyframe(track, command.frame);
       const patched = {
@@ -156,7 +165,7 @@ export const applyCommand = (
       const parsed = smplxTrackSchema.safeParse(node.parameters);
       const track = parsed.success
         ? parsed.data
-        : { actorElementId: String((node.parameters as any)?.actorElementId ?? "actor"), interpolation: "slerp", keyframes: [] };
+        : fallbackSmplxTrack(node.parameters);
       const previous = track.keyframes;
       const moved = track.keyframes.find((k) => k.frame === command.from);
       const without = removeSmplxKeyframe(track, command.from);
@@ -199,7 +208,7 @@ export const applyCommand = (
       const parsed = smplxTrackSchema.safeParse(node.parameters);
       const track = parsed.success
         ? parsed.data
-        : { actorElementId: String((node.parameters as any)?.actorElementId ?? "actor"), interpolation: "slerp", keyframes: [] };
+        : fallbackSmplxTrack(node.parameters);
       const previous = track.keyframes;
       let base = posePreset(command.presetId);
       if (command.hand) {
@@ -244,9 +253,9 @@ export const applyCommand = (
       const parsed = smplxTrackSchema.safeParse(node.parameters);
       const track = parsed.success
         ? parsed.data
-        : { actorElementId: String((node.parameters as any)?.actorElementId ?? "actor"), interpolation: "slerp", keyframes: [] };
+        : fallbackSmplxTrack(node.parameters);
       const before = track.keyframes;
-      const { track: nextTrack } = setJointAxisAngleAtFrame(track, command.frame, command.target as any, command.axisAngle);
+      const { track: nextTrack } = setJointAxisAngleAtFrame(track, command.frame, command.target, command.axisAngle);
       const patched = {
         ...node,
         parameters: { ...node.parameters, keyframes: nextTrack.keyframes },
@@ -314,6 +323,122 @@ export const applyCommand = (
           command,
           inverse: { type: "DELETE_NODE", nodeId: node.id },
           events: [event("NodeCreated", { nodeId: node.id }, timestamp)],
+        },
+      };
+    }
+    case "ADD_CAMERA_KEYFRAME":
+    case "UPDATE_CAMERA_KEYFRAME":
+    case "REMOVE_CAMERA_KEYFRAME": {
+      const clip = project.clips[command.clipId];
+      if (!clip) {
+        return fail("Clip not found.");
+      }
+      const pathNodeId = clip.cameraPathNodeId ?? clip.cameraTrajectoryNodeId ?? `node-${clip.id}-trajectory`;
+      const node = project.nodes[pathNodeId];
+      if (!node) {
+        return fail("CameraPathNode not found.");
+      }
+      const previousParams = cameraPathParamsFromNode(node.parameters);
+      const lens = lensParamsFromNode(project.nodes[lensNodeIdForClip(clip.id)]?.parameters ?? {});
+      const frame = Math.max(0, Math.floor(command.t));
+      let nextParams = previousParams;
+      let inverse: DomainCommand | undefined = undefined;
+      if (command.type === "REMOVE_CAMERA_KEYFRAME") {
+        const existing = keyframeAtExactFrame(previousParams, frame);
+        if (!existing) {
+          // No-op removal is still ok; nothing changes.
+          return {
+            project,
+            result: { ok: true, command, events: [] },
+          };
+        }
+        nextParams = deleteCameraKeyframe(previousParams, frame);
+        inverse = {
+          type: "ADD_CAMERA_KEYFRAME",
+          clipId: clip.id,
+          t: frame,
+          position: existing.position,
+          quaternion: existing.rotation,
+          focalLengthMm: existing.focalLengthMm,
+          focusDistanceM: existing.focusDistanceM,
+          aperture: existing.aperture,
+        };
+      } else {
+        const keyframe = {
+          frame,
+          position: command.position,
+          rotation: command.quaternion,
+          focalLengthMm: command.focalLengthMm ?? lens.focalLengthMm ?? 35,
+          focusDistanceM: command.focusDistanceM ?? lens.focusDistanceM,
+          aperture: command.aperture ?? lens.aperture,
+        };
+        const existing = keyframeAtExactFrame(previousParams, frame);
+        nextParams = upsertCameraKeyframe(previousParams, keyframe);
+        if (command.type === "ADD_CAMERA_KEYFRAME" && existing) {
+          // Treat add on colliding frame as update for invertibility.
+          inverse = {
+            type: "UPDATE_CAMERA_KEYFRAME",
+            clipId: clip.id,
+            t: frame,
+            position: existing.position,
+            quaternion: existing.rotation,
+            focalLengthMm: existing.focalLengthMm,
+            focusDistanceM: existing.focusDistanceM,
+            aperture: existing.aperture,
+            previous: {
+              position: command.position,
+              quaternion: command.quaternion,
+              focalLengthMm: keyframe.focalLengthMm,
+              focusDistanceM: keyframe.focusDistanceM,
+              aperture: keyframe.aperture,
+            },
+          };
+        } else if (command.type === "ADD_CAMERA_KEYFRAME") {
+          inverse = { type: "REMOVE_CAMERA_KEYFRAME", clipId: clip.id, t: frame };
+        } else {
+          // UPDATE
+          inverse = {
+            type: "UPDATE_CAMERA_KEYFRAME",
+            clipId: clip.id,
+            t: frame,
+            position: existing?.position ?? command.position,
+            quaternion: existing?.rotation ?? command.quaternion,
+            focalLengthMm: existing?.focalLengthMm,
+            focusDistanceM: existing?.focusDistanceM,
+            aperture: existing?.aperture,
+            previous: {
+              position: command.position,
+              quaternion: command.quaternion,
+              focalLengthMm: keyframe.focalLengthMm,
+              focusDistanceM: keyframe.focusDistanceM,
+              aperture: keyframe.aperture,
+            },
+          };
+        }
+      }
+      const parameters = { ...node.parameters, ...nextParams };
+      const patched = { ...node, parameters, params: parameters, updatedAt: timestamp };
+      patched.contentHash = computeNodeContentHash(patched);
+      const withNode: Project = { ...project, nodes: { ...project.nodes, [node.id]: patched } };
+      const { nodes, result: dirty } = applyDirtyEventToNodes(
+        {
+          nodes: withNode.nodes,
+          references: withNode.references,
+          clipGraphs: withNode.clipGraphs,
+          dependencyMap: withNode.dependencyMap,
+        },
+        { sourceNodeId: node.id, reason: "params_changed", timestamp },
+      );
+      return {
+        project: { ...withNode, nodes },
+        result: {
+          ok: true,
+          command,
+          inverse,
+          events: [
+            event("NodeParamsChanged", { nodeId: node.id, keyframeFrame: frame }, timestamp),
+            event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
+          ],
         },
       };
     }
@@ -942,6 +1067,32 @@ export const applyCommand = (
           command,
           inverse: { type: "SET_DRAFT_MODEL", clipId: command.clipId, modelId: previous },
           events: [{ type: "NodeUiChanged", timestamp, payload: { clipId: command.clipId, modelId: command.modelId } }],
+        },
+      };
+    }
+    case "APPLY_COMMANDS": {
+      let nextProject: Project = project;
+      const inverses: DomainCommand[] = [];
+      const events: DomainEvent[] = [];
+      for (const sub of command.commands) {
+        const applied = applyCommand(nextProject, sub, { timestamp });
+        if (!applied.result.ok) {
+          // On failure, stop and return failure without partial rollback (caller may handle).
+          return fail(applied.result.reason ?? "Batch command failed.");
+        }
+        nextProject = applied.project;
+        events.push(...applied.result.events);
+        if (applied.result.inverse) {
+          inverses.push(applied.result.inverse);
+        }
+      }
+      return {
+        project: nextProject,
+        result: {
+          ok: true,
+          command,
+          inverse: inverses.length ? { type: "APPLY_COMMANDS", commands: inverses.reverse(), logMessage: command.logMessage } : undefined,
+          events,
         },
       };
     }

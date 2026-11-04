@@ -30,3 +30,12 @@ export {
   type ViewportLoadState,
   type ViewportRepresentationPlan,
 } from "./viewportRepresentation";
+export {
+  createWorldQueryIndex,
+  createWorldTargetResolver,
+  type WorldQueryIndex,
+  type TargetResolver,
+  type TargetKind,
+  type TargetMatch,
+  type ResolveContext,
+} from "./query";
