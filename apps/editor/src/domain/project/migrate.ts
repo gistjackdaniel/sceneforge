@@ -235,6 +235,8 @@ export const migrateProject = (
     clips: synced.clips,
     sequences: synced.sequences,
     shots: synced.shots,
+    assets: synced.assets,
+    timestamp: synced.updatedAt,
   });
   return { ...synced, clips: withShots.clips, shots: withShots.shots };
 };

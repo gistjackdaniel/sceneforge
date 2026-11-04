@@ -78,7 +78,7 @@ import {
   type CameraTakeSource,
 } from "../domain/graph/cameraPath";
 import { clipDurationFrames, clipStartFrame, withClipTiming } from "../domain/timeline/timing";
-import { createPersistentId, createShotForClip, legacyShotId } from "../domain/timeline";
+import { assetRevisionRefFromRecord, createPersistentId, createShotForClip, legacyShotId } from "../domain/timeline";
 import { normalizeLegacyRig, type CameraRigPreset } from "../domain/graph/cameraRig";
 import { defaultLensParams, lensNodeIdForClip, lensParamsFromNode } from "../domain/graph/lens";
 import { validateLookAtElement } from "../application/services/cameraCraft";
@@ -622,6 +622,8 @@ const createInitialProject = (): Project => {
     clip,
     sequenceFps: sequence.fps,
     id: legacyShotId(clip.id),
+    createdAt: now(),
+    assetRefs: [assetRevisionRefFromRecord({ id: `asset-${world.id}`, version: world.version ?? 1 })],
   });
   clip.shotId = shot.id;
 
@@ -937,6 +939,7 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
       clipNodes.forEach((node) => {
         nodes[node.id] = node;
       });
+      const inheritedAsset = inheritWorldId ? project.assets[`asset-${inheritWorldId}`] : undefined;
       const shot = createShotForClip({
         clip: {
           id: clipId,
@@ -945,6 +948,8 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         },
         sequenceFps: activeSequence.fps,
         id: createPersistentId("sht"),
+        createdAt: now(),
+        assetRefs: inheritedAsset ? [assetRevisionRefFromRecord(inheritedAsset)] : [],
       });
       const clip: TimelineClip = {
         id: clipId,
