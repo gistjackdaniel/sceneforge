@@ -16,6 +16,8 @@ export type CreateLoopClockOptions = {
   fps?: number;
   /** Start immediately. Default true. */
   autoplay?: boolean;
+  /** When false, clock stops after one pass at the end (Record takes). Default true. */
+  loop?: boolean;
 };
 
 /**
@@ -26,6 +28,7 @@ export const createLoopClock = (options: CreateLoopClockOptions): LoopClock & { 
   const duration = Math.max(0.001, options.duration);
   const fps = Math.max(1, Math.floor(options.fps ?? 24));
   const frameInterval = 1000 / fps;
+  const shouldLoop = options.loop !== false;
   let playing = Boolean(options.autoplay ?? true);
   let lastTick = typeof performance !== "undefined" ? performance.now() : Date.now();
   let acc = 0; // milliseconds within loop
@@ -35,9 +38,19 @@ export const createLoopClock = (options: CreateLoopClockOptions): LoopClock & { 
 
   const nowMs = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
-  const notify = () => {
-    const tSec = (acc / 1000) % duration;
+  const notify = (tSec: number) => {
     listeners.forEach((cb) => cb(tSec));
+  };
+
+  const stopInternal = () => {
+    playing = false;
+    if (typeof cancelAnimationFrame !== "undefined") {
+      cancelAnimationFrame(rafId);
+    }
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
   };
 
   const loop = () => {
@@ -46,8 +59,19 @@ export const createLoopClock = (options: CreateLoopClockOptions): LoopClock & { 
     const delta = now - lastTick;
     if (delta >= frameInterval - 0.5) {
       lastTick = now;
-      acc = (acc + delta) % (duration * 1000);
-      notify();
+      const durationMs = duration * 1000;
+      if (shouldLoop) {
+        acc = (acc + delta) % durationMs;
+        notify(acc / 1000);
+      } else {
+        acc = Math.min(durationMs, acc + delta);
+        const tSec = acc / 1000;
+        notify(Math.min(duration, tSec));
+        if (acc >= durationMs) {
+          stopInternal();
+          return;
+        }
+      }
     }
     if (typeof requestAnimationFrame !== "undefined") {
       rafId = requestAnimationFrame(loop);
@@ -68,14 +92,7 @@ export const createLoopClock = (options: CreateLoopClockOptions): LoopClock & { 
   };
 
   const stop = () => {
-    playing = false;
-    if (typeof cancelAnimationFrame !== "undefined") {
-      cancelAnimationFrame(rafId);
-    }
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      timeoutId = null;
-    }
+    stopInternal();
   };
 
   // Kick off
@@ -88,7 +105,7 @@ export const createLoopClock = (options: CreateLoopClockOptions): LoopClock & { 
   }
 
   return {
-    getTime: () => (acc / 1000) % duration,
+    getTime: () => (shouldLoop ? (acc / 1000) % duration : Math.min(duration, acc / 1000)),
     duration,
     get isPlaying() {
       return playing;

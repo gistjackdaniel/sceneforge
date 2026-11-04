@@ -136,8 +136,8 @@ describe("recorded camera take to Backbone v0.1", () => {
       type: "ADD_CAMERA_KEYFRAME" as const,
       clipId: "clip-a",
       t: i * 8,
-      position: [i * 0.1, 1.5, 2.0 - i * 0.1],
-      quaternion: [0, 0, 0, 1],
+      position: [i * 0.1, 1.5, 2.0 - i * 0.1] as [number, number, number],
+      quaternion: [0, 0, 0, 1] as [number, number, number, number],
       focalLengthMm: 35,
     }));
     const applied = executeCommand(project, bus, { type: "APPLY_COMMANDS", commands: cmds }, now);

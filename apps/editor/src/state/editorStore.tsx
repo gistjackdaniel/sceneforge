@@ -65,12 +65,17 @@ import { collectAllEdges, markDirty } from "../domain/graph/dirty";
 import { computeNodeContentHash } from "../domain/graph/cacheKey";
 import {
   cameraPathParamsFromNode,
+  commitCameraTake,
   deleteCameraKeyframe,
+  deleteCameraTake,
   interpolateCameraPose,
   isFrameInsideClip,
   keyframeAtExactFrame,
+  selectCameraTake,
   trimKeyframesToDuration,
   upsertCameraKeyframe,
+  type CameraKeyframe,
+  type CameraTakeSource,
 } from "../domain/graph/cameraPath";
 import { clipDurationFrames, clipStartFrame, withClipTiming } from "../domain/timeline/timing";
 import { normalizeLegacyRig, type CameraRigPreset } from "../domain/graph/cameraRig";
@@ -303,6 +308,15 @@ type EditorAction =
     }
   | { type: "set-look-at"; clipId: string; elementId?: string; trackingStrength?: number }
   | { type: "delete-camera-keyframe"; clipId: string; frame: number }
+  | {
+      type: "commit-camera-take";
+      clipId: string;
+      keyframes: CameraKeyframe[];
+      source: CameraTakeSource;
+      name?: string;
+    }
+  | { type: "select-camera-take"; clipId: string; takeId: string }
+  | { type: "delete-camera-take"; clipId: string; takeId: string }
   | { type: "trim-camera-keyframes"; clipId: string }
   | {
       type: "commit-object-transform";
@@ -1153,16 +1167,19 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
     case "set-main-panel":
       return { ...state, ui: { ...state.ui, mainPanel: action.panel } };
     case "scrub-playhead": {
-      const nextProject = updateProjectMetadata({
-        ...project,
-        sequences: {
-          ...project.sequences,
-          [activeSequence.id]: { ...activeSequence, playhead: action.playhead },
-        },
-      });
+      if (activeSequence.playhead === action.playhead) {
+        return state;
+      }
+      // Playhead moves many times per second during Play/Record — never log each tick.
       return {
-        project: nextProject,
-        ui: appendWorkflowLog(state.ui, `Playhead moved to ${action.playhead}f.`),
+        ...state,
+        project: updateProjectMetadata({
+          ...project,
+          sequences: {
+            ...project.sequences,
+            [activeSequence.id]: { ...activeSequence, playhead: action.playhead },
+          },
+        }),
       };
     }
     case "trim-clip": {
@@ -2391,6 +2408,76 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         state,
         { type: "UPDATE_NODE_PARAMS", nodeId, patch: { ...deleteCameraKeyframe(current, action.frame) } },
         `Camera keyframe at ${action.frame}f deleted.`,
+      );
+    }
+    case "commit-camera-take": {
+      const clip = project.clips[action.clipId];
+      if (!clip) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
+      }
+      if (!action.keyframes.length) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "Recorded take has no camera poses.") };
+      }
+      const nodeId = clip.cameraPathNodeId ?? cameraPathNodeIdForClip(clip.id);
+      const node = project.nodes[nodeId];
+      if (!node) {
+        return state;
+      }
+      const current = cameraPathParamsFromNode(node.parameters);
+      const next = commitCameraTake(current, {
+        keyframes: action.keyframes,
+        source: action.source,
+        name: action.name,
+      });
+      const take = next.takes[next.takes.length - 1];
+      return runDomainCommand(
+        state,
+        { type: "UPDATE_NODE_PARAMS", nodeId, patch: { ...next } },
+        `${take?.name ?? "Take"} saved (${action.keyframes.length} poses).`,
+      );
+    }
+    case "select-camera-take": {
+      const clip = project.clips[action.clipId];
+      if (!clip) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
+      }
+      const nodeId = clip.cameraPathNodeId ?? cameraPathNodeIdForClip(clip.id);
+      const node = project.nodes[nodeId];
+      if (!node) {
+        return state;
+      }
+      const current = cameraPathParamsFromNode(node.parameters);
+      const next = selectCameraTake(current, action.takeId);
+      if (next.activeTakeId === current.activeTakeId && next.keyframes === current.keyframes) {
+        return state;
+      }
+      const take = next.takes.find((item) => item.id === next.activeTakeId);
+      return runDomainCommand(
+        state,
+        { type: "UPDATE_NODE_PARAMS", nodeId, patch: { ...next } },
+        `${take?.name ?? "Take"} selected for Generate video.`,
+      );
+    }
+    case "delete-camera-take": {
+      const clip = project.clips[action.clipId];
+      if (!clip) {
+        return { ...state, ui: appendWorkflowLog(state.ui, "현재 선택된 클립이 없습니다.") };
+      }
+      const nodeId = clip.cameraPathNodeId ?? cameraPathNodeIdForClip(clip.id);
+      const node = project.nodes[nodeId];
+      if (!node) {
+        return state;
+      }
+      const current = cameraPathParamsFromNode(node.parameters);
+      const removed = current.takes.find((item) => item.id === action.takeId);
+      if (!removed) {
+        return state;
+      }
+      const next = deleteCameraTake(current, action.takeId);
+      return runDomainCommand(
+        state,
+        { type: "UPDATE_NODE_PARAMS", nodeId, patch: { ...next } },
+        `${removed.name} deleted.`,
       );
     }
     case "trim-camera-keyframes": {

@@ -68,16 +68,21 @@ export {
 export { breakLink, makeLocal, overrideValue, type ReferenceOpResult } from "./referenceOps";
 export { topologicalSort, type TopoSortResult } from "./topoSort";
 export {
+  activeCameraTake,
   cameraPathParamsFromNode,
   cameraPoseAtFrame,
+  commitCameraTake,
   defaultCameraPathParams,
   deleteCameraKeyframe,
+  deleteCameraTake,
   interpolateCameraPose,
   isFrameInsideClip,
   keyframeAtExactFrame,
+  listCameraTakes,
   nextKeyframeFrame,
   previousKeyframeFrame,
   sampleCameraPath,
+  selectCameraTake,
   trimKeyframesToDuration,
   upsertCameraKeyframe,
   type CameraInterpolation,
@@ -85,6 +90,8 @@ export {
   type CameraSide,
   type CameraKeyframe,
   type CameraPathParams,
+  type CameraTake,
+  type CameraTakeSource,
   type ScreenDirection,
 } from "./cameraPath";
 export {

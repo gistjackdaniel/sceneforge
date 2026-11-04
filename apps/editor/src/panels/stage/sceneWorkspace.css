@@ -93,10 +93,22 @@
 .scene-workspace .scene-track-name { justify-content: flex-start; padding: 3px 8px; min-height: 28px; min-width: 0; font-size: 10px; }
 .scene-track-name span { text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; }
 .scene-track-name small { color: #819588; }
-.scene-track-lane { position: relative; height: 28px; margin: 0 9px; cursor: crosshair; background: repeating-linear-gradient(to right, #0000 0, #0000 calc(25% - 1px), #89958c16 calc(25% - 1px), #89958c16 25%); border-bottom: 1px solid #3c484024; }
-.scene-workspace .scene-pose-dot { position: absolute; top: 50%; transform: translate(-50%, -50%); min-height: 20px; width: 20px; padding: 0; z-index: 1; color: #8eaf9b; }
+.scene-track-lane { position: relative; height: 28px; margin: 0 9px; cursor: crosshair; touch-action: none; user-select: none; background: repeating-linear-gradient(to right, #0000 0, #0000 calc(25% - 1px), #89958c16 calc(25% - 1px), #89958c16 25%); border-bottom: 1px solid #3c484024; }
+.scene-marquee { position: absolute; top: 2px; bottom: 2px; z-index: 0; pointer-events: none; border: 1px solid #7ec9a8aa; border-radius: 3px; background: #3f8f6a33; }
+.scene-selection-count { color: #b7dcc6; font-size: 10px; }
+.scene-transport button.is-recording { border-color: #e25b4a; color: #ffb4a9; background: #3a1c18; }
+.scene-take-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 0 8px; }
+.scene-take-label { color: #738779; font-size: 8px; letter-spacing: 1px; text-transform: uppercase; }
+.scene-take-empty { color: #819588; font-size: 10px; }
+.scene-take-bar > button { min-height: 24px; padding: 2px 8px; font-size: 10px; gap: 4px; }
+.scene-take-bar > button small { color: #819588; }
+.scene-take-bar > button.is-active-take { border-color: #7ec9a8; background: #24352c; color: #d7f3e2; }
+.scene-take-delete { margin-left: auto; color: #c9a39a; }
+.scene-workspace .scene-pose-dot { position: absolute; top: 50%; transform: translate(-50%, -50%); display: grid; place-items: center; min-height: 20px; width: 20px; padding: 0; z-index: 1; pointer-events: none; color: #8eaf9b; }
 .scene-pose-dot svg { width: 12px; height: 12px; fill: #597564; }
 .scene-pose-dot.is-current svg { fill: #c6ead2; color: #c6ead2; }
+.scene-pose-dot.is-selected { outline: 1px solid #9fe0bb; background: #2f5a4299; border-radius: 4px; }
+.scene-pose-dot.is-selected svg { fill: #d7f3e2; color: #d7f3e2; }
 .scene-playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: #d0e8d7a0; pointer-events: none; }
 .scene-ruler { margin-bottom: 5px; }
 .scene-ruler > span { color: #738779; font-size: 8px; letter-spacing: 1px; padding: 0 8px; }
