@@ -40,6 +40,8 @@ export interface TimelineClip {
   variants?: ClipVariant[];
   /** Clip-scoped world override patch (PRD §2.5) */
   worldOverride?: Record<string, unknown>;
+  /** Production shot document. Sequence placement stays on this clip. */
+  shotId?: string;
   proxyCacheId?: string;
   finalCacheId?: string;
   audioTrackId?: string;

@@ -181,6 +181,11 @@ describe("serialization + migrate", () => {
     expect(migrated.nodes["node-path"].contentHash).toBeUndefined();
     expect(migrated.nodes["node-clip"].contentHash).toBe("abc123");
 
+    const shotId = migrated.clips["clip-1"].shotId ?? "";
+    const shot = migrated.shots?.[shotId];
+    expect(shot?.clipId).toBe("clip-1");
+    expect(shot?.fps).toBe(24);
+    expect(shot?.timeRange).toEqual({ startFrame: 0, endFrame: 100 });
     expect(migrated.clips["clip-1"].cameraPathNodeId).toBe("node-path");
     expect(migrated.clips["clip-1"].performancePlanNodeId).toBe("node-clip-1-performance");
     expect(migrated.nodes["node-clip-1-performance"].kind).toBe("PerformancePlanNode");
