@@ -2,11 +2,13 @@ import { z } from "zod";
 
 // Optional, passthrough-only extension payload shapes for future v0.2.
 // Not validated by default and not emitted unless present.
+// Zod 4의 z.record는 키 스키마가 필요하다. 키는 actor id이며 비밀값이 아니다.
 
 export const identityExtensionSchema = z.object({
   // Per-actor identity: face and voice references (opaque identifiers/URIs)
   actors: z
     .record(
+      z.string(),
       z.object({
         face_ref: z.string().min(1).optional(),
         voice_id: z.string().min(1).optional(),
@@ -25,6 +27,7 @@ export const speechExtensionSchema = z.object({
   // Per-actor speech inputs: audio reference and utterance spans
   actors: z
     .record(
+      z.string(),
       z.object({
         audio_ref: z.string().min(1).optional(),
         utterances: z.array(speechUtteranceSpanSchema).optional(),

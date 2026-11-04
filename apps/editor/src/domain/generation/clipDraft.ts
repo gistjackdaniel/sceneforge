@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { TimelineClip } from "../timeline/types";
-import type { AssetRecord } from "../assets/types";
 
 export type DraftReferenceKind = "image" | "video" | "audio" | "mesh" | "world" | "pose_track" | "camera_path";
 
@@ -136,19 +135,4 @@ export const upsertReference = (references: DraftReference[], ref: DraftReferenc
 
 export const removeReference = (references: DraftReference[], refId: string): DraftReference[] =>
   references.filter((r) => r.id !== refId);
-
-/** Return candidate '@' mention targets by type. */
-export const mentionCandidates = (assets: Record<string, AssetRecord>, opts?: { kinds?: DraftReferenceKind[] }): DraftReference[] => {
-  const allowed = new Set((opts?.kinds ?? ["image", "video", "audio", "mesh", "world"]) as DraftReferenceKind[]);
-  return Object.values(assets)
-    .filter((a) => {
-      if (a.type === "world") return allowed.has("world");
-      if (a.type === "image") return allowed.has("image");
-      if (a.type === "video") return allowed.has("video");
-      if (a.type === "audio") return allowed.has("audio");
-      if (a.type === "mesh" || a.type === "generated_proxy" || a.type === "point_cloud" || a.type === "splat") return allowed.has("mesh");
-      return false;
-    })
-    .map((a) => ({ id: a.id, kind: (a.type === "world" ? "world" : (a.type as "image" | "video" | "audio" | "mesh")), assetId: a.id, label: a.name }));
-};
 

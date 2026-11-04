@@ -12,6 +12,7 @@ import { applyCommand } from "../commands/apply";
 import type { ApplyCommandContext } from "../commands/apply";
 import type { DomainCommand } from "../commands/types";
 import { MODEL_PROFILES } from "../../domain/rendering/modelProfile";
+import { createMeshExampleWorld, createPointCloudExampleWorld, createSplatExampleWorld } from "../../domain/worlds/sampleWorlds";
 
 const now = "2026-01-01T00:00:00.000Z";
 
@@ -268,6 +269,54 @@ describe("Backbone v0.1 unchanged when extensions are absent", () => {
     // Ensure existing v0.1 conditions still present
     expect(request.conditions.some((c) => c.type === "camera")).toBe(true);
     expect(request.conditions.some((c) => c.type === "pose")).toBe(true);
+  });
+});
+
+describe("Prompt target lookup", () => {
+  it("adds a world_reference only for a unique TargetResolver match", () => {
+    const { project, clip } = projectFixture();
+    const world = createMeshExampleWorld();
+    world.localizedNames = { ko: "아파트 거실", en: "Apartment Livingroom" };
+    world.aliases = ["living room", "거실"];
+    const draft = createEmptyClipDraft(clip, {
+      prompt: "Walk toward @거실",
+      durationSeconds: 4,
+      fps: 16,
+      width: 1280,
+      height: 720,
+    });
+    const { request, validation } = buildGenerationRequestFromDraft({
+      project: { ...project, worlds: { [world.id]: world } },
+      clip,
+      nodes: project.nodes,
+      draft,
+    });
+    expect(validation.ok).toBe(true);
+    const worldRef = request.conditions.find((condition) => condition.type === "world_reference");
+    expect(worldRef?.assetId).toBe(world.id);
+    expect(worldRef?.payload?.worldAssetId).toBe(world.id);
+  });
+
+  it("does not attach a world_reference when TargetResolver scores tie", () => {
+    const { project, clip } = projectFixture();
+    const splat = createSplatExampleWorld();
+    const points = createPointCloudExampleWorld();
+    const draft = createEmptyClipDraft(clip, {
+      prompt: "@[Color Block]",
+      durationSeconds: 4,
+      fps: 16,
+      width: 1280,
+      height: 720,
+    });
+    const { request, validation } = buildGenerationRequestFromDraft({
+      project: { ...project, worlds: { [splat.id]: splat, [points.id]: points } },
+      clip,
+      nodes: project.nodes,
+      draft,
+    });
+    expect(validation.ok).toBe(false);
+    expect(validation.issues.some((issue) => issue.field === "prompt" && /more than one world target/.test(issue.message))).toBe(true);
+    expect(request.conditions.some((condition) => condition.type === "world_reference")).toBe(false);
   });
 });
 

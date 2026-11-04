@@ -7,8 +7,9 @@ import { cameraPathParamsFromNode } from "../../domain/graph/cameraPath";
 import { lensNodeIdForClip, lensParamsFromNode } from "../../domain/graph/lens";
 import { GenerationConditionNormalizer } from "../../domain/rendering/conditionNormalizer";
 import { exportBackboneSmplxForClip } from "../../domain/performance/exportBackbone";
-import { normalizeRenderRequest, type RenderRequest, type ValidationResult } from "../../domain/rendering/request";
-import type { ClipDraft } from "../../domain/generation/clipDraft";
+import { normalizeRenderRequest, type RenderRequest } from "../../domain/rendering/request";
+import type { ClipDraft, DraftValidationIssue } from "../../domain/generation/clipDraft";
+import { DraftTargetLookup } from "../../domain/generation/draftTargetLookup";
 import { CameraMovementDescriber } from "../../domain/rendering/cameraMovement";
 import { getModelProfile, validateDraftAgainstProfile } from "../../domain/rendering/modelProfile";
 
@@ -28,7 +29,9 @@ export const generationRequestSchema = z.object({
   height: z.number().int().min(16),
 });
 
-export interface DraftValidationExtended extends ValidationResult {
+export interface DraftValidationExtended {
+  ok: boolean;
+  issues: DraftValidationIssue[];
   warnings: string[];
 }
 
@@ -71,8 +74,27 @@ export const buildGenerationRequestFromDraft = (input: BuildRequestInput): { req
     imageSize: [draft.width, draft.height],
     cameraPath: camera,
     lens,
-    pose: exportBackboneSmplxForClip(project, clip.id, { normalizeToFps: draft.fps }),
+    pose: exportBackboneSmplxForClip(project, clip.id, { fps: draft.fps }),
   }).conditions;
+
+  // @멘션은 World #21 TargetResolver로만 고른다. 모호하면 조건을 넣지 않는다.
+  const targetResolution = DraftTargetLookup.resolvePrompt(project.worlds ?? {}, draft.prompt ?? "", {
+    selectionIds: [],
+    locale: "ko",
+  });
+  for (const match of targetResolution.accepted) {
+    conditions.push({
+      id: `world-target:${match.assetId}:${match.kind}`,
+      type: "world_reference",
+      assetId: match.assetId,
+      payload: {
+        worldAssetId: match.assetId,
+        kind: match.kind,
+        displayName: match.displayName,
+      },
+      weight: 1,
+    });
+  }
 
   // Add hard image conditions if supported by model
   if (hardImages.length > 0 && model.supportsHardImageConditioning) {
@@ -128,11 +150,17 @@ export const buildGenerationRequestFromDraft = (input: BuildRequestInput): { req
   const unsupportedSoft = !model.supportsSoftImageGuidance && softImages.length > 0 ? [`${model.label} does not support soft image guidance.`] : [];
   // If hard requested but unsupported, a validation issue is already emitted; do not add images into conditions above in that case
   const hardUnsupported = hardImages.length > 0 && !model.supportsHardImageConditioning ? [`${model.label} does not support hard image conditioning.`] : [];
+  const targetIssues: DraftValidationIssue[] = targetResolution.ambiguous.map((token) => ({
+    field: "prompt",
+    message: `@${token} matches more than one world target.`,
+    severity: "error",
+  }));
+  const targetWarnings = targetResolution.unresolved.map((token) => `No world target matched @${token}.`);
 
   const validation: DraftValidationExtended = {
-    ok: profileValidation.ok,
-    issues: profileValidation.issues,
-    warnings: [...(profileValidation as any).warnings ?? [], ...promptWarnings, ...unsupportedSoft, ...hardUnsupported],
+    ok: profileValidation.ok && targetIssues.length === 0,
+    issues: [...profileValidation.issues, ...targetIssues],
+    warnings: [...profileValidation.warnings, ...promptWarnings, ...unsupportedSoft, ...hardUnsupported, ...targetWarnings],
   };
 
   // Assign suggestion onto draft if missing; leave to caller to persist via command.
