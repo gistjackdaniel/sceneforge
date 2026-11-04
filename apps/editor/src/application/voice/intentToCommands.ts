@@ -2,19 +2,23 @@ import type { VoiceIntent } from "../ports/IntentParser";
 import type { TargetMatch as ResolvedTarget } from "../../domain/worlds/query";
 import { cameraPathParamsFromNode } from "../../domain/graph/cameraPath";
 import type { Project } from "../../domain/project/types";
-import { placementNodeIdForElement } from "../services/viewportCommit";
+import type { Sequence } from "../../domain/timeline/types";
 import { objectTrackNodeId, objectKeyframeSchema, readObjectTrack, upsertObjectKeyframe } from "../../domain/worlds/sceneObjects";
 import type { DomainCommand } from "../commands/types";
+import { shotFps, toFrame } from "./toFrame";
 
 export interface IntentMappingContext {
   project: Project;
   /** Active clip id required to map to camera/object nodes. */
   clipId: string;
-  /** Loop time in seconds. PRD#16 intended; main currently stores keyframes as frames. */
+  /** Loop time in seconds. Domain keyframe commands store a frame index, not seconds. */
   tSeconds: number;
-  /** Sequence FPS for temporary t→frame compatibility on main (documented in PR). */
-  fps?: number;
 }
+
+const shotForClip = (project: Project, clipId: string): Sequence | undefined => {
+  const owning = Object.values(project.sequences).find((sequence) => sequence.clipIds.includes(clipId));
+  return owning ?? project.sequences[project.activeSequenceId];
+};
 
 export interface IntentMappingResult {
   commands: DomainCommand[];
@@ -25,15 +29,13 @@ export interface IntentMappingResult {
   };
 }
 
-const toFrame = (tSeconds: number, fps = 24): number => Math.max(0, Math.round(tSeconds * fps));
-
 export const mapVoiceIntentToCommands = (
   intent: VoiceIntent,
   resolved: ResolvedTarget[],
   ctx: IntentMappingContext,
 ): IntentMappingResult => {
   const { project, clipId, tSeconds } = ctx;
-  const fps = ctx.fps ?? 24;
+  const fps = shotFps(shotForClip(project, clipId));
   const clip = project.clips[clipId];
   if (!clip) return { commands: [] };
 
@@ -60,7 +62,7 @@ export const mapVoiceIntentToCommands = (
     };
   }
 
-  const frame = toFrame(tSeconds, fps); // Object tracks remain frame-based; camera uses t-seconds DomainCommands
+  const frame = toFrame(tSeconds, fps);
   const commands: DomainCommand[] = [];
 
   if (intent.verb === "look-at") {
@@ -117,7 +119,7 @@ export const mapVoiceIntentToCommands = (
       commands.push({
         type: "UPDATE_CAMERA_KEYFRAME",
         clipId,
-        t: tSeconds,
+        t: frame,
         position: nextPosition,
         quaternion: last.rotation,
       });

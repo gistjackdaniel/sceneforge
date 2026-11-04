@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 import { ruleBasedParser } from "../../infrastructure/voice/IntentParser/ruleBasedParser";
 import type { Project } from "../../domain/project/types";
 import { normalizeWorldAsset } from "../../domain/worlds/normalize";
+import { cameraPathParamsFromNode } from "../../domain/graph/cameraPath";
+import { applyCommand } from "../commands/apply";
+import { readObjectTrack } from "../../domain/worlds/sceneObjects";
 import { mapVoiceIntentToCommands } from "./intentToCommands";
+import type { VoiceIntent } from "../ports/IntentParser";
+import type { TargetMatch } from "../../domain/worlds/query";
 
 const createProject = (): Project => {
   const now = new Date().toISOString();
@@ -95,7 +100,7 @@ describe("intent to command mapper ambiguity/confirmation", () => {
     const project = createProject();
     const parser = ruleBasedParser();
     const intent = parser.parse({ text: "move the wooden chair left 1 meter", locale: "en" })!;
-    const matches = [
+    const matches: TargetMatch[] = [
       { assetId: "world-A", kind: "location", displayName: "Room A", score: 92 },
       { assetId: "world-B", kind: "location", displayName: "Room B", score: 90 },
     ];
@@ -103,11 +108,89 @@ describe("intent to command mapper ambiguity/confirmation", () => {
       project,
       clipId: "c1",
       tSeconds: 1.0,
-      fps: 24,
     });
     expect(result.commands.length).toBe(0);
     expect(result.confirmation?.reason).toBe("ambiguous");
     expect(result.confirmation?.options?.length).toBeGreaterThan(1);
+  });
+});
+
+const moveIntent = (): VoiceIntent => ({
+  verb: "move",
+  targetRefs: [],
+  params: { direction: "left", amount: 1 },
+  confidence: 1,
+  locale: "en",
+});
+
+describe("voice keyframe frame index", () => {
+  it("stores a 2.5s camera move at frame 60 when the shot is 24fps", () => {
+    const project = createProject();
+    const result = mapVoiceIntentToCommands(moveIntent(), [], {
+      project,
+      clipId: "c1",
+      tSeconds: 2.5,
+    });
+    expect(result.commands).toHaveLength(1);
+    const command = result.commands[0];
+    expect(command?.type).toBe("UPDATE_CAMERA_KEYFRAME");
+    if (command?.type !== "UPDATE_CAMERA_KEYFRAME") {
+      return;
+    }
+    expect(command.t).toBe(60);
+    const applied = applyCommand(project, command, { timestamp: "2026-11-04T00:00:00.000Z" });
+    expect(applied.result.ok).toBe(true);
+    const stored = cameraPathParamsFromNode(applied.project.nodes["node-c1-trajectory"].parameters);
+    expect(stored.keyframes.map((key) => key.frame)).toEqual([60]);
+  });
+
+  it("uses Shot.fps when it is not 24", () => {
+    const project = createProject();
+    project.sequences.seq.fps = 30;
+    const result = mapVoiceIntentToCommands(moveIntent(), [], {
+      project,
+      clipId: "c1",
+      tSeconds: 2,
+    });
+    const command = result.commands[0];
+    expect(command?.type).toBe("UPDATE_CAMERA_KEYFRAME");
+    if (command?.type !== "UPDATE_CAMERA_KEYFRAME") {
+      return;
+    }
+    expect(command.t).toBe(60);
+  });
+
+  it("falls back to the default fps when the shot has none", () => {
+    const project = createProject();
+    project.sequences.seq.fps = undefined;
+    const result = mapVoiceIntentToCommands(moveIntent(), [], {
+      project,
+      clipId: "c1",
+      tSeconds: 2,
+    });
+    const command = result.commands[0];
+    expect(command?.type).toBe("UPDATE_CAMERA_KEYFRAME");
+    if (command?.type !== "UPDATE_CAMERA_KEYFRAME") {
+      return;
+    }
+    expect(command.t).toBe(48);
+  });
+
+  it("writes an object pose keyframe at the converted frame", () => {
+    const project = createProject();
+    const result = mapVoiceIntentToCommands(moveIntent(), [
+      { assetId: "e-chair-1", kind: "prop", displayName: "Wooden Chair", score: 1 },
+    ], {
+      project,
+      clipId: "c1",
+      tSeconds: 2.5,
+    });
+    const command = result.commands[0];
+    expect(command?.type).toBe("CREATE_NODE");
+    if (command?.type !== "CREATE_NODE") {
+      return;
+    }
+    expect(readObjectTrack(command.node.parameters)?.keyframes.map((key) => key.frame)).toEqual([60]);
   });
 });
 

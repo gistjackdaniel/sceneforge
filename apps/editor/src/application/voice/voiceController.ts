@@ -17,7 +17,6 @@ export interface VoiceControllerDeps {
     clipId: string | undefined;
     selectionIds?: string[];
     locale?: "ko" | "en";
-    fps?: number;
   };
 }
 
@@ -30,7 +29,7 @@ export const createVoiceController = (deps: VoiceControllerDeps) => {
   });
 
   const unsubscribeSpeech = speech.subscribe((segment) => {
-    const { project, clipId, selectionIds, locale, fps } = getContext();
+    const { project, clipId, selectionIds, locale } = getContext();
     if (!clipId) {
       return;
     }
@@ -45,7 +44,6 @@ export const createVoiceController = (deps: VoiceControllerDeps) => {
       project,
       clipId,
       tSeconds,
-      fps,
     });
     // Defer execution until final transcript unless unambiguous and high-confidence
     if (!segment.isFinal) {

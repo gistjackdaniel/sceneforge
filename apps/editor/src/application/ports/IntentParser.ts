@@ -16,7 +16,7 @@ export const voiceIntentSchema = z.object({
   /** Raw target references as spoken, e.g. ["the chair", "it"] */
   targetRefs: z.array(z.string()).default([]),
   /** Parameters extracted from text. Values are intentionally untyped for forward-compat. */
-  params: z.record(z.any()).default({}),
+  params: z.record(z.string(), z.any()).default({}),
   /** 0..1 confidence for the parser decision */
   confidence: z.number().min(0).max(1).default(1),
   /** Source locale hint, e.g., "ko" | "en". */

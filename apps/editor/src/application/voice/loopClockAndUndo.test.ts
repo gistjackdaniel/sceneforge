@@ -5,6 +5,7 @@ import type { Project } from "../../domain/project/types";
 import { applyCommand } from "../commands/apply";
 import { executeCommand, undoCommand, emptyCommandBusState } from "../commands/bus";
 import { cameraPathParamsFromNode } from "../../domain/graph/cameraPath";
+import { shotFps, toFrame } from "./toFrame";
 
 const createProject = (): Project => {
   const now = new Date().toISOString();
@@ -105,7 +106,7 @@ describe("loop clock + undo for voice-mapped commands", () => {
     const intent = parser.parse({ text: "look at chair", locale: "en" })!;
     // Simulate mapping and apply via command bus
     const tSeconds = clock.getTime();
-    const frame = Math.round(tSeconds * 24);
+    const frame = toFrame(tSeconds, shotFps(project.sequences.seq));
     const nodeId = "node-c1-trajectory";
     const current = cameraPathParamsFromNode(project.nodes[nodeId].parameters);
     const patch = { ...current, lookAtTargetElementId: "e-chair-1", trackingStrength: 0.7 };

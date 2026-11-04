@@ -21,7 +21,7 @@ const createWindow = () => {
 app.whenReady().then(() => {
   // Limit permissions: allow audio-only media capture when explicitly requested by the page.
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
-    if (permission === "media") {
+    if (permission === "media" && "mediaTypes" in details) {
       const audio = details.mediaTypes?.includes("audio") ?? false;
       const video = details.mediaTypes?.includes("video") ?? false;
       callback(audio && !video);
