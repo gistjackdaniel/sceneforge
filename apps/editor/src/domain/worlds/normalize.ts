@@ -25,6 +25,8 @@ export const normalizeWorldAsset = (world: Partial<WorldAsset> & { id: string; n
   return {
     id: world.id,
     name: world.name,
+    aliases: world.aliases,
+    localizedNames: world.localizedNames,
     description: world.description ?? "",
     representation: inferRepresentation(world),
     sourceAssetIds: world.sourceAssetIds ?? [],

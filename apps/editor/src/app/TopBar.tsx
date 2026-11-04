@@ -9,9 +9,11 @@ export const TopBar = () => {
   } = useEditorStore();
 
   const clip = project.clips[ui.selectedClipId];
-  const cameraKeys = clip
-    ? cameraPathParamsFromNode(project.nodes[cameraPathNodeIdForClip(clip)]?.parameters ?? {}).keyframes.length
-    : 0;
+  const cameraPath = clip
+    ? cameraPathParamsFromNode(project.nodes[cameraPathNodeIdForClip(clip)]?.parameters ?? {})
+    : undefined;
+  const cameraKeys = cameraPath?.keyframes.length ?? 0;
+  const activeTake = cameraPath?.takes.find((take) => take.id === cameraPath.activeTakeId);
   const job = ui.videoRenderJob;
   const busy = job?.status === "queued" || job?.status === "running";
   const generate = () => {
@@ -30,7 +32,11 @@ export const TopBar = () => {
           className="btn-primary"
           onClick={generate}
           disabled={!clip || cameraKeys === 0 || busy}
-          title={cameraKeys === 0 ? "Record a camera trajectory in Motion, then press K." : "Send 3D assets, poses, and the camera trajectory to the video model."}
+          title={
+            cameraKeys === 0
+              ? "Record a take or press K in Motion, then Generate."
+              : `Send 3D assets, poses, and ${activeTake?.name ?? "the selected take"} to the video model.`
+          }
         >
           {busy ? "Generating…" : "Generate video"}
         </button>
@@ -44,7 +50,11 @@ export const TopBar = () => {
           Redo
         </button>
         <span>{clip?.name}</span>
-        <span>{cameraKeys === 0 ? "No camera trajectory" : `${cameraKeys} camera keys`}</span>
+        <span>
+          {cameraKeys === 0
+            ? "No camera take"
+            : `${activeTake?.name ?? "Take"} · ${cameraKeys} keys`}
+        </span>
       </div>
     </header>
   );

@@ -1,13 +1,8 @@
 import type { DomainCommand } from "../../application/commands";
 import { actorPoseNodeId } from "../../domain/performance/nodeIds";
-import type { PosePresetId, HandPresetId } from "../../domain/performance";
+import type { PosePresetId, HandPresetId, JointTarget } from "../../domain/performance";
 
-export type JointId =
-  | { kind: "global_orient" }
-  | { kind: "body"; index: number } // 0..20 (triplets inside body_pose)
-  | { kind: "left_hand"; index: number } // 0..14 (triplets)
-  | { kind: "right_hand"; index: number } // 0..14 (triplets)
-  | { kind: "jaw" };
+export type JointId = JointTarget;
 
 export interface PoseAuthoringContext {
   clipId: string;
@@ -73,12 +68,12 @@ export class PoseAuthoringController {
     };
   }
 
-  static setJointRotation(ctx: PoseAuthoringContext, joint: JointId, axisAngle: [number, number, number]): DomainCommand {
+  static setJointRotation(ctx: PoseAuthoringContext, joint: JointTarget, axisAngle: [number, number, number]): DomainCommand {
     return {
       type: "SET_JOINT_ROTATION",
       nodeId: this.poseNodeId(ctx),
       frame: ctx.frame,
-      target: joint as any,
+      target: joint,
       axisAngle,
     };
   }

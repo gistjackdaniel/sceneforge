@@ -24,6 +24,10 @@ export interface BoundingBox {
 export interface WorldElement {
   id: string;
   name: string;
+  /** Optional alternate names; kept in-package in elements.json when provided */
+  aliases?: string[];
+  /** Optional localized display names (e.g. { ko: "거실", en: "Living Room" }) */
+  localizedNames?: Partial<Record<"en" | "ko", string>> & { [locale: string]: string | undefined };
   kind:
     | "room"
     | "zone"
@@ -42,6 +46,10 @@ export interface WorldElement {
 export interface WorldAsset {
   id: string;
   name: string;
+  /** Optional alternate names for human lookup (free-form) */
+  aliases?: string[];
+  /** Optional localized display names (e.g. { ko: "아파트 거실" }) */
+  localizedNames?: Partial<Record<"en" | "ko", string>> & { [locale: string]: string | undefined };
   description: string;
 
   representation: WorldRepresentation;

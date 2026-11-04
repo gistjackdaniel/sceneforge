@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  activeCameraTake,
+  cameraPathParamsFromNode,
   cameraPoseAtFrame,
+  commitCameraTake,
   defaultCameraPathParams,
   deleteCameraKeyframe,
+  deleteCameraTake,
   interpolateCameraPose,
   isFrameInsideClip,
   keyframeAtExactFrame,
   nextKeyframeFrame,
   previousKeyframeFrame,
+  selectCameraTake,
   trimKeyframesToDuration,
   upsertCameraKeyframe,
 } from "./cameraPath";
@@ -83,6 +88,56 @@ describe("camera path", () => {
       focalLengthMm: 35,
     });
     expect(interpolateCameraPose(params, 5)?.position[0]).toBeCloseTo(5);
+  });
+
+  it("migrates legacy keyframes into Take 1 and keeps active keyframes mirrored", () => {
+    const migrated = cameraPathParamsFromNode({
+      keyframes: [
+        { frame: 0, position: [0, 1, 2], rotation: [0, 0, 0, 1], focalLengthMm: 35 },
+        { frame: 12, position: [1, 1, 2], rotation: [0, 0, 0, 1], focalLengthMm: 35 },
+      ],
+      interpolation: "linear",
+    });
+    expect(migrated.takes).toHaveLength(1);
+    expect(migrated.activeTakeId).toBe("take-1");
+    expect(migrated.keyframes).toHaveLength(2);
+    expect(activeCameraTake(migrated)?.name).toBe("Take 1");
+  });
+
+  it("commits Record takes separately and Generate uses the selected take", () => {
+    const first = commitCameraTake(defaultCameraPathParams(), {
+      source: "record",
+      keyframes: [
+        { frame: 0, position: [0, 0, 0], rotation: [0, 0, 0, 1], focalLengthMm: 35 },
+        { frame: 1, position: [1, 0, 0], rotation: [0, 0, 0, 1], focalLengthMm: 35 },
+      ],
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const second = commitCameraTake(first, {
+      source: "record",
+      keyframes: [
+        { frame: 0, position: [9, 0, 0], rotation: [0, 0, 0, 1], focalLengthMm: 50 },
+        { frame: 1, position: [8, 0, 0], rotation: [0, 0, 0, 1], focalLengthMm: 50 },
+      ],
+      createdAt: "2026-01-01T00:01:00.000Z",
+    });
+    expect(second.takes.map((take) => take.name)).toEqual(["Take 1", "Take 2"]);
+    expect(second.keyframes[0]?.position).toEqual([9, 0, 0]);
+    const selected = selectCameraTake(second, "take-1");
+    expect(selected.keyframes[0]?.position).toEqual([0, 0, 0]);
+    expect(deleteCameraTake(second, "take-2").takes).toHaveLength(1);
+  });
+
+  it("writes K poses into the active take", () => {
+    const stamped = upsertCameraKeyframe(defaultCameraPathParams(), {
+      frame: 4,
+      position: [0, 1.5, 3],
+      rotation: [0, 0, 0, 1],
+      focalLengthMm: 35,
+    });
+    expect(stamped.takes).toHaveLength(1);
+    expect(stamped.takes[0].source).toBe("manual");
+    expect(stamped.keyframes).toHaveLength(1);
   });
 });
 
