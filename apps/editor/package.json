@@ -24,6 +24,7 @@
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@vitejs/plugin-react": "latest",
+    "happy-dom": "^21.0.1",
     "typescript": "latest",
     "vite": "latest",
     "vitest": "^3.2.4"
