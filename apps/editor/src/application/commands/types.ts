@@ -2,6 +2,7 @@ import type { NodeBase } from "../../domain/graph/types";
 import type { NodeReference, ReferenceType } from "../../domain/graph/references";
 import type { GraphEdge } from "../../domain/graph/types";
 import type { CameraRigPreset } from "../../domain/graph/cameraRig";
+import type { JointTarget } from "../../domain/performance/poseTrack";
 
 /** PRD §13.1 — domain commands. UI-only actions are not commands. */
 export type DomainCommand =
@@ -12,6 +13,37 @@ export type DomainCommand =
       nodeId: string;
       patch: Record<string, unknown>;
       previous?: Record<string, unknown>;
+    }
+  // SMPL-X pose commands. Same DomainCommand bus and undo stack as *_CAMERA_KEYFRAME.
+  | {
+      type: "ADD_POSE_KEYFRAME";
+      nodeId: string;
+      frame: number;
+      pose: {
+        global_orient: [number, number, number];
+        transl: [number, number, number];
+        body_pose: number[];
+        left_hand_pose: number[];
+        right_hand_pose: number[];
+        jaw_pose: [number, number, number];
+        expression: number[];
+      };
+    }
+  | { type: "REMOVE_POSE_KEYFRAME"; nodeId: string; frame: number }
+  | { type: "MOVE_POSE_KEYFRAME"; nodeId: string; from: number; to: number }
+  | {
+      type: "APPLY_POSE_PRESET";
+      nodeId: string;
+      frame: number;
+      presetId: "t_pose" | "a_pose" | "idle" | "walk_contact" | "sit" | "point";
+      hand?: { side: "left" | "right"; preset: "open" | "fist" | "point" | "relaxed" };
+    }
+  | {
+      type: "SET_JOINT_ROTATION";
+      nodeId: string;
+      frame: number;
+      target: JointTarget;
+      axisAngle: [number, number, number];
     }
   | { type: "UPDATE_NODE_UI"; nodeId: string; ui: NonNullable<NodeBase["ui"]>; previous?: NodeBase["ui"] }
   | { type: "RENAME_NODE"; nodeId: string; name: string; previous?: string }

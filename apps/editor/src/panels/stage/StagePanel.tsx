@@ -19,6 +19,7 @@ import { buildSceneConditioning } from "../../domain/rendering/sceneConditioning
 import { OUTPUT_ASPECT_PRESETS, outputAspectRatio, type OutputAspectPreset } from "../../domain/rendering";
 import { CAMERA_RIG_PRESETS, type CameraRigPreset } from "../../domain/graph/cameraRig";
 import "./sceneWorkspace.css";
+import { PoseAuthoringController } from "../../presentation/pose/PoseAuthoringController";
 import { createLoopClock } from "../../application/ports/LoopClock";
 import type { DomainCommand } from "../../application/commands";
 import { validateOutputAspect } from "./recordingPreflight";
@@ -371,6 +372,16 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
             }
             const object = sceneObjects.find((item) => item.id === payload.worldElementId);
             if (object) commitPose(object, { position: payload.position, rotation: payload.rotation, scale: payload.scale ?? object.scale });
+          }}
+          onJointRotateCommit={(payload) => {
+            if (!clip || !canEdit || takeRecording) return;
+            const cmd = PoseAuthoringController.setJointRotation(
+              { clipId: clip.id, actorElementId: payload.actorElementId, frame },
+              payload.target,
+              payload.axisAngle,
+            );
+            dispatch({ type: "agent-execute-commands", commands: [cmd], logMessage: "Joint rotation applied." });
+            setNotice(`${payload.actorElementId} joint rotated · ${frame}f`);
           }}
           onLoadStateChange={(state, message) => setLoad({ state, message })}
           onCapturePose={captureCamera}
