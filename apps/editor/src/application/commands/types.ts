@@ -2,6 +2,7 @@ import type { NodeBase } from "../../domain/graph/types";
 import type { NodeReference, ReferenceType } from "../../domain/graph/references";
 import type { GraphEdge } from "../../domain/graph/types";
 import type { CameraRigPreset } from "../../domain/graph/cameraRig";
+import type { ShotCommand } from "../../domain/shot";
 
 /** PRD §13.1 — domain commands. UI-only actions are not commands. */
 export type DomainCommand =
@@ -101,7 +102,8 @@ export type DomainCommand =
       commands: DomainCommand[];
       /** Optional message for logs/UI; callers may log separately. */
       logMessage?: string;
-    };
+    }
+  | { type: "SHOT"; command: ShotCommand };
 
 export type DomainEventType =
   | "NodeCreated"
@@ -116,7 +118,8 @@ export type DomainEventType =
   | "CacheInvalidated"
   | "RenderQueued"
   | "RenderCompleted"
-  | "RenderFailed";
+  | "RenderFailed"
+  | "ShotChanged";
 
 export interface DomainEvent {
   type: DomainEventType;

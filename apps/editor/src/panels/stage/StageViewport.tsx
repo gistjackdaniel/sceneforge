@@ -582,31 +582,27 @@ export const StageViewport = ({
     renderer.domElement.addEventListener("pointerup", onPointerUpGizmo);
 
     const setFlyKey = (event: KeyboardEvent, pressed: boolean) => {
-      if (!pressed) {
-        const key = event.key.toLowerCase();
-        if (key in flyKeysRef.current) flyKeysRef.current[key as keyof FlyKeys] = false;
+      // Keyup always clears so stuck look/move cannot happen after focus changes.
+      if (pressed && (isTypingTarget(event.target) || workspaceRef.current !== "record")) {
         return;
       }
-      if (isTypingTarget(event.target) || workspaceRef.current !== "record") {
-        return;
-      }
-      const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-      if (key === "w") flyKeysRef.current.w = pressed;
-      if (key === "a") flyKeysRef.current.a = pressed;
-      if (key === "s") flyKeysRef.current.s = pressed;
-      if (key === "d") flyKeysRef.current.d = pressed;
-      if (key === "q") flyKeysRef.current.q = pressed;
-      if (key === "e") flyKeysRef.current.e = pressed;
-      if (key === "Shift") flyKeysRef.current.shift = pressed;
-      if (key === "arrowleft") flyKeysRef.current.yawL = pressed;
-      if (key === "arrowright") flyKeysRef.current.yawR = pressed;
-      if (key === "arrowup") flyKeysRef.current.pitchU = pressed;
-      if (key === "arrowdown") flyKeysRef.current.pitchD = pressed;
-      if (key === "z") flyKeysRef.current.rollL = pressed;
-      if (key === "x") flyKeysRef.current.rollR = pressed;
-      if (pressed && ["w", "a", "s", "d", "q", "e"].includes(key)) {
-        event.preventDefault();
-      }
+      const key = event.key.toLowerCase();
+      const fly = flyKeysRef.current;
+      if (key === "w") fly.w = pressed;
+      else if (key === "a") fly.a = pressed;
+      else if (key === "s") fly.s = pressed;
+      else if (key === "d") fly.d = pressed;
+      else if (key === "q") fly.q = pressed;
+      else if (key === "e") fly.e = pressed;
+      else if (key === "shift") fly.shift = pressed;
+      else if (key === "arrowleft") fly.yawL = pressed;
+      else if (key === "arrowright") fly.yawR = pressed;
+      else if (key === "arrowup") fly.pitchU = pressed;
+      else if (key === "arrowdown") fly.pitchD = pressed;
+      else if (key === "z" || key === ",") fly.rollL = pressed;
+      else if (key === "x" || key === ".") fly.rollR = pressed;
+      else return;
+      if (pressed) event.preventDefault();
     };
     const onKeyDown = (event: KeyboardEvent) => setFlyKey(event, true);
     const onKeyUp = (event: KeyboardEvent) => setFlyKey(event, false);

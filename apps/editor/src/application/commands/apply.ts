@@ -11,6 +11,7 @@ import { applyCameraRigToProject } from "../services/cameraCraft";
 import type { CommandResult, DomainCommand, DomainEvent } from "./types";
 import { cameraPathParamsFromNode, deleteCameraKeyframe, keyframeAtExactFrame, upsertCameraKeyframe } from "../../domain/graph/cameraPath";
 import { lensNodeIdForClip, lensParamsFromNode } from "../../domain/graph/lens";
+import { applyShotCommand } from "../../domain/shot";
 
 const event = (type: DomainEvent["type"], payload: Record<string, unknown>, timestamp: string): DomainEvent => ({
   type,
@@ -691,6 +692,31 @@ export const applyCommand = (
           command,
           inverse: inverses.length ? { type: "APPLY_COMMANDS", commands: inverses.reverse(), logMessage: command.logMessage } : undefined,
           events,
+        },
+      };
+    }
+    case "SHOT": {
+      const current = project.shots?.[command.command.shotId];
+      if (!current) return fail("Shot not found.");
+      const edited = applyShotCommand(current, command.command, timestamp);
+      if (!edited.ok) return fail(edited.reason);
+      if (!edited.changed) {
+        return { project, result: { ok: true, command, events: [] } };
+      }
+      const assets = edited.asset && !project.assets[edited.asset.id]
+        ? { ...project.assets, [edited.asset.id]: edited.asset }
+        : project.assets;
+      return {
+        project: {
+          ...project,
+          assets,
+          shots: { ...project.shots, [edited.shot.id]: edited.shot },
+        },
+        result: {
+          ok: true,
+          command,
+          inverse: edited.inverse ? { type: "SHOT", command: edited.inverse } : undefined,
+          events: [event("ShotChanged", { shotId: edited.shot.id }, timestamp)],
         },
       };
     }

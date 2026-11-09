@@ -6,6 +6,7 @@ import type { Sequence, TimelineClip } from "../timeline/types";
 import type { WorldAsset } from "../worlds/types";
 import type { ModelExecutionRecord } from "../worlds/modelExecution";
 import type { ClipGraph, DependencyMap } from "./clipGraph";
+import type { Shot } from "../shot/types";
 
 export interface ExternalConnector {
   id: string;
@@ -31,6 +32,8 @@ export interface Project {
   activeSequenceId: string;
   sequences: Record<string, Sequence>;
   clips: Record<string, TimelineClip>;
+  /** Persistent shot list. Absent on older fixtures until load migrates them. */
+  shots?: Record<string, Shot>;
   clipGraphs: Record<string, ClipGraph>;
   nodes: Record<string, NodeBase>;
   references: Record<string, NodeReference>;
