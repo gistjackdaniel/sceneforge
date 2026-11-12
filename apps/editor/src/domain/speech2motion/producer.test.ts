@@ -9,7 +9,7 @@ import { normalizeWorldAsset } from "../../domain/worlds/normalize";
 import type { SceneState } from "../../domain/worlds/sceneState";
 import type { WorldAsset } from "../../domain/worlds/types";
 import { ActionGraphSchema, ActionGraphValidator, type ActionGraph, type EditSelector } from "./actionGraph";
-import { toEditScopeInput } from "./editScope";
+import { contactScopeInstanceIds, contactSelectorsMatchGraph, toEditScopeInput } from "./editScope";
 import { parseDirection } from "./parseDirection";
 import { STANDING_HAND_HEIGHT_M } from "./produce";
 
@@ -168,7 +168,9 @@ describe("speech2motion producer", () => {
     expect(end).toEqual([0.5, STANDING_HAND_HEIGHT_M, 0]);
     expect(start?.[2]).toBe(0);
     expect(graph.edit?.preserve.some((selector) => selectorKey(selector) === selectorKey({ kind: "motion", actor_id: built.actorB.id }))).toBe(false);
-    expect(graph.edit?.recompute).toEqual(expect.arrayContaining([{ kind: "contact", contact_id: "handshake_01" }]));
+    expect(graph.edit?.recompute.filter((selector) => selector.kind === "contact")).toEqual([
+      { kind: "contact", contact_id: "handshake_01" },
+    ]);
   });
 
   it("places the cup on the table in world meters, Y-up", () => {
@@ -277,21 +279,72 @@ describe("speech2motion producer", () => {
 
   it("maps preserve and recompute onto EditScopeInput without rewriting selectors", () => {
     const built = stage(["테이블"]);
-    const graph = produce("B 접촉 손만 수정", built, {
-      fps: 24,
-      baseGraph: produce("A와 B가 오른손으로 악수", built, { fps: 24 }).graph,
-    }).graph;
+    const base = produce("A와 B가 오른손으로 악수", built, { fps: 24 }).graph;
+    const graph = produce("B 접촉 손만 수정", built, { fps: 24, baseGraph: base }).graph;
     const scope = toEditScopeInput(graph);
     expect(graph.edit).toBeDefined();
     expect(scope).toEqual({
       shotId: graph.shot_id,
       operation: graph.edit?.operation,
+      instanceIds: [built.actorA.id, built.actorB.id],
+      edit_id: "edit_2",
+      base_graph_version: base.graph_version,
+      source: { type: "text", transcript: "B 접촉 손만 수정" },
       preserve: graph.edit?.preserve,
       recompute: graph.edit?.recompute,
     });
     expect(scope?.preserve).toBe(graph.edit?.preserve);
     expect(scope?.recompute).toBe(graph.edit?.recompute);
-    expect(scope?.instanceId).toBeUndefined();
+    expect(scope?.source).toBe(graph.edit?.source);
+    expect(scope?.edit_id).toBe(graph.edit?.edit_id);
+    expect(scope?.base_graph_version).toBe(graph.edit?.base_graph_version);
+    expect(scope?.base_graph_version).not.toBe(graph.graph_version);
+    const contact = scope?.recompute.find((selector) => selector.kind === "contact");
+    expect(contact).toEqual({ kind: "contact", contact_id: "handshake_01" });
+    expect(scope?.recompute.some((selector) => selector.kind === "motion" && "actor_id" in selector)).toBe(true);
+    expect(contact && "contactId" in contact).toBe(false);
+  });
+
+  it("sends instance ids that match contact_graph endpoints, including both handshake actors", () => {
+    const built = stage(["컵", "테이블"]);
+    const cup = built.cups[0];
+    if (!cup) throw new Error("cup missing");
+    const handshake = produce("A와 B가 오른손으로 악수", built, { fps: 24 }).graph;
+    const edited = produce("B 접촉 손만 수정", built, { fps: 24, baseGraph: handshake }).graph;
+    const placed = produce("A가 그 컵을 테이블에 내려놓는다", built, { fps: 24 }).graph;
+    expectReady(handshake);
+    expectReady(edited);
+    expectReady(placed);
+
+    for (const graph of [handshake, edited, placed]) {
+      expect(contactSelectorsMatchGraph(graph)).toBe(true);
+      const scope = toEditScopeInput(graph);
+      expect(scope?.instanceIds).toEqual(contactScopeInstanceIds(graph));
+      const named = new Set(
+        [...(graph.edit?.preserve ?? []), ...(graph.edit?.recompute ?? [])].flatMap((selector) =>
+          selector.kind === "contact" ? [selector.contact_id] : [],
+        ),
+      );
+      const endpoints: string[] = [];
+      for (const contact of graph.contact_graph) {
+        expect(named.has(contact.contact_id)).toBe(true);
+        for (const id of [contact.a.actor_id, contact.b.actor_id, contact.b.object_id]) {
+          if (id && !endpoints.includes(id)) endpoints.push(id);
+        }
+      }
+      expect(scope?.instanceIds).toEqual(endpoints);
+      expect(scope?.edit_id).toBe(graph.edit?.edit_id);
+      expect(scope?.base_graph_version).toBe(graph.edit?.base_graph_version);
+      expect(scope?.source).toBe(graph.edit?.source);
+    }
+
+    const handshakeScope = toEditScopeInput(handshake);
+    expect(handshakeScope?.instanceIds).toEqual([built.actorA.id, built.actorB.id]);
+    expect(handshakeScope?.instanceIds).not.toEqual([built.actorB.id]);
+    expect(handshakeScope?.edit_id).toBe("edit_1");
+    expect(handshakeScope?.base_graph_version).toBe("0");
+    expect(toEditScopeInput(edited)?.instanceIds).toEqual([built.actorA.id, built.actorB.id]);
+    expect(toEditScopeInput(placed)?.instanceIds).toEqual([built.actorA.id, cup.id]);
   });
 
   it("records a ready graph only through the domain command bus", () => {

@@ -10,6 +10,7 @@ import {
   type Relation,
   type TrajectoryCondition,
 } from "./actionGraph";
+import { contactSelectorsMatchGraph } from "./editScope";
 import { parseDirection, type DirectionAction, type DirectionStep, type HandSpec, type TemporalType } from "./parseDirection";
 
 /**
@@ -50,8 +51,16 @@ type Ask = { question: string };
 
 const framesOf = (clock: FrameClock, seconds: number): number => clock.toFrame(seconds, clock.fps);
 
+const parseGraph = (value: unknown): ActionGraph => {
+  const graph = ActionGraphSchema.parse(value);
+  if (!contactSelectorsMatchGraph(graph)) {
+    throw new Error("contact selector contact_id must match contact_graph.");
+  }
+  return graph;
+};
+
 const clarificationGraph = (input: Speech2MotionInput, asks: Ask[]): ActionGraph =>
-  ActionGraphSchema.parse({
+  parseGraph({
     schema_version: "0.1",
     graph_version: "0",
     shot_id: input.shotId,
@@ -253,7 +262,7 @@ const editContactHand = (input: Speech2MotionInput, transcript: string, actorMen
     return clarificationGraph(input, [{ question: "보존 항목과 다시 계산할 항목이 겹칩니다." }]);
   }
   const nextVersion = bumpVersion(input.baseGraph.graph_version);
-  return ActionGraphSchema.parse({
+  return parseGraph({
     ...input.baseGraph,
     graph_version: nextVersion,
     status: "ready",
@@ -504,7 +513,7 @@ const produceSequence = (input: Speech2MotionInput, transcript: string, steps: D
     ...contacts.map((contact): EditSelector => ({ kind: "contact", contact_id: contact.contact_id })),
   ];
 
-  return ActionGraphSchema.parse({
+  return parseGraph({
     schema_version: "0.1",
     graph_version: "1",
     shot_id: input.shotId,
