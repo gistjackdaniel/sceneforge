@@ -146,6 +146,8 @@ const mappingSchema = z.object({
   smoothing: z.number().finite(),
   timeScale: z.number().finite(),
   timeOffsetFrames: z.number().finite(),
+  lossPolicy: z.enum(["preserve", "hold", "interpolate"]).optional(),
+  applyDriftCorrection: z.boolean().optional(),
 });
 
 const legacyRefSchema = z.object({
@@ -366,7 +368,7 @@ const normalizeTake = (take: ParsedTake, fps: number): CameraTake => {
     intrinsics: copyIntrinsics(take.intrinsics),
     calibration: copyCalibration(take.calibration),
     trackingEvents: (take.trackingEvents ?? []) as TrackingEvent[],
-    mapping: take.mapping ?? identityMapping(),
+    mapping: { ...identityMapping(), ...(take.mapping ?? {}) },
     legacyRefs,
     rotationStorage: "quaternion_xyzw",
   };

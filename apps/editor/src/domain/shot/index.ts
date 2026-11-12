@@ -49,11 +49,26 @@ export {
   hasSelectedTake,
   readShotTimeFps,
   recordedTakePlaybackPoses,
+  resolveCameraTakeFrames,
   sampleCameraPathPositions,
+  sampleCameraPathStates,
   sampleCameraPose,
   sampleSubjectPose,
   selectedTake,
   subjectPoseKeys,
   viewportPlaybackPoses,
 } from "./queries";
+export type {
+  ResolvedCameraFrame,
+  ResolvedCameraIntrinsics,
+  ResolveCameraTakeOptions,
+} from "./queries";
 export { prepareModelInput, type PreparedInput } from "./modelInput";
+export { detectTrackingLoss, TRACKING_PATH_COLOR } from "./trackingContinuity";
+export type { TrackingLossInterval } from "./trackingContinuity";
+export { deviceTimestampToFrame, type DeviceTimestampToFrame } from "./deviceTimestamp";
+export { devicePointToScene, devicePoseToScenePose } from "./deviceFrame";
+export { createMobileSessionAdapter, mobileCameraSessionSchema } from "./mobileSession";
+export type { MobileCameraSession } from "./mobileSession";
+export { CalibrationError, solveWorldCalibration } from "./worldCalibration";
+export type { FloorCalibrationInput, PointCalibrationInput, WorldCalibrationInput } from "./worldCalibration";

@@ -156,7 +156,13 @@ const buildTake = (
   const keyed = input.keys.filter((key) => inClock(shot, key.frame));
   const samples = provided.length > 0 ? provided : samplesFromKeyframes(keyed, shot.time.fps);
   if (samples.length === 0) return undefined;
-  const keys = nonEmpty(resolveVirtualKeyframes({ samples, calibration, mapping, intrinsics: input.intrinsics }));
+  const keys = nonEmpty(resolveVirtualKeyframes({
+    samples,
+    calibration,
+    mapping,
+    intrinsics: input.intrinsics,
+    trackingEvents: input.trackingEvents,
+  }));
   if (!keys) return undefined;
   return {
     schemaVersion: 1,
