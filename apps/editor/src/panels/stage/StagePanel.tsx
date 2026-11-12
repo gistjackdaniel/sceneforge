@@ -29,6 +29,8 @@ import {
 } from "../../domain/shot";
 import type { SceneObject } from "../../domain/worlds/sceneObjects";
 import { subjectDraftFromObject } from "./subjectDraft";
+import { InteractionPreview } from "../../presentation/scene/InteractionPreview";
+import { HANDSHAKE_SHOT_ID } from "../../domain/sceneAuthoring";
 import "./sceneWorkspace.css";
 
 const tuple3 = (value: readonly [number, number, number]): [number, number, number] => [value[0], value[1], value[2]];
@@ -60,6 +62,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [freeView, setFreeView] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [interaction, setInteraction] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [takeRecording, setTakeRecording] = useState(false);
   const loopRef = useRef<ReturnType<typeof createLoopClock> | null>(null);
@@ -267,7 +270,32 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const switchMode = (mode: "build" | "record") => {
     if (takeRecording) finishTakeRecording("stop");
     setPlaying(false); setDraft(undefined); setDrawer(null); setNotice(""); setSelectedFrames([]);
+    setInteraction(false);
     dispatch({ type: "set-viewport-workspace", workspace: mode });
+  };
+  const openInteraction = () => {
+    setInteraction(true);
+    dispatch({
+      type: "agent-execute-commands",
+      commands: [{ type: "INSTALL_INTERACTION_SCENE" }],
+      logMessage: "악수 상호작용 프리뷰를 열었습니다.",
+    });
+  };
+  const changeHandshakeHand = (rigPart: "left_hand" | "right_hand") => {
+    dispatch({
+      type: "agent-execute-commands",
+      commands: [{
+        type: "CHANGE_CONTACT_EFFECTOR",
+        shotId: HANDSHAKE_SHOT_ID,
+        subjectRef: "B",
+        locale: "ko",
+        contactId: "handshake_01",
+        rigPart,
+      }],
+      logMessage: rigPart === "left_hand"
+        ? "B의 악수 손을 왼손으로 바꿨습니다. 카메라, 배경, A의 이동은 그대로입니다."
+        : "B의 악수 손을 오른손으로 바꿨습니다. 카메라, 배경, A의 이동은 그대로입니다.",
+    });
   };
   useEffect(() => {
     setSelectedId("camera");
@@ -403,9 +431,13 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       <div className="scene-mode-switch" role="group" aria-label="Workspace mode">
         <button aria-pressed={!recording} onClick={() => switchMode("build")}>Scene</button>
         <button aria-pressed={recording} onClick={() => switchMode("record")}>Motion</button>
+        <button aria-pressed={interaction} onClick={() => (interaction ? setInteraction(false) : openInteraction())}>상호작용</button>
       </div>
     </header>
     <div className="scene-stage-area">
+      {interaction && (
+        <InteractionPreview project={project} onClose={() => setInteraction(false)} onChangeHand={changeHandshakeHand} />
+      )}
       <div className={`scene-stage-canvas ${cameraView ? "is-camera-view" : ""}`} style={{ "--scene-aspect": outputAspectRatio(ui.outputAspect) } as React.CSSProperties}>
         <StageViewport world={world} worldName={world?.name} previewPlan={previewPlan} fallbackImageUri={fallbackImageUri}
           overlays={ui.viewportOverlays} tool={ui.viewportTool} workspace={cameraView ? "record" : "build"}

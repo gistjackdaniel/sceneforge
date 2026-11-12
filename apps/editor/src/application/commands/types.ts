@@ -103,7 +103,34 @@ export type DomainCommand =
       /** Optional message for logs/UI; callers may log separately. */
       logMessage?: string;
     }
-  | { type: "SHOT"; command: ShotCommand };
+  | { type: "SHOT"; command: ShotCommand }
+  | { type: "INSTALL_INTERACTION_SCENE" }
+  | {
+      type: "UNINSTALL_INTERACTION_SCENE";
+      shotId: string;
+      removeShot: boolean;
+      removePreview: boolean;
+      worldIds: string[];
+    }
+  | {
+      /** Point one contact effector at another rig part. One undo restores the previous override list. */
+      type: "CHANGE_CONTACT_EFFECTOR";
+      shotId: string;
+      subjectRef: string;
+      locale: "ko" | "en";
+      contactId: string;
+      rigPart: "left_hand" | "right_hand" | "left_foot" | "right_foot" | "head" | "pelvis";
+    }
+  | {
+      type: "SET_INTERACTION_OVERRIDES";
+      shotId: string;
+      overrides: Array<{
+        contactId: string;
+        worldAssetId: string;
+        subjectId: string;
+        rigPart: "left_hand" | "right_hand" | "left_foot" | "right_foot" | "head" | "pelvis";
+      }>;
+    };
 
 export type DomainEventType =
   | "NodeCreated"
@@ -119,7 +146,8 @@ export type DomainEventType =
   | "RenderQueued"
   | "RenderCompleted"
   | "RenderFailed"
-  | "ShotChanged";
+  | "ShotChanged"
+  | "SceneAuthoringChanged";
 
 export interface DomainEvent {
   type: DomainEventType;

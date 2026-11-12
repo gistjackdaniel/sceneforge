@@ -122,6 +122,16 @@
 .scene-source-image > span.is-negative { background: #a44235; }
 .scene-upload input { max-width: 100%; font-size: 9px; }
 .scene-camera-preview-label { position: absolute; bottom: 17px; right: 17px; padding: 3px 6px; color: #d5e7da; background: #131e18c9; font-size: 8px; pointer-events: none; }
+.interaction-preview { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; background: #101614f2; }
+.interaction-hud { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 10px; border-bottom: 1px solid #2a302e; }
+.interaction-hud p { margin: 0; flex: 1 1 220px; color: #c5d5cc; font-size: 11px; }
+.interaction-hands, .interaction-frame, .interaction-legend { display: flex; align-items: center; gap: 6px; }
+.interaction-frame input { width: 140px; accent-color: #bdddc9; }
+.interaction-frame span { min-width: 32px; font: 11px ui-monospace, monospace; }
+.interaction-legend { list-style: none; margin: 0; padding: 0; color: #b7c7be; font-size: 10px; }
+.interaction-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 50%; }
+.interaction-stage { flex: 1; min-height: 0; }
+.interaction-stage canvas { width: 100%; height: 100%; display: block; }
 @container (max-width: 560px) {
   .scene-title > span:last-child { display: none; }
   .scene-header { padding: 8px; gap: 8px; }

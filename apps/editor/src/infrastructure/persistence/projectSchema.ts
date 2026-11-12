@@ -113,6 +113,8 @@ const projectSchema = z
     caches: z.record(z.string(), z.unknown()),
     connectors: z.record(z.string(), z.unknown()),
     libraryNodeIds: z.array(z.string()),
+    shots: z.record(z.string(), z.unknown()).optional(),
+    interactionPreviews: z.record(z.string(), z.unknown()).optional(),
   })
   .passthrough();
 
