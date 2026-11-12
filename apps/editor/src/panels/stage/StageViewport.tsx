@@ -987,6 +987,7 @@ export const StageViewport = ({
       object.userData.locked = item.locked;
       if (!api.dragging) {
         object.position.set(...item.position);
+        object.rotation.order = EULER_ORDER;
         object.rotation.set(...item.rotation);
         object.scale.set(...item.scale);
       }
