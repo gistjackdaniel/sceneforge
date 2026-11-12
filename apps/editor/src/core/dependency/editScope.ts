@@ -1,6 +1,6 @@
 import {
   DEPENDENT_RENDER_PASSES,
-  productionSelectorSchema,
+  normalizeProductionSelector,
   selectorScopeToken,
   selectorToQuery,
   tokenToSelectorQuery,
@@ -8,16 +8,26 @@ import {
 } from "./selector";
 
 /**
- * Narrow input for an edit's preserve and recompute lists.
- *
- * The producer contract is `Edit.preserve` / `Edit.recompute` in
- * `domain/speech2motion/actionGraph.ts`. That module is not on this branch,
- * so the lists stay `unknown` instead of a second schema.
+ * Narrow input for an edit. Field names follow `actionGraph.ts` (`edit_id`,
+ * `base_graph_version`, `source`, `preserve`, `recompute`). That module is not
+ * on this branch, so this is a structural type and not a second schema.
+ * A single `instanceId` is stored here as a one-element `instanceIds`.
+ * `instanceIds` applies only to edits that do not name a `contact_id`.
+ * A contact edit derives its actors from `contact_graph[].a/b`.
  */
+export interface EditSourceInput {
+  type: "voice" | "text" | "manual";
+  transcript?: string;
+}
+
 export interface EditScopeInput {
   shotId: string;
   operation: string;
-  instanceId?: string;
+  /** Non-contact edits only. A contact edit derives actors from `contact_graph`. */
+  instanceIds: readonly string[];
+  edit_id?: string;
+  base_graph_version?: string;
+  source?: EditSourceInput;
   preserve: readonly unknown[];
   recompute: readonly unknown[];
 }
@@ -47,9 +57,12 @@ export const scopeLabel = (entry: unknown): string => {
   if (!isRecord(entry)) {
     return "invalid";
   }
-  const selector = productionSelectorSchema.safeParse(entry);
-  if (selector.success) {
-    return selectorScopeToken(selector.data);
+  const selector = normalizeProductionSelector(entry);
+  if (selector && selector !== "dependent") {
+    return selectorScopeToken(selector);
+  }
+  if (selector === "dependent") {
+    return DEPENDENT_RENDER_PASSES;
   }
   if (entry.entity === "pose" && typeof entry.subjectId === "string") {
     return `pose:${entry.subjectId}:${String(entry.channel ?? "")}`;
@@ -96,9 +109,12 @@ export const interpretScopeEntry = (entry: unknown): InterpretedScope => {
     return { unresolved: true, label };
   }
 
-  const selector = productionSelectorSchema.safeParse(entry);
-  if (selector.success) {
-    return { query: selectorToQuery(selector.data) };
+  const normalized = normalizeProductionSelector(entry);
+  if (normalized === "dependent") {
+    return { dependent: true };
+  }
+  if (normalized) {
+    return { query: selectorToQuery(normalized) };
   }
 
   const subjectId = text(entry.subjectId);
@@ -125,32 +141,5 @@ export const interpretScopeEntry = (entry: unknown): InterpretedScope => {
     return { query: { kind: "actor", actorId: subjectId, motion: "motion" } };
   }
 
-  if (entry.kind === "background") {
-    return { query: { kind: "set_layout" } };
-  }
-  if (entry.kind === "root_motion") {
-    const actorId = text(entry.actor_id) ?? text(entry.actorId);
-    if (actorId) {
-      return { query: { kind: "actor", actorId, motion: "root_motion" } };
-    }
-  }
-  if (entry.kind === "motion") {
-    const actorId = text(entry.actor_id) ?? text(entry.actorId);
-    if (actorId) {
-      return { query: { kind: "actor", actorId, motion: "motion" } };
-    }
-  }
-  if (entry.kind === "contact") {
-    const contactId = text(entry.contact_id) ?? text(entry.contactId);
-    if (contactId) {
-      return { query: { kind: "contact", contactId } };
-    }
-  }
-  if (entry.kind === "contact_constraints") {
-    return { query: { kind: "contact" } };
-  }
-  if (entry.kind === "render_passes" || entry.kind === "dependent_render_passes") {
-    return { dependent: true };
-  }
   return { unresolved: true, label };
 };

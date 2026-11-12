@@ -14,14 +14,22 @@ const instanceFields = {
   assetId: z.string().min(1).optional(),
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const text = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
+
 /**
- * Production-graph selector grammar shared with World lane Phase 1.
- * Contact selectors use `contact` / `contactId` only.
+ * Canonical selector grammar. Raw action-graph fields (`contact_id`, `actor_id`,
+ * `kind: "motion"`) are normalized into this shape by `productionSelectorSchema`.
+ * Contact may name `actorId` and `part` so one actor's rig part does not match every contact.
  */
-export const productionSelectorSchema = z.discriminatedUnion("kind", [
+const canonicalSelectorSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("contact"),
-    contactId: z.string().min(1),
+    contactId: z.string().min(1).optional(),
+    actorId: z.string().min(1).optional(),
+    part: z.string().min(1).optional(),
     ...instanceFields,
   }),
   z.object({
@@ -52,12 +60,96 @@ export const productionSelectorSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-export type ProductionSelector = z.infer<typeof productionSelectorSchema>;
+export type ProductionSelector = z.infer<typeof canonicalSelectorSchema>;
+
+const sharedFields = (record: Record<string, unknown>) => {
+  const instanceId = text(record.instanceId) ?? text(record.instance_id);
+  const assetId = text(record.assetId);
+  return {
+    ...(instanceId ? { instanceId } : {}),
+    ...(assetId ? { assetId } : {}),
+  };
+};
+
+/**
+ * Map one raw selector onto the canonical grammar.
+ * `"dependent"` is the producer `render_passes` token, not a stored selector.
+ * This is the only normalization. `interpretScopeEntry` calls it too.
+ */
+export const normalizeProductionSelector = (value: unknown): ProductionSelector | "dependent" | undefined => {
+  if (!isRecord(value) || typeof value.kind !== "string") {
+    return undefined;
+  }
+  if (value.kind === "render_passes" || value.kind === "dependent_render_passes") {
+    return "dependent";
+  }
+  const actorId = text(value.actor_id) ?? text(value.actorId);
+  const part = text(value.part) ?? text(value.rig_part);
+  const shared = sharedFields(value);
+  let canonical: unknown;
+  if (value.kind === "contact" || value.kind === "contact_constraints") {
+    const contactId = text(value.contact_id) ?? text(value.contactId);
+    if (!contactId && !actorId) {
+      return undefined;
+    }
+    canonical = {
+      kind: "contact",
+      ...(contactId ? { contactId } : {}),
+      ...(actorId ? { actorId } : {}),
+      ...(part ? { part } : {}),
+      ...shared,
+    };
+  } else if (value.kind === "actor" || value.kind === "motion" || value.kind === "root_motion") {
+    if (!actorId) {
+      return undefined;
+    }
+    const motion = value.kind === "root_motion"
+      ? "root_motion"
+      : value.kind === "motion"
+        ? "motion"
+        : value.motion === "root_motion" || value.motion === "motion"
+          ? value.motion
+          : undefined;
+    canonical = { kind: "actor", actorId, ...(motion ? { motion } : {}), ...shared };
+  } else if (value.kind === "object" || value.kind === "prop") {
+    const objectId = text(value.objectId) ?? text(value.object_id) ?? text(value.subjectId);
+    if (!objectId) {
+      return undefined;
+    }
+    canonical = { kind: "object", objectId, ...shared };
+  } else if (value.kind === "camera_track" || value.kind === "camera" || value.kind === "camera_take") {
+    const cameraTrackId = text(value.cameraTrackId) ?? text(value.takeId) ?? text(value.take_id);
+    canonical = { kind: "camera_track", ...(cameraTrackId ? { cameraTrackId } : {}), ...shared };
+  } else if (value.kind === "set_layout" || value.kind === "background" || value.kind === "room") {
+    const setLayoutId = text(value.setLayoutId) ?? text(value.worldId) ?? text(value.world_id);
+    canonical = { kind: "set_layout", ...(setLayoutId ? { setLayoutId } : {}), ...shared };
+  } else if (value.kind === "render_pass") {
+    const renderPassId = text(value.renderPassId) ?? text(value.render_pass_id);
+    if (!renderPassId) {
+      return undefined;
+    }
+    canonical = { kind: "render_pass", renderPassId, ...shared };
+  } else {
+    return undefined;
+  }
+  const parsed = canonicalSelectorSchema.safeParse(canonical);
+  return parsed.success ? parsed.data : undefined;
+};
+
+/** Accepts canonical selectors and raw action-graph selectors. Output is canonical. */
+export const productionSelectorSchema = z.unknown().transform((value, ctx): ProductionSelector => {
+  const normalized = normalizeProductionSelector(value);
+  if (!normalized || normalized === "dependent") {
+    ctx.addIssue({ code: "custom", message: "셀렉터를 정규화할 수 없습니다." });
+    return z.NEVER;
+  }
+  return normalized;
+});
 
 export const DEPENDENT_RENDER_PASSES = "dependent_render_passes";
 
 export type SelectorQuery =
-  | { kind: "contact"; contactId?: string; instanceId?: string }
+  | { kind: "contact"; contactId?: string; actorId?: string; part?: string; instanceId?: string }
   | { kind: "actor"; actorId: string; motion: "motion" | "root_motion"; instanceId?: string }
   | { kind: "object"; objectId?: string; instanceId?: string }
   | { kind: "camera_track"; cameraTrackId?: string; instanceId?: string }
@@ -70,7 +162,9 @@ const actorIdPattern = /^actor_[A-Za-z0-9_]+$/;
 export const selectorScopeToken = (selector: ProductionSelector): string => {
   switch (selector.kind) {
     case "contact":
-      return `contact:${selector.contactId}`;
+      return selector.contactId
+        ? `contact:${selector.contactId}`
+        : `contact:${selector.actorId ?? "*"}:${selector.part ?? "*"}`;
     case "actor":
       return selector.motion === "root_motion"
         ? `${selector.actorId}_root_motion`
@@ -143,7 +237,13 @@ export const tokenToSelectorQuery = (token: string): SelectorQuery | typeof DEPE
 export const selectorToQuery = (selector: ProductionSelector): SelectorQuery => {
   switch (selector.kind) {
     case "contact":
-      return { kind: "contact", contactId: selector.contactId, instanceId: selector.instanceId };
+      return {
+        kind: "contact",
+        contactId: selector.contactId,
+        actorId: selector.actorId,
+        part: selector.part,
+        instanceId: selector.instanceId,
+      };
     case "actor":
       return {
         kind: "actor",
@@ -176,7 +276,16 @@ export const selectorMatches = (selector: ProductionSelector, query: SelectorQue
   }
   switch (selector.kind) {
     case "contact":
-      return query.kind === "contact" && (query.contactId === undefined || selector.contactId === query.contactId);
+      if (query.kind !== "contact") {
+        return false;
+      }
+      if (query.contactId !== undefined) {
+        return selector.contactId === query.contactId;
+      }
+      return (
+        (query.actorId === undefined || selector.actorId === query.actorId) &&
+        (query.part === undefined || selector.part === query.part)
+      );
     case "actor":
       return (
         query.kind === "actor" &&

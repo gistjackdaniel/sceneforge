@@ -4,7 +4,7 @@ import type { DependencyMap } from "../clipgraph/types";
 import type { NodeBase, NodeKind } from "../nodes/types";
 import { getAffectedClipIds } from "../dependency/affectedClips";
 import type { OutdatedDetection, ProductionOutput } from "../dependency/fingerprint";
-import type { RevisionPlan } from "../dependency/recompute";
+import type { OutdatedEditReason, RevisionPlan } from "../dependency/recompute";
 import { syncClipCacheFields } from "../project/clipCacheStatus";
 import type { TimelineClip } from "../../domain/timeline/types";
 import {
@@ -111,11 +111,13 @@ export interface RevisionCacheUpdate {
   caches: Record<string, RenderCacheEntry>;
   clips?: Record<string, TimelineClip>;
   applied: boolean;
+  /** Present when an edit was applied. A stale or conflicting plan omits this and leaves caches as given. */
+  reasons?: OutdatedEditReason[];
 }
 
 /**
  * Apply a revision plan to render caches.
- * Conflict and unresolved plans leave every cache entry untouched.
+ * Conflict, unresolved, stale_base_graph_version, and contact_instance_conflict plans leave every cache entry untouched.
  * Preserved and hard-locked cache ids are not part of the plan's invalidate set.
  * `TimelineClip.clipGraphId` is copied through; `cacheStatus` is re-derived from proxy/final caches.
  */
@@ -129,7 +131,7 @@ export const applyRevisionPlan = (
     return { caches, clips, applied: false };
   }
   const nextCaches = invalidateCacheIds(caches, plan.invalidateCacheIds, plan.invalidateNodeIds, updatedAt);
-  return { caches: nextCaches, clips: syncClips(clips, nextCaches), applied: true };
+  return { caches: nextCaches, clips: syncClips(clips, nextCaches), applied: true, reasons: plan.reasons };
 };
 
 /**

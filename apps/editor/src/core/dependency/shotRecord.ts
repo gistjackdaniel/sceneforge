@@ -15,6 +15,8 @@ import { bindWorldPhase1Selectors, resolveWorldAssetId } from "./worldPhase1";
  * Root motion reads placement plus key positions. Contact-hand pose reads
  * key rotation and scale. The room is `environment.worldId`, a `WorldAsset.id`.
  * Frames are integers. fps comes from `ShotFpsSource` (`shot.time.fps`).
+ * Pose rotation is intrinsic Euler `XYZ`. Subject and take ids are the invalidation
+ * unit on the selector and are omitted from the pass hash, so a rename keeps the hash.
  */
 
 export type ShotDependencyEntity = "actor" | "prop" | "room" | "pose" | "camera_take";
@@ -105,10 +107,9 @@ const poseNode = (
     value: {
       entity: "pose",
       channel,
-      subjectId: subject.id,
       shotAssetId: subject.assetId,
       uri: subject.uri,
-      ...(channel === "root_motion" ? { placement: subject.placement } : {}),
+      ...(channel === "root_motion" ? { placement: subject.placement } : { eulerOrder: "XYZ" as const }),
       frames: frames.frames,
       ...(frames.prompt ? { prompt: frames.prompt } : {}),
       fps,
@@ -242,7 +243,7 @@ export const projectShotDependencies = (input: {
         "pose",
         subject.id,
         contactNodeId,
-        { kind: "contact", contactId: contactHandId(subject.id), assetId },
+        { kind: "contact", contactId: contactHandId(subject.id), actorId: subject.id, assetId },
         contact.value,
         [downstreamId],
         "contact_hand",
@@ -258,8 +259,8 @@ export const projectShotDependencies = (input: {
         {
           entity: "pose",
           channel: "contact_hand_downstream",
-          subjectId: subject.id,
           upstreamPassHash: contactHash,
+          eulerOrder: "XYZ" as const,
           fps,
         },
         [],
@@ -277,7 +278,6 @@ export const projectShotDependencies = (input: {
       { kind: "object", objectId: subject.id, assetId },
       {
         entity: "prop",
-        subjectId: subject.id,
         shotAssetId: subject.assetId,
         uri: subject.uri,
         placement: subject.placement,
@@ -315,7 +315,6 @@ export const projectShotDependencies = (input: {
     {
       entity: "camera_take",
       fps,
-      takeId: model.camera.takeId,
       interpolation: model.camera.interpolation,
       lens: model.camera.lens,
       keys: model.camera.keys,

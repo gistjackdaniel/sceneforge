@@ -8,6 +8,7 @@ export { hashNormalized, hashString, stableSerialize } from "./hash";
 export {
   DEPENDENT_RENDER_PASSES,
   persistentInstanceIdSchema,
+  normalizeProductionSelector,
   productionSelectorSchema,
   selectorMatches,
   selectorScopeToken,
@@ -42,10 +43,12 @@ export {
   planRevisionScope,
   revisionEditEventSchema,
   type RevisionEditEvent,
+  type OutdatedEditReason,
   type RevisionPlan,
   type ScopeConflict,
   type UnresolvedScope,
 } from "./recompute";
+export { createLegacyIdResolver, resolveLegacyId, type LegacyIdResolver, type LegacyRefCarrier } from "./legacyAlias";
 export {
   interpretScopeEntry,
   scopeLabel,
