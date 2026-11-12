@@ -14,7 +14,7 @@ import { parseDirection, type DirectionAction, type DirectionStep, type HandSpec
 
 /**
  * Seconds become frames only through this clock.
- * The application layer passes `toFrame` and a fps chosen from Shot, then Sequence, then the clip default.
+ * `fps` is `Shot.time.fps`. `toFrame` is called as `toFrame(t, shot.time.fps)`.
  */
 export type FrameClock = {
   fps: number;

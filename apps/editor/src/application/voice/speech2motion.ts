@@ -1,39 +1,37 @@
 import type { DomainCommand } from "../commands/types";
 import { executeCommand, type CommandBusState, type ExecuteResult } from "../commands/bus";
-import type { Shot } from "../../domain/shot";
 import type { ActionGraph } from "../../domain/speech2motion/actionGraph";
 import { produceSpeech2Motion, type Speech2MotionInput } from "../../domain/speech2motion/produce";
-import type { Sequence } from "../../domain/timeline/types";
-import { shotFps, toFrame, type ShotTiming } from "./toFrame";
+import { toFrame } from "./toFrame";
 
-const usableFps = (fps: number | undefined): number | undefined =>
-  typeof fps === "number" && Number.isFinite(fps) && fps > 0 ? fps : undefined;
-
-/**
- * Shot.fps, then Sequence.fps, then {@link shotFps} which falls back to `DEFAULT_CLIP_FPS`.
- * A missing shot must not skip a usable sequence rate.
- */
-export const speech2MotionFps = (
-  shot: Pick<Shot, "time"> | ShotTiming | undefined,
-  sequence: Pick<Sequence, "fps"> | undefined,
-): number => {
-  const shotFpsValue = shot && "time" in shot ? shot.time?.fps : shot?.fps;
-  const resolved = usableFps(shotFpsValue);
-  if (resolved !== undefined) return resolved;
-  return shotFps(sequence);
+/** Shot clock. Frame rate lives only on `Shot.time.fps`. */
+export type ShotClockSource = {
+  time: { fps: number; durationFrames?: number };
 };
 
-export const speech2MotionClock = (
-  shot: Pick<Shot, "time"> | ShotTiming | undefined,
-  sequence: Pick<Sequence, "fps"> | undefined,
-): Speech2MotionInput["clock"] => ({
-  fps: speech2MotionFps(shot, sequence),
-  toFrame,
-});
+/**
+ * Frame rate for a speech2motion graph.
+ * Reads `Shot.time.fps` and does not consult `Sequence.fps` or `DEFAULT_CLIP_FPS`.
+ */
+export const speech2MotionFps = (shot: ShotClockSource): number => shot.time.fps;
+
+/**
+ * Clock whose seconds convert with `toFrame(t, shot.time.fps)`.
+ * A rate passed into `toFrame` cannot replace the shot rate.
+ */
+export const speech2MotionClock = (shot: ShotClockSource): Speech2MotionInput["clock"] => {
+  const fps = speech2MotionFps(shot);
+  if (!(typeof fps === "number" && Number.isFinite(fps) && fps > 0)) {
+    throw new Error("Shot.time.fps must be a positive number.");
+  }
+  return {
+    fps,
+    toFrame: (tSeconds: number, _rate: number) => toFrame(tSeconds, speech2MotionFps(shot)),
+  };
+};
 
 export type UtteranceRequest = Omit<Speech2MotionInput, "clock" | "durationFrames"> & {
-  shot?: Pick<Shot, "time"> | ShotTiming;
-  sequence?: Pick<Sequence, "fps">;
+  shot: ShotClockSource;
 };
 
 /**
@@ -43,10 +41,10 @@ export type UtteranceRequest = Omit<Speech2MotionInput, "clock" | "durationFrame
 export const planSpeech2Motion = (
   request: UtteranceRequest,
 ): { graph: ActionGraph; commands: DomainCommand[] } => {
-  const durationFrames = request.shot && "time" in request.shot ? request.shot.time?.durationFrames : undefined;
+  const durationFrames = request.shot.time.durationFrames;
   const graph = produceSpeech2Motion({
     ...request,
-    clock: speech2MotionClock(request.shot, request.sequence),
+    clock: speech2MotionClock(request.shot),
     ...(typeof durationFrames === "number" ? { durationFrames } : {}),
   });
   return { graph, commands: commandsForSpeech2Motion(graph) };

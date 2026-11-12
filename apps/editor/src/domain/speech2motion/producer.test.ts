@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptyCommandBusState, undoCommand } from "../../application/commands/bus";
-import { commitSpeech2Motion, planSpeech2Motion, speech2MotionFps } from "../../application/voice/speech2motion";
+import { commitSpeech2Motion, planSpeech2Motion, speech2MotionClock } from "../../application/voice/speech2motion";
 import { toFrame } from "../../application/voice/toFrame";
 import { parseShot } from "../../domain/shot";
 import type { Project } from "../../domain/project/types";
@@ -9,6 +9,7 @@ import { normalizeWorldAsset } from "../../domain/worlds/normalize";
 import type { SceneState } from "../../domain/worlds/sceneState";
 import type { WorldAsset } from "../../domain/worlds/types";
 import { ActionGraphSchema, ActionGraphValidator, type ActionGraph, type EditSelector } from "./actionGraph";
+import { toEditScopeInput } from "./editScope";
 import { parseDirection } from "./parseDirection";
 import { STANDING_HAND_HEIGHT_M } from "./produce";
 
@@ -55,20 +56,17 @@ const stage = (props: string[]) => {
 const produce = (
   text: string,
   built: ReturnType<typeof stage>,
-  options?: { fps?: number; sequenceFps?: number; baseGraph?: ActionGraph; shotId?: string },
-) => {
-  const fps = options?.fps;
-  return planSpeech2Motion({
+  options: { fps: number; baseGraph?: ActionGraph; shotId?: string },
+) =>
+  planSpeech2Motion({
     text,
     locale: "ko",
-    shotId: options?.shotId ?? "shot-stage",
+    shotId: options.shotId ?? "shot-stage",
     worlds: { [built.world.id]: built.world },
     sceneStates: { [built.world.id]: built.scene },
-    ...(fps ? { shot: shotTime(fps) } : {}),
-    ...(options?.sequenceFps ? { sequence: { fps: options.sequenceFps } } : {}),
-    ...(options?.baseGraph ? { baseGraph: options.baseGraph } : {}),
+    shot: shotTime(options.fps),
+    ...(options.baseGraph ? { baseGraph: options.baseGraph } : {}),
   });
-};
 
 const selectorKey = (selector: EditSelector): string =>
   selector.kind === "contact" ? `contact:${selector.contact_id}` : `${selector.kind}:${"actor_id" in selector ? selector.actor_id ?? "" : ""}`;
@@ -243,26 +241,28 @@ describe("speech2motion producer", () => {
     expect(commands).toEqual([]);
   });
 
-  it("converts before, after, and while offsets with toFrame and the shot fps chain", () => {
+  it("converts before, after, and while offsets with toFrame(t, Shot.time.fps)", () => {
     const built = stage(["테이블"]);
-    const after = produce("A가 다가간 다음 0.5초 후에 B와 오른손으로 악수", built, { fps: 24 }).graph;
+    const shot = shotTime(24);
+    const after = produce("A가 다가간 다음 0.5초 후에 B와 오른손으로 악수", built, { fps: shot.time.fps }).graph;
     expectReady(after);
     const afterEvent = after.events.find((event) => event.relation?.type === "after");
-    expect(afterEvent?.relation?.offset_frames).toBe(toFrame(0.5, 24));
-    expect(afterEvent?.start_frame).toBe(toFrame(2, 24) + toFrame(0.5, 24));
+    expect(after.fps).toBe(shot.time.fps);
+    expect(afterEvent?.relation?.offset_frames).toBe(toFrame(0.5, shot.time.fps));
+    expect(afterEvent?.start_frame).toBe(toFrame(2, shot.time.fps) + toFrame(0.5, shot.time.fps));
     expect(Number.isInteger(afterEvent?.relation?.offset_frames)).toBe(true);
 
-    const faster = produce("A가 다가간 다음 0.5초 후에 B와 오른손으로 악수", built, { fps: 30, sequenceFps: 12 }).graph;
-    expect(faster.fps).toBe(30);
-    expect(faster.events.find((event) => event.relation?.type === "after")?.relation?.offset_frames).toBe(toFrame(0.5, 30));
+    const fasterShot = shotTime(30);
+    const faster = produce("A가 다가간 다음 0.5초 후에 B와 오른손으로 악수", built, { fps: fasterShot.time.fps }).graph;
+    expect(faster.fps).toBe(fasterShot.time.fps);
+    expect(faster.events.find((event) => event.relation?.type === "after")?.relation?.offset_frames).toBe(
+      toFrame(0.5, fasterShot.time.fps),
+    );
 
-    const fromSequence = produce("A가 다가간 다음 0.5초 후에 B와 오른손으로 악수", built, { sequenceFps: 12 }).graph;
-    expect(fromSequence.fps).toBe(12);
-    expect(fromSequence.events.find((event) => event.relation?.type === "after")?.relation?.offset_frames).toBe(toFrame(0.5, 12));
-
-    const fallback = produce("A가 다가간 다음 0.5초 후에 B와 오른손으로 악수", built).graph;
-    expect(fallback.fps).toBe(speech2MotionFps(undefined, undefined));
-    expect(fallback.events.find((event) => event.relation?.type === "after")?.relation?.offset_frames).toBe(toFrame(0.5, 24));
+    const clock = speech2MotionClock(shotTime(12));
+    expect(clock.fps).toBe(12);
+    expect(clock.toFrame(0.5, 24)).toBe(toFrame(0.5, 12));
+    expect(clock.toFrame(2, 30)).toBe(toFrame(2, 12));
 
     const during = produce("A가 다가가면서 B와 오른손으로 악수", built, { fps: 24 }).graph;
     expectReady(during);
@@ -273,6 +273,25 @@ describe("speech2motion producer", () => {
     const earlier = before.events.find((event) => event.relation?.type === "before");
     expect(earlier?.relation?.offset_frames).toBe(-toFrame(1, 24));
     expect(earlier?.action_type).toBe("approach");
+  });
+
+  it("maps preserve and recompute onto EditScopeInput without rewriting selectors", () => {
+    const built = stage(["테이블"]);
+    const graph = produce("B 접촉 손만 수정", built, {
+      fps: 24,
+      baseGraph: produce("A와 B가 오른손으로 악수", built, { fps: 24 }).graph,
+    }).graph;
+    const scope = toEditScopeInput(graph);
+    expect(graph.edit).toBeDefined();
+    expect(scope).toEqual({
+      shotId: graph.shot_id,
+      operation: graph.edit?.operation,
+      preserve: graph.edit?.preserve,
+      recompute: graph.edit?.recompute,
+    });
+    expect(scope?.preserve).toBe(graph.edit?.preserve);
+    expect(scope?.recompute).toBe(graph.edit?.recompute);
+    expect(scope?.instanceId).toBeUndefined();
   });
 
   it("records a ready graph only through the domain command bus", () => {
