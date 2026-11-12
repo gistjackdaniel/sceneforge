@@ -6,7 +6,7 @@ import { objectKeyframeSchema, readObjectTrack, resolveSceneObjects, type Object
 import { z } from "zod";
 import type { AssetRecord } from "../assets/types";
 import { parseShot, shotSchema } from "../shot/schema";
-import type { AssetId, CameraTake, Motion, Shot, Subject, SubjectId, TakeId } from "../shot/types";
+import type { AssetId, Motion, Shot, Subject, SubjectId, TakeId } from "../shot/types";
 import type { Project } from "./types";
 import type { TimelineClip } from "../timeline/types";
 
@@ -151,7 +151,7 @@ export const migrateClipToShot = (project: Project, clip: TimelineClip): Shot | 
   const cameraNodeId = clip.cameraPathNodeId ?? clip.cameraTrajectoryNodeId ?? `node-${clip.id}-trajectory`;
   const cameraNode = project.nodes[cameraNodeId];
   const params = cameraPathParamsFromNode(cameraNode?.enabled === false ? {} : cameraNode?.parameters ?? {});
-  const takes: CameraTake[] = params.takes.flatMap((take) => {
+  const takes = params.takes.flatMap((take) => {
     const keys = cameraKeys(take.keyframes, duration);
     if (keys.length === 0) return [];
     return [{
@@ -168,7 +168,7 @@ export const migrateClipToShot = (project: Project, clip: TimelineClip): Shot | 
   const interpolation = params.interpolation === "catmull_rom" ? "catmull_rom" : "linear";
   const selected = takes.find((take) => take.id === params.activeTakeId) ?? takes[0];
   const camera = selected
-    ? { status: "ready" as const, lens, interpolation, selectedTakeId: selected.id, takes: takes as [CameraTake, ...CameraTake[]] }
+    ? { status: "ready" as const, lens, interpolation, selectedTakeId: selected.id, takes }
     : { status: "empty" as const, lens, interpolation };
   try {
     return parseShot({
@@ -199,14 +199,17 @@ const assetRecord = (subject: Subject, stamped: string): AssetRecord => ({
   updatedAt: stamped,
 });
 
-/** Fills `project.shots` from the active sequence. A shot that already validates is left untouched. */
+/** Fills `project.shots` from the active sequence. A shot that already validates is parsed again so camera normalization stays idempotent, and is not rebuilt from nodes. */
 export const projectWithShots = <T extends Project>(project: T): T => {
   const sequence = project.sequences[project.activeSequenceId];
   const clipIds = sequence?.clipIds?.length ? sequence.clipIds : Object.keys(project.clips);
   const shots: NonNullable<Project["shots"]> = { ...(project.shots ?? {}) };
   const assets = { ...project.assets };
   for (const clipId of clipIds) {
-    if (shotSchema.safeParse(shots[clipId]).success) continue;
+    if (shotSchema.safeParse(shots[clipId]).success) {
+      shots[clipId] = parseShot(shots[clipId]);
+      continue;
+    }
     const clip = project.clips[clipId];
     if (!clip) continue;
     const shot = migrateClipToShot(project, clip);

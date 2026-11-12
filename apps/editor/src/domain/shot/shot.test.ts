@@ -6,6 +6,7 @@ import { applyShotCommand } from "./evolve";
 import { prepareModelInput } from "./modelInput";
 import { generateHash, hasSelectedTake, selectedTake } from "./queries";
 import { parseShot } from "./schema";
+import { legacyCameraTakeId } from "./takeId";
 import { shotId, subjectId, type Shot, type ShotCommand } from "./types";
 
 const now = "2026-11-04T00:00:00.000Z";
@@ -203,7 +204,10 @@ describe("clip migration", () => {
     expect(shot?.id).toBe("clip-001");
     expect(shot?.subjects[0]?.kind !== "light" && shot?.subjects[0]?.motion.channel).toBe("explicit");
     expect(shot?.camera.interpolation).toBe("linear");
-    expect(shot?.camera.status === "ready" && shot.camera.takes.map((take) => take.id)).toEqual(["take-a"]);
+    const legacyId = legacyCameraTakeId("clip-001", "take-a");
+    expect(shot?.camera.status === "ready" && shot.camera.takes.map((take) => take.id)).toEqual([legacyId]);
+    const migratedTake = shot?.camera.status === "ready" ? shot.camera.takes[0] : undefined;
+    expect(migratedTake?.legacyRefs).toEqual([{ kind: "camera_take", shotId: "clip-001", takeId: "take-a" }]);
     const renamedNodes = {
       ...migrated,
       nodes: { ...migrated.nodes, place: { ...migrated.nodes.place, parameters: { ...migrated.nodes.place.parameters, label: "Changed" }, params: {} } },

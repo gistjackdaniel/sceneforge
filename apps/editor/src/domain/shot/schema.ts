@@ -1,13 +1,24 @@
 import { z } from "zod";
+import { identityCalibration, identityMapping, samplesFromKeyframes } from "./cameraTrack";
+import { migrateZyxEncodedQuaternion, normalizeQuat } from "./cameraRotation";
+import { migrateCameraTakeIds } from "./takeId";
 import type {
   AssetId,
+  CameraIntrinsics,
+  CameraKey,
+  CameraSample,
   CameraTake,
+  CameraTakeLegacyRef,
+  DeviceCalibration,
+  Quat,
   Shot,
+  ShotCamera,
   ShotId,
   ShotModelInput,
   Subject,
   SubjectId,
   TakeId,
+  TrackingEvent,
 } from "./types";
 
 const vec3 = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
@@ -80,6 +91,69 @@ const cameraKeySchema = z.object({
   aperture: z.number().positive().optional(),
 });
 
+const trackingStateSchema = z.enum(["normal", "limited", "not_available"]);
+
+const cameraSampleSchema = z.object({
+  frame: z.number().int().nonnegative(),
+  position: vec3,
+  rotation: quat,
+  deviceTimestampNs: z.number().int().nonnegative().optional(),
+  timecode: z.string().min(1).optional(),
+  trackingState: trackingStateSchema.optional(),
+  focalLengthMm: z.number().positive().optional(),
+  focusDistanceM: z.number().positive().optional(),
+  aperture: z.number().positive().optional(),
+});
+
+const intrinsicsSchema = z.object({
+  imageSize: z.tuple([z.number().int().positive(), z.number().int().positive()]).optional(),
+  K: z.tuple([vec3, vec3, vec3]).optional(),
+  focalLengthMm: z.number().positive().optional(),
+  sensorSizeMm: z.tuple([z.number().positive(), z.number().positive()]).optional(),
+  sensorFit: z.enum(["horizontal", "vertical", "auto"]).optional(),
+  distortion: z.tuple([
+    z.number().finite(),
+    z.number().finite(),
+    z.number().finite(),
+    z.number().finite(),
+    z.number().finite(),
+  ]).optional(),
+});
+
+const calibrationSchema = z.object({
+  calibrationId: z.string().min(1),
+  arFramework: z.enum(["arkit", "arcore", "webxr", "viewport", "other"]),
+  scale: z.number().positive(),
+  rotation: quat,
+  translation: vec3,
+  method: z.enum(["manual_anchor", "marker", "plane_fit", "identity"]),
+  residualRmsM: z.number().nonnegative().optional(),
+  createdAt: z.string().min(1),
+});
+
+const trackingEventSchema = z.object({
+  kind: z.enum(["tracking_lost", "tracking_recovered", "relocalized", "drift_correction"]),
+  frame: z.number().int().nonnegative(),
+  deviceTimestampNs: z.number().int().nonnegative().optional(),
+  correction: z.object({ translation: vec3, rotation: quat }).optional(),
+  estimatedDriftM: z.number().nonnegative().optional(),
+});
+
+const mappingSchema = z.object({
+  mode: z.enum(["one_to_one", "gain", "smoothing", "retiming"]),
+  translationGain: vec3,
+  rotationGain: z.number().finite(),
+  smoothing: z.number().finite(),
+  timeScale: z.number().finite(),
+  timeOffsetFrames: z.number().finite(),
+});
+
+const legacyRefSchema = z.object({
+  kind: z.literal("camera_take"),
+  shotId: z.string().min(1),
+  takeId: z.string().min(1),
+});
+
 const cameraTakeSchema = z.object({
   schemaVersion: z.literal(1),
   id: z.string().min(1),
@@ -87,6 +161,13 @@ const cameraTakeSchema = z.object({
   source: z.enum(["record", "manual", "preset"]),
   keys: z.array(cameraKeySchema).min(1),
   createdAt: z.string().min(1),
+  samples: z.array(cameraSampleSchema).optional(),
+  intrinsics: intrinsicsSchema.optional(),
+  calibration: calibrationSchema.optional(),
+  trackingEvents: z.array(trackingEventSchema).optional(),
+  mapping: mappingSchema.optional(),
+  legacyRefs: z.array(legacyRefSchema).optional(),
+  rotationStorage: z.literal("quaternion_xyzw").optional(),
 });
 
 const cameraSchema = z.discriminatedUnion("status", [
@@ -94,6 +175,7 @@ const cameraSchema = z.discriminatedUnion("status", [
     status: z.literal("empty"),
     lens: lensSchema,
     interpolation: z.enum(["linear", "catmull_rom"]),
+    retiredTakeIds: z.array(z.string().min(1)).optional(),
   }),
   z.object({
     status: z.literal("ready"),
@@ -101,6 +183,7 @@ const cameraSchema = z.discriminatedUnion("status", [
     interpolation: z.enum(["linear", "catmull_rom"]),
     selectedTakeId: z.string().min(1),
     takes: z.array(cameraTakeSchema).min(1),
+    retiredTakeIds: z.array(z.string().min(1)).optional(),
   }),
 ]).superRefine((camera, ctx) => {
   if (camera.status !== "ready") return;
@@ -193,6 +276,124 @@ export const shotModelInputSchema = z.object({
   recipe: z.object({ generateHash: z.string().min(1) }),
 });
 
+type ParsedTake = z.infer<typeof cameraTakeSchema>;
+
+const asQuat = (rotation: readonly number[]): [number, number, number, number] =>
+  [rotation[0] ?? 0, rotation[1] ?? 0, rotation[2] ?? 0, rotation[3] ?? 1];
+
+/** A unit quaternion is copied as stored so a second load does not drift the bits. */
+const stableQuat = (rotation: readonly number[]): [number, number, number, number] => {
+  const values = asQuat(rotation);
+  const magnitude = Math.hypot(values[0], values[1], values[2], values[3]);
+  return Math.abs(magnitude - 1) < 1e-6 ? values : normalizeQuat(values);
+};
+
+const storedQuat = (rotation: readonly number[], trust: boolean): Quat =>
+  trust ? stableQuat(rotation) : migrateZyxEncodedQuaternion(asQuat(rotation));
+
+const copyIntrinsics = (value: ParsedTake["intrinsics"]): CameraIntrinsics | undefined => {
+  if (!value) return undefined;
+  return {
+    imageSize: value.imageSize ? [value.imageSize[0], value.imageSize[1]] : undefined,
+    K: value.K
+      ? [
+          [value.K[0][0], value.K[0][1], value.K[0][2]],
+          [value.K[1][0], value.K[1][1], value.K[1][2]],
+          [value.K[2][0], value.K[2][1], value.K[2][2]],
+        ]
+      : undefined,
+    focalLengthMm: value.focalLengthMm,
+    sensorSizeMm: value.sensorSizeMm ? [value.sensorSizeMm[0], value.sensorSizeMm[1]] : undefined,
+    sensorFit: value.sensorFit,
+    distortion: value.distortion
+      ? [value.distortion[0], value.distortion[1], value.distortion[2], value.distortion[3], value.distortion[4]]
+      : undefined,
+  };
+};
+
+const copyCalibration = (value: ParsedTake["calibration"]): DeviceCalibration => {
+  const fallback = identityCalibration();
+  if (!value) return fallback;
+  return {
+    calibrationId: value.calibrationId,
+    arFramework: value.arFramework,
+    scale: value.scale,
+    rotation: stableQuat(value.rotation),
+    translation: [value.translation[0], value.translation[1], value.translation[2]],
+    method: value.method,
+    residualRmsM: value.residualRmsM,
+    createdAt: value.createdAt,
+  };
+};
+
+const normalizeTake = (take: ParsedTake, fps: number): CameraTake => {
+  const trust = take.rotationStorage === "quaternion_xyzw";
+  const keys = take.keys.map((key) => ({
+    frame: key.frame,
+    position: [key.position[0], key.position[1], key.position[2]] as [number, number, number],
+    rotation: storedQuat(key.rotation, trust),
+    focalLengthMm: key.focalLengthMm,
+    focusDistanceM: key.focusDistanceM,
+    aperture: key.aperture,
+  }));
+  const packed = keys as unknown as [CameraKey, ...CameraKey[]];
+  const samples: CameraSample[] = take.samples && take.samples.length > 0
+    ? take.samples.map((sample) => ({
+        frame: sample.frame,
+        position: [sample.position[0], sample.position[1], sample.position[2]],
+        rotation: storedQuat(sample.rotation, trust),
+        deviceTimestampNs: sample.deviceTimestampNs,
+        timecode: sample.timecode,
+        trackingState: sample.trackingState ?? "normal",
+        focalLengthMm: sample.focalLengthMm,
+        focusDistanceM: sample.focusDistanceM,
+        aperture: sample.aperture,
+      }))
+    : samplesFromKeyframes(packed, fps);
+  const legacyRefs: CameraTakeLegacyRef[] = (take.legacyRefs ?? []).map((ref) => ({
+    kind: "camera_take",
+    shotId: ref.shotId,
+    takeId: ref.takeId,
+  }));
+  return {
+    schemaVersion: 1,
+    id: brand<TakeId>(take.id),
+    name: take.name,
+    source: take.source,
+    keys: packed,
+    createdAt: take.createdAt,
+    samples,
+    intrinsics: copyIntrinsics(take.intrinsics),
+    calibration: copyCalibration(take.calibration),
+    trackingEvents: (take.trackingEvents ?? []) as TrackingEvent[],
+    mapping: take.mapping ?? identityMapping(),
+    legacyRefs,
+    rotationStorage: "quaternion_xyzw",
+  };
+};
+
+const normalizeCamera = (
+  shotId: string,
+  fps: number,
+  camera: z.infer<typeof cameraSchema>,
+): ShotCamera => {
+  const retiredTakeIds = (camera.retiredTakeIds ?? []).map((id) => brand<TakeId>(id));
+  if (camera.status === "empty") {
+    return { status: "empty", lens: camera.lens, interpolation: camera.interpolation, retiredTakeIds };
+  }
+  const takes = camera.takes.map((take) => normalizeTake(take, fps));
+  const migrated = migrateCameraTakeIds(shotId, takes, camera.selectedTakeId);
+  const packed = migrated.takes as [CameraTake, ...CameraTake[]];
+  return {
+    status: "ready",
+    lens: camera.lens,
+    interpolation: camera.interpolation,
+    selectedTakeId: brand<TakeId>(migrated.selectedId),
+    takes: packed,
+    retiredTakeIds,
+  };
+};
+
 const brandShot = (shot: z.infer<typeof shotSchema>): Shot => ({
   ...shot,
   id: brand<ShotId>(shot.id),
@@ -201,16 +402,8 @@ const brandShot = (shot: z.infer<typeof shotSchema>): Shot => ({
     id: brand<SubjectId>(subject.id),
     assetId: brand<AssetId>(subject.assetId),
   })) as Subject[],
-  camera: shot.camera.status === "empty"
-    ? shot.camera
-    : {
-        ...shot.camera,
-        selectedTakeId: brand<TakeId>(shot.camera.selectedTakeId),
-        takes: shot.camera.takes.map((take) => ({ ...take, id: brand<TakeId>(take.id) })) as unknown as ReadyTakes,
-      },
+  camera: normalizeCamera(shot.id, shot.time.fps, shot.camera),
 });
-
-type ReadyTakes = readonly [CameraTake, ...CameraTake[]];
 
 export const parseShot = (input: unknown): Shot => brandShot(shotSchema.parse(input));
 

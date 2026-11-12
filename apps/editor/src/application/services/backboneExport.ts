@@ -1,11 +1,11 @@
 import type { Project } from "../../domain/project/types";
-import { cameraPathParamsFromNode } from "../../domain/graph/cameraPath";
-import { lensNodeIdForClip, lensParamsFromNode } from "../../domain/graph/lens";
+import { cameraPathParamsFromNode, type CameraPathParams } from "../../domain/graph/cameraPath";
+import { lensNodeIdForClip, lensParamsFromNode, type LensParams } from "../../domain/graph/lens";
 import { BackboneCameraBuilder, type BackboneCamera } from "../../domain/rendering/backboneV01";
+import { readShotTimeFps, selectedTake } from "../../domain/shot";
 import { cameraPathNodeIdForClip } from "./viewportCommit";
 
 export interface BackboneCameraExportOptions {
-  fps?: number;
   numFrames?: number;
   near?: number;
   far?: number;
@@ -13,10 +13,9 @@ export interface BackboneCameraExportOptions {
 }
 
 /**
- * Build a Backbone v0.1 camera trajectory from the current project state for a clip.
- * - Uses CameraPathNode keyframes
- * - Uses LensNode for intrinsics
- * - Returns a payload validated by backboneCameraSchema (via builder)
+ * Build a Backbone v0.1 camera trajectory for a clip.
+ * Frame rate is `Shot.time.fps`. A ready camera take supplies the virtual keys.
+ * An empty shot camera still reads CameraPathNode. LensNode supplies the sensor preset.
  */
 export const buildBackboneCameraForClip = (
   project: Project,
@@ -28,20 +27,45 @@ export const buildBackboneCameraForClip = (
   if (!clip) {
     throw new Error(`Clip ${clipId} not found.`);
   }
+  const shot = project.shots?.[clipId];
+  if (!shot) {
+    throw new Error("Shot record is required.");
+  }
+  const fps = readShotTimeFps(shot);
   const pathNodeId = cameraPathNodeIdForClip(clip);
   const pathNode = project.nodes[pathNodeId];
-  if (!pathNode) {
+  const take = selectedTake(shot);
+  const params: CameraPathParams = take
+    ? {
+        keyframes: take.keys.map((key) => ({
+          frame: key.frame,
+          position: [key.position[0], key.position[1], key.position[2]],
+          rotation: [key.rotation[0], key.rotation[1], key.rotation[2], key.rotation[3]],
+          focalLengthMm: key.focalLengthMm,
+          focusDistanceM: key.focusDistanceM,
+          aperture: key.aperture,
+        })),
+        takes: [],
+        interpolation: shot.camera.interpolation,
+        frameCount: shot.time.durationFrames,
+      }
+    : cameraPathParamsFromNode(pathNode?.parameters ?? {});
+  if (!take && !pathNode) {
     throw new Error("CameraPathNode not found.");
   }
   const lensNode = project.nodes[lensNodeIdForClip(clip.id)];
-  const params = cameraPathParamsFromNode(pathNode.parameters ?? {});
-  const lens = lensParamsFromNode(lensNode?.parameters ?? {});
+  const lens: LensParams = lensParamsFromNode(lensNode?.parameters ?? { focalLengthMm: shot.camera.lens.focalLengthMm });
   return BackboneCameraBuilder.buildFromCameraPath({
     params,
-    lens,
+    lens: {
+      ...lens,
+      focalLengthMm: shot.camera.lens.focalLengthMm,
+      focusDistanceM: shot.camera.lens.focusDistanceM ?? lens.focusDistanceM,
+      aperture: shot.camera.lens.aperture ?? lens.aperture,
+    },
     imageSize,
-    fps: options?.fps,
-    numFrames: options?.numFrames ?? clip.durationFrames ?? clip.duration,
+    fps,
+    numFrames: options?.numFrames ?? shot.time.durationFrames,
     near: options?.near,
     far: options?.far,
     sensorFit: options?.sensorFit,

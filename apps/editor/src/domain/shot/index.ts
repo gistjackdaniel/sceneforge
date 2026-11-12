@@ -1,8 +1,13 @@
 export type {
   AssetId,
   CameraInterpolation,
+  CameraIntrinsics,
   CameraKey,
+  CameraMotionMapping,
+  CameraSample,
   CameraTake,
+  CameraTakeLegacyRef,
+  DeviceCalibration,
   EmptyCamera,
   EnvironmentView,
   GenerateBlocker,
@@ -28,9 +33,13 @@ export type {
   SubjectDraft,
   SubjectId,
   TakeId,
+  TrackingEvent,
+  TrackingState,
   Transform,
   Vec3,
 } from "./types";
+export { EULER_ORDER, eulerToQuaternion, quaternionToEuler } from "./euler";
+export { legacyCameraTakeId, mintCameraTakeId } from "./takeId";
 export { shotId, subjectId, takeId } from "./types";
 export { parseShot, parseShotModelInput, shotModelInputSchema, shotSchema } from "./schema";
 export { applyShotCommand, type ShotEdit } from "./evolve";
@@ -38,10 +47,13 @@ export {
   clipLocalFrame,
   generateHash,
   hasSelectedTake,
+  readShotTimeFps,
+  recordedTakePlaybackPoses,
   sampleCameraPathPositions,
   sampleCameraPose,
   sampleSubjectPose,
   selectedTake,
   subjectPoseKeys,
+  viewportPlaybackPoses,
 } from "./queries";
 export { prepareModelInput, type PreparedInput } from "./modelInput";
