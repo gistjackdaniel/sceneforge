@@ -1,56 +1,39 @@
 import { z } from "zod";
 import { collectDownstream } from "../../domain/graph/dirty";
+import { interpretScopeEntry, scopeLabel, type EditScopeInput } from "./editScope";
 import {
   issuesFromZod,
   productionOutputSchema,
   type InputIssue,
   type ProductionOutput,
 } from "./fingerprint";
-import {
-  DEPENDENT_RENDER_PASSES,
-  productionSelectorSchema,
-  selectorMatches,
-  selectorScopeToken,
-  selectorToQuery,
-  tokenToSelectorQuery,
-  type SelectorQuery,
-} from "./selector";
+import { DEPENDENT_RENDER_PASSES, selectorMatches, type SelectorQuery } from "./selector";
 
-const scopeEntrySchema = z.union([z.string().min(1), productionSelectorSchema]);
-type ScopeEntry = z.infer<typeof scopeEntrySchema>;
-
+/**
+ * Envelope for an edit's preserve/recompute lists.
+ * List items stay `unknown`: the producer schema is `actionGraph.ts`, which is
+ * not on this branch, so this object does not redefine that schema.
+ */
 export const revisionEditEventSchema = z
   .object({
     shot_id: z.string().min(1).optional(),
     shotId: z.string().min(1).optional(),
     operation: z.string().min(1),
-    actor_id: z.string().min(1).optional(),
-    actorId: z.string().min(1).optional(),
-    target_actor_id: z.string().min(1).optional(),
-    targetActorId: z.string().min(1).optional(),
-    contact_event_id: z.string().min(1).optional(),
-    contactEventId: z.string().min(1).optional(),
-    new_effector: z.string().min(1).optional(),
-    newEffector: z.string().min(1).optional(),
     instance_id: z.string().min(1).optional(),
     instanceId: z.string().min(1).optional(),
-    preserve: z.array(scopeEntrySchema),
-    recompute: z.array(scopeEntrySchema),
+    preserve: z.array(z.unknown()),
+    recompute: z.array(z.unknown()),
   })
   .transform((value) => ({
     shotId: value.shotId ?? value.shot_id ?? "",
     operation: value.operation,
-    actorId: value.actorId ?? value.actor_id,
-    targetActorId: value.targetActorId ?? value.target_actor_id,
-    contactEventId: value.contactEventId ?? value.contact_event_id,
-    newEffector: value.newEffector ?? value.new_effector,
     instanceId: value.instanceId ?? value.instance_id,
     preserve: value.preserve,
     recompute: value.recompute,
   }))
   .refine((value) => value.shotId.length > 0, { message: "shotId가 필요합니다." });
 
-export type RevisionEditEvent = z.infer<typeof revisionEditEventSchema>;
+export type RevisionEditEvent = EditScopeInput;
 
 export interface ScopeConflict {
   token?: string;
@@ -92,23 +75,24 @@ interface ScopeHit {
   label: string;
 }
 
-const entryLabel = (entry: ScopeEntry): string =>
-  typeof entry === "string" ? entry : selectorScopeToken(entry);
+const entryLabel = (entry: unknown): string => scopeLabel(entry);
 
-const queryForEntry = (
-  entry: ScopeEntry,
-): SelectorQuery | typeof DEPENDENT_RENDER_PASSES | undefined => {
-  if (typeof entry === "string") {
-    return tokenToSelectorQuery(entry);
+const queryForEntry = (entry: unknown): SelectorQuery | typeof DEPENDENT_RENDER_PASSES | undefined => {
+  const interpreted = interpretScopeEntry(entry);
+  if ("unresolved" in interpreted) {
+    return undefined;
   }
-  return selectorToQuery(entry);
+  if ("dependent" in interpreted) {
+    return DEPENDENT_RENDER_PASSES;
+  }
+  return interpreted.query;
 };
 
 const outputInstanceId = (output: ProductionOutput): string | undefined =>
   output.selector.instanceId ?? output.fingerprint.assetRevision.instanceId;
 
 const matchEntry = (
-  entry: ScopeEntry,
+  entry: unknown,
   outputs: ProductionOutput[],
   list: "preserve" | "recompute",
   scopeInstanceId?: string,
@@ -189,7 +173,7 @@ export const planRevisionScope = (
 
   const absorb = (
     list: "preserve" | "recompute",
-    entry: ScopeEntry,
+    entry: unknown,
     hits: Map<string, ScopeHit>,
     labels: Map<string, string[]>,
   ) => {

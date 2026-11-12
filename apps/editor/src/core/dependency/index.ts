@@ -47,6 +47,15 @@ export {
   type UnresolvedScope,
 } from "./recompute";
 export {
+  interpretScopeEntry,
+  scopeLabel,
+  contactHandId,
+  type EditScopeInput,
+  type ShotEntityScope,
+} from "./editScope";
+export { shotRecordFps, type ShotFpsSource } from "./shotFps";
+export { projectShotDependencies, type ShotDependencyGraph, type ShotDependencyNode } from "./shotRecord";
+export {
   bindWorldPhase1Selectors,
   resolveWorldAssetId,
   type WorldPhase1Binding,

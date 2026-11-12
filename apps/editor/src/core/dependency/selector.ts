@@ -95,10 +95,10 @@ export const selectorScopeToken = (selector: ProductionSelector): string => {
  * `dependent_render_passes` is resolved from the downstream closure, not here.
  */
 export const tokenToSelectorQuery = (token: string): SelectorQuery | typeof DEPENDENT_RENDER_PASSES | undefined => {
-  if (token === "camera_track") {
+  if (token === "camera_track" || token === "camera" || token === "camera_take") {
     return { kind: "camera_track" };
   }
-  if (token === "set_layout") {
+  if (token === "set_layout" || token === "room" || token === "background" || token === "room/background") {
     return { kind: "set_layout" };
   }
   if (token === "contact_constraints") {
