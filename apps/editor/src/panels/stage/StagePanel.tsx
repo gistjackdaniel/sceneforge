@@ -7,6 +7,7 @@ import { SceneAssets } from "./SceneAssets";
 import { type CameraKeyframe } from "../../domain/graph/cameraPath";
 import { verticalFovFromLens } from "../../domain/graph/lens";
 import { buildRigPreset, CAMERA_RIG_PRESETS, type CameraRigPreset } from "../../domain/graph/cameraRig";
+import { frameContainingSeconds, isPositiveIntegerFps, shotLocalFrame } from "../../domain/timeline/timecode";
 import { clipStartFrame } from "../../domain/timeline/timing";
 import { firstViewportImageUri, resolveViewportRepresentation, type ViewportLoadState } from "../../domain/worlds/viewportRepresentation";
 import { eulerToQuaternionApprox, quaternionToEulerApprox } from "../../application/services/viewportCommit";
@@ -14,7 +15,6 @@ import { environmentFromWorld } from "../../application/services/shotEnvironment
 import { type ObjectPose } from "../../domain/worlds/sceneObjects";
 import { OUTPUT_ASPECT_PRESETS, outputAspectRatio, type OutputAspectPreset } from "../../domain/rendering";
 import {
-  clipLocalFrame,
   shotFps,
   prepareModelInput,
   sampleCameraPathPositions,
@@ -81,7 +81,13 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const shot = clip ? project.shots?.[clip.id] : undefined;
   const duration = shot?.time.durationFrames ?? 1;
   const start = clip ? clipStartFrame(clip) : 0;
-  const frame = shot ? clipLocalFrame((sequence?.playhead ?? start) - start, shot) : 0;
+  const frame = shot
+    ? shotLocalFrame({
+        playhead: sequence?.playhead ?? start,
+        clipStartFrame: start,
+        durationFrames: shot.time.durationFrames,
+      })
+    : 0;
   const fps = shotFps(shot);
   playbackRef.current = { duration, start, fps, clipId: clip?.id ?? "" };
   const subjects = shot && !previewOnly ? shot.subjects : [];
@@ -296,8 +302,9 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       return;
     }
     const { duration: totalFramesRaw, start: clipStart, fps: clipFps } = playbackRef.current;
+    if (!isPositiveIntegerFps(clipFps)) return;
     const totalFrames = Math.max(1, totalFramesRaw);
-    const fpsSafe = Math.max(1, clipFps);
+    const fpsSafe = clipFps;
     const loop = createLoopClock({
       duration: Math.max(0.001, totalFrames / fpsSafe),
       fps: fpsSafe,
@@ -324,7 +331,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
     };
     stampTakeFrame(0);
     const unsub = loop.subscribe((tSec) => {
-      const next = Math.max(0, Math.min(totalFrames - 1, Math.floor(tSec * fpsSafe)));
+      const next = Math.max(0, Math.min(totalFrames - 1, frameContainingSeconds(Math.max(0, tSec), fpsSafe)));
       stampTakeFrame(next);
       dispatch({ type: "scrub-playhead", playhead: clipStart + next });
       if (takeRecordingRef.current && !reachedEnd && next >= totalFrames - 1) {
