@@ -1,4 +1,5 @@
 import type { AssetRecord } from "../assets/types";
+import { editShotEditorial } from "./editorial";
 import { parseShot } from "./schema";
 import { generateHash } from "./queries";
 import type {
@@ -360,6 +361,20 @@ export const applyShotCommand = (shot: Shot, command: ShotCommand, now = new Dat
           : { status: "empty", lens: camera.lens, interpolation: camera.interpolation };
       }
       return finish({ ...shot, subjects, camera }, { type: "REPLACE_SHOT", shotId: shot.id, shot }, true);
+    }
+    case "ADD_SHOT_OVERRIDE":
+    case "UPDATE_SHOT_OVERRIDE":
+    case "REMOVE_SHOT_OVERRIDE":
+    case "REVERT_SHOT_REVISION": {
+      const edited = editShotEditorial(shot, command, now);
+      if (!edited.ok) return fail(edited.reason);
+      if (!edited.changed) return finish(shot, undefined, false);
+      try {
+        parseShot(edited.shot);
+      } catch {
+        return fail("Shot record is invalid.");
+      }
+      return { ok: true, shot: edited.shot, inverse: { type: "REPLACE_SHOT", shotId: shot.id, shot }, changed: true };
     }
     case "SET_SHOT_TIME":
       if (!(command.fps > 0) || command.durationFrames < 1) return fail("Shot time is invalid.");

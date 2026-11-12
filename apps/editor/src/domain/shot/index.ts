@@ -16,8 +16,13 @@ export type {
   Quat,
   ReadyCamera,
   Shot,
+  ShotApproval,
+  ShotAssetRef,
   ShotCamera,
   ShotCommand,
+  ShotContact,
+  ShotOverrideEvent,
+  ShotRevision,
   ShotId,
   ShotModelInput,
   ShotRender,
@@ -34,6 +39,7 @@ export type {
 export { shotId, subjectId, takeId } from "./types";
 export { parseShot, parseShotModelInput, shotModelInputSchema, shotSchema } from "./schema";
 export { applyShotCommand, type ShotEdit } from "./evolve";
+export { resolveShotContacts, subjectForActorRef } from "./editorial";
 export {
   clipLocalFrame,
   generateHash,
@@ -42,6 +48,7 @@ export {
   sampleCameraPose,
   sampleSubjectPose,
   selectedTake,
+  shotFps,
   subjectPoseKeys,
 } from "./queries";
 export { prepareModelInput, type PreparedInput } from "./modelInput";

@@ -15,6 +15,7 @@ import { type ObjectPose } from "../../domain/worlds/sceneObjects";
 import { OUTPUT_ASPECT_PRESETS, outputAspectRatio, type OutputAspectPreset } from "../../domain/rendering";
 import {
   clipLocalFrame,
+  shotFps,
   prepareModelInput,
   sampleCameraPathPositions,
   sampleCameraPose,
@@ -81,7 +82,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const duration = shot?.time.durationFrames ?? 1;
   const start = clip ? clipStartFrame(clip) : 0;
   const frame = shot ? clipLocalFrame((sequence?.playhead ?? start) - start, shot) : 0;
-  const fps = shot?.time.fps ?? 24;
+  const fps = shotFps(shot);
   playbackRef.current = { duration, start, fps, clipId: clip?.id ?? "" };
   const subjects = shot && !previewOnly ? shot.subjects : [];
   const objects = useMemo(() => subjects.map((subject) => {

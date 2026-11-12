@@ -1,4 +1,15 @@
+import { DEFAULT_CLIP_FPS } from "../timeline/timing";
 import type { CameraInterpolation, CameraKey, CameraTake, Quat, Shot, ShotCamera, TakeId, Transform, Vec3 } from "./types";
+
+/**
+ * Frame rate for a shot. Reads `Shot.time.fps` only.
+ * A missing or non-positive rate uses {@link DEFAULT_CLIP_FPS}.
+ */
+export const shotFps = (shot: { time?: { fps?: number } } | undefined): number => {
+  const fps = shot?.time?.fps;
+  if (typeof fps === "number" && Number.isFinite(fps) && fps > 0) return fps;
+  return DEFAULT_CLIP_FPS;
+};
 
 export const selectedTake = (shot: Shot): CameraTake | undefined => {
   if (shot.camera.status !== "ready") return undefined;

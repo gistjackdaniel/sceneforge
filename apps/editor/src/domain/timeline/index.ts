@@ -1,4 +1,5 @@
 export type { ClipSourceType, ClipVariant, Sequence, TimelineClip } from "./types";
+export { shotFpsForClip } from "./shotClock";
 export {
   DEFAULT_CLIP_FPS,
   clipDurationFrames,

@@ -170,7 +170,7 @@ export const resolveRigPart = (refText: string): { rigPart: RigPart; joint: stri
   return { rigPart, joint: SMPLX_PART_JOINT[rigPart] };
 };
 
-/** Shot-local `[start, end)`. `Shot.fps` is not stored; see `ShotLocalFrame`. */
+/** Shot-local `[start, end)`. The rate is `Shot.time.fps`; this lane stores integer frames only. */
 export const frameRangeSchema = z
   .tuple([z.number().int().nonnegative(), z.number().int().nonnegative()])
   .refine(([start, end]) => end > start, "frame range must be [start, end)");
