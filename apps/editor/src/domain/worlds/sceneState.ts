@@ -116,6 +116,11 @@ const instanceFields = {
 export const actorInstanceSchema = z.object({
   ...instanceFields,
   type: z.literal("actor"),
+  /**
+   * Stable reimport identity: asset revision, source path, and node name.
+   * Absent when the actor did not come through `importRiggedActor`. A clone does not keep it.
+   */
+  importKey: z.string().min(1).optional(),
   skeleton: z.object({
     model: z.literal("smplx"),
     gender: z.enum(["neutral", "male", "female"]).default("neutral"),
@@ -277,6 +282,14 @@ export const sceneStateSchema = z
     const overlap = Object.keys(scene.actors).filter((id) => Object.prototype.hasOwnProperty.call(scene.objects, id));
     if (overlap.length > 0) issue(ctx, "actor and object ids overlap", ["actors"]);
 
+    const importKeys = new Map<string, string>();
+    for (const actor of Object.values(scene.actors)) {
+      if (!actor.importKey) continue;
+      const previous = importKeys.get(actor.importKey);
+      if (previous) issue(ctx, "rigged actor import key is duplicated", ["actors", actor.id, "importKey"]);
+      importKeys.set(actor.importKey, actor.id);
+    }
+
     const instances: Record<string, SceneInstance> = { ...scene.actors, ...scene.objects };
     for (const instance of Object.values(instances)) {
       const revision = scene.revisions[instance.assetRef.revisionId];
@@ -421,7 +434,8 @@ const idInScene = (scene: SceneState, id: string): boolean =>
  * Clone an instance onto a newly minted id.
  * Copies the asset pin, rest transform, and skeleton or role. Does not copy attachments.
  * Motion clips and shot overrides are not in this scene, so they are not copied.
- * The source id stays. `clonedFrom` records it.
+ * The source id stays. `clonedFrom` records it. A rigged-actor `importKey` is not copied,
+ * so the clone is not a second import of the same source.
  */
 export const cloneInstance = (scene: SceneState, instanceId: string, newId: string, label: string): SceneState => {
   const instance = findInstance(scene, instanceId);
@@ -433,7 +447,8 @@ export const cloneInstance = (scene: SceneState, instanceId: string, newId: stri
   }
   if (idInScene(scene, newId)) throw new WorldDomainError("id_reused", "Persistent ids are never reused.");
   if (instance.type === "actor") {
-    const copy: ActorInstance = { ...instance, id: newId, label, clonedFrom: instance.id, deletedAt: undefined };
+    const { importKey: _importKey, ...rest } = instance;
+    const copy: ActorInstance = { ...rest, id: newId, label, clonedFrom: instance.id, deletedAt: undefined };
     return writeInstance(scene, copy);
   }
   const copy: ObjectInstance = {
