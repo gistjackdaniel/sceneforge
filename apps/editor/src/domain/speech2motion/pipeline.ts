@@ -4,6 +4,7 @@ import type { ResolveContext, TargetResolver } from "../worlds/query";
 import { ActionGraphValidator, type ActionGraphIssue, type Event } from "./actionGraph";
 import { ContactSolver } from "./contactSolver";
 import { StubMotionModel, type MotionEventInput, type MotionModelAdapter } from "./motionModel";
+import { phase0LeftHandWorldPose } from "./phase0Fixture";
 import type { Speech2MotionScene } from "./preserveVerifier";
 import { ShotPoseAdapter } from "./shotPoseAdapter";
 
@@ -50,7 +51,10 @@ export class Speech2MotionPipeline {
     const inferred = model.infer({
       shotFps,
       frameCount,
-      actors: graph.actors.map((actor) => ({ actorId: actor.actor_id })),
+      actors: graph.actors.map((actor) => ({
+        actorId: actor.actor_id,
+        root: Speech2MotionPipeline.rootOf(request.shot, actor.actor_id),
+      })),
       events: graph.events.map((event) => Speech2MotionPipeline.eventInput(event)),
     });
     const solved = ContactSolver.solve({
@@ -59,6 +63,7 @@ export class Speech2MotionPipeline {
       frameCount,
       locateObject: (objectId) => Speech2MotionPipeline.locate(request.shot, request.targetResolver, objectId),
       locateSurface: (query) => Speech2MotionPipeline.locate(request.shot, request.targetResolver, query),
+      handWorldPose: (frame, part) => (part === "left_hand" ? phase0LeftHandWorldPose(frame) : undefined),
     });
     const scene: Speech2MotionScene = {
       shotId: request.shot.id,
@@ -99,6 +104,12 @@ export class Speech2MotionPipeline {
       position: [subject.placement.position[0], subject.placement.position[1], subject.placement.position[2]],
       subjectId: subject.id,
     };
+  }
+
+  private static rootOf(shot: Shot, actorId: string): readonly [number, number, number] | undefined {
+    const subject = shot.subjects.find((item) => item.kind === "human" && (item.id === actorId || item.name === actorId));
+    if (!subject || subject.kind === "light") return undefined;
+    return subject.placement.position;
   }
 
   private static eventInput(event: Event): MotionEventInput {

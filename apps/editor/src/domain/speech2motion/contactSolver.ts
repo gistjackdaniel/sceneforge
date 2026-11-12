@@ -1,7 +1,8 @@
 import type { ContactGraph, RigPart } from "./actionGraph";
 import type { ActorPoseSequence } from "./motionModel";
 import { GENERATED_MOTION_SOURCE, worldTransform, type ObjectAttachment, type ObjectPoseStream } from "./objectStream";
-import { SmplxSkeleton, TwoBoneIk, Vec, type PoseFrame, type Vec3 } from "./pose";
+import { PHASE0_CUP_HALF_HEIGHT_M, PHASE0_CUP_IN_HAND_OFFSET, composeWorldPose } from "./phase0Fixture";
+import { QuatMath, SmplxSkeleton, TwoBoneIk, Vec, type PoseFrame, type Quat, type Vec3 } from "./pose";
 
 export interface PlacementSource {
   position: Vec3;
@@ -40,6 +41,11 @@ export class ContactSolver {
     frameCount: number;
     locateObject: (objectId: string) => PlacementSource | undefined;
     locateSurface: (query: string) => PlacementSource | undefined;
+    /**
+     * World pose of the holding hand. When set for `left_hand`, the cup follows
+     * that pose times the hand-local offset instead of a generic wrist lerp.
+     */
+    handWorldPose?: (frame: number, part: RigPart) => { translation: Vec3; rotation: Quat } | undefined;
   }): ContactSolveResult {
     const original = ContactSolver.cloneSequences(input.sequences);
     let sequences = ContactSolver.cloneSequences(input.sequences);
@@ -66,7 +72,15 @@ export class ContactSolver {
       contacts.push(record);
     }
 
-    const objects = ContactSolver.objectStreams(sequences, input.contacts, input.frameCount, input.locateObject, input.locateSurface, contacts);
+    const objects = ContactSolver.objectStreams(
+      sequences,
+      input.contacts,
+      input.frameCount,
+      input.locateObject,
+      input.locateSurface,
+      contacts,
+      input.handWorldPose,
+    );
     return { sequences: objects.sequences, objects: objects.streams, attachments: objects.attachments, contacts };
   }
 
@@ -116,6 +130,7 @@ export class ContactSolver {
     locateObject: (objectId: string) => PlacementSource | undefined,
     locateSurface: (query: string) => PlacementSource | undefined,
     solved: SolvedContact[],
+    handWorldPose?: (frame: number, part: RigPart) => { translation: Vec3; rotation: Quat } | undefined,
   ): { sequences: ActorPoseSequence[]; streams: ObjectPoseStream[]; attachments: ObjectAttachment[] } {
     const next = sequences.map((sequence) => ({ ...sequence, frames: sequence.frames.map(ContactSolver.cloneFrame) }));
     const streams: ObjectPoseStream[] = [];
@@ -156,24 +171,40 @@ export class ContactSolver {
       }
       const release = hold ? hold.end_frame + 1 : (place?.start_frame ?? 0);
       const approachStart = place?.start_frame ?? release;
+      const localOffset = PHASE0_CUP_IN_HAND_OFFSET;
+      const tablePosition: Vec3 = place
+        ? [surface.position[0], surface.position[1] + PHASE0_CUP_HALF_HEIGHT_M, surface.position[2]]
+        : surface.position;
+      const graspOnTable = Vec.sub(tablePosition, localOffset);
       const actor = next[actorIndex]!;
-      if (place && approachStart < release) {
-        actor.frames = actor.frames.map((frame) => {
-          if (frame.frame < approachStart || frame.frame >= release) return frame;
-          const span = Math.max(1, release - 1 - approachStart);
-          const amount = Math.min(1, Math.max(0, (frame.frame - approachStart) / span));
-          const wrist = frame.joints[limb.end]?.translation ?? object.position;
-          return { frame: frame.frame, joints: TwoBoneIk.solve(frame.joints, limb, Vec.lerp(wrist, surface.position, amount)) };
-        });
-      }
+      const guided = handWorldPose
+        ? (frame: number) => handWorldPose(frame, holder.a.part)
+        : undefined;
+      actor.frames = actor.frames.map((frame) => {
+        const guide = guided?.(frame.frame);
+        if (guide && frame.frame <= release) {
+          const solved = TwoBoneIk.solve(frame.joints, limb, guide.translation);
+          const wrist = solved[limb.end];
+          if (wrist) wrist.rotation = guide.rotation;
+          return { frame: frame.frame, joints: solved };
+        }
+        if (!place || frame.frame < approachStart || frame.frame > release) return frame;
+        const span = Math.max(1, release - approachStart);
+        const amount = Math.min(1, Math.max(0, (frame.frame - approachStart) / span));
+        const wrist = frame.joints[limb.end]?.translation ?? object.position;
+        return { frame: frame.frame, joints: TwoBoneIk.solve(frame.joints, limb, Vec.lerp(wrist, graspOnTable, amount)) };
+      });
       const parentId = object.subjectId ?? holder.a.actor_id;
       const handParent = holder.a.actor_id;
       const tableParent = surface.subjectId ?? ContactSolver.surfaceQuery;
+      const identity = QuatMath.identity();
       const frames = Array.from({ length: frameCount }, (_, t) => {
         const onTable = Boolean(place) && t >= release;
-        const wrist = actor.frames.find((item) => item.frame === t)?.joints[limb.end]?.translation ?? object.position;
-        const position = onTable ? surface.position : wrist;
-        return { t, T_world_obj: worldTransform(position) };
+        if (onTable) return { t, T_world_obj: worldTransform(tablePosition) };
+        const wrist = actor.frames.find((item) => item.frame === t)?.joints[limb.end];
+        const translation = wrist?.translation ?? object.position;
+        const rotation = wrist?.rotation ?? identity;
+        return { t, T_world_obj: composeWorldPose(translation, rotation, localOffset) };
       });
       streams.push({ objectId, subjectId: parentId, source: GENERATED_MOTION_SOURCE, frames });
       const holdEnd = Math.min(frameCount, release);
@@ -185,6 +216,7 @@ export class ContactSolver {
           sourceContactId: (hold ?? holder).contact_id,
           startFrame: 0,
           endFrame: holdEnd,
+          offset: { translation: localOffset, rotation: identity },
         });
       }
       if (place && release < frameCount) {
@@ -194,6 +226,7 @@ export class ContactSolver {
           sourceContactId: place.contact_id,
           startFrame: release,
           endFrame: frameCount,
+          offset: { translation: [0, 0, 0], rotation: identity },
         });
       }
       for (const contact of related) mark(contact, true);

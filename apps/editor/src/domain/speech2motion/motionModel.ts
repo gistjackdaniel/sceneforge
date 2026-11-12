@@ -23,7 +23,8 @@ export interface MotionModelRequest {
   /** `Shot.time.fps`. Output frames are integers on this clock. */
   shotFps: number;
   frameCount: number;
-  actors: readonly { actorId: string }[];
+  /** `root` is the pelvis in world meters, including Y. Trajectory Y stays a hand hint. */
+  actors: readonly { actorId: string; root?: Vec3 }[];
   events: readonly MotionEventInput[];
 }
 
@@ -74,9 +75,12 @@ export class StubMotionModel implements MotionModelAdapter {
       .filter((event) => event.actorId === actorId && event.startFrame <= shotFrame && shotFrame <= event.endFrame)
       .sort((left, right) => left.startFrame - right.startFrame);
     const guide = StubMotionModel.trajectoryAt(active, request.shotFps, time);
-    const pelvis: Vec3 = guide
-      ? [guide.position[0], REST_PELVIS_Y, guide.position[2]]
-      : [index * ACTOR_SPACING, REST_PELVIS_Y, 0];
+    const placed = request.actors[index]?.root;
+    const pelvis: Vec3 = placed
+      ? [placed[0], placed[1], placed[2]]
+      : guide
+        ? [guide.position[0], REST_PELVIS_Y, guide.position[2]]
+        : [index * ACTOR_SPACING, REST_PELVIS_Y, 0];
     const yaw = guide?.heading ?? 0;
     let joints = SmplxSkeleton.restPose(pelvis, yaw);
     const twist = StubMotionModel.textTwist(active.map((event) => event.text ?? "").join("\n"));

@@ -41,7 +41,21 @@ export { ContactSolver, type ContactSolveResult, type PlacementSource, type Solv
 export { MODEL_FPS, StubMotionModel, type ActorPoseSequence, type MotionEventInput, type MotionModelAdapter, type MotionModelRequest, type MotionTrajectoryPoint } from "./motionModel";
 export { hashNormalized, hashString, stableSerialize } from "./normalizedHash";
 export {
+  PHASE0_ACTOR_A_ROOT,
+  PHASE0_ACTOR_B_ROOT,
+  PHASE0_CONTACT_TOLERANCE_M,
+  PHASE0_CUP_HALF_HEIGHT_M,
+  PHASE0_CUP_IN_HAND_OFFSET,
+  PHASE0_LEFT_SHOULDER_IN_ROOT,
+  PHASE0_STUB_ARM_LENGTH_M,
+  PHASE0_TABLE_POSITION,
+  composeWorldPose,
+  phase0CupOnTable,
+  phase0LeftHandWorldPose,
+} from "./phase0Fixture";
+export {
   GENERATED_MOTION_SOURCE,
+  multiplyMat4,
   translationOf,
   worldTransform,
   type Mat4,
@@ -68,5 +82,5 @@ export {
   type SmplxJointName,
   type Vec3,
 } from "./pose";
-export { PreserveVerifier, type PreserveRow, type Speech2MotionScene } from "./preserveVerifier";
+export { PreserveVerifier, type PreserveEditInput, type PreserveListEntry, type PreserveRow, type Speech2MotionScene } from "./preserveVerifier";
 export { ShotPoseAdapter } from "./shotPoseAdapter";

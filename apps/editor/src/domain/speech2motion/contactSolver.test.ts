@@ -3,6 +3,7 @@ import type { ContactGraph } from "./actionGraph";
 import { ContactSolver } from "./contactSolver";
 import type { ActorPoseSequence } from "./motionModel";
 import { GENERATED_MOTION_SOURCE, translationOf } from "./objectStream";
+import { PHASE0_CUP_IN_HAND_OFFSET } from "./phase0Fixture";
 import { jointIndex, SmplxSkeleton, Vec } from "./pose";
 
 const ACTOR_A = "inst_fixture_actor_a";
@@ -101,9 +102,10 @@ describe("contact solver", () => {
     expect(stream?.source).toBe(GENERATED_MOTION_SOURCE);
     expect(stream?.frames.map((frame) => frame.t)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     const held = translationOf(stream!.frames[0]!.T_world_obj);
-    expect(held[0]).toBeCloseTo(wrist(actor, 0, "left_wrist")![0], 5);
-    expect(held[1]).toBeCloseTo(wrist(actor, 0, "left_wrist")![1], 5);
-    expect(held[2]).toBeCloseTo(wrist(actor, 0, "left_wrist")![2], 5);
+    const restWrist = wrist(actor, 0, "left_wrist")!;
+    expect(held[0]).toBeCloseTo(restWrist[0] + PHASE0_CUP_IN_HAND_OFFSET[0], 5);
+    expect(held[1]).toBeCloseTo(restWrist[1] + PHASE0_CUP_IN_HAND_OFFSET[1], 5);
+    expect(held[2]).toBeCloseTo(restWrist[2] + PHASE0_CUP_IN_HAND_OFFSET[2], 5);
     for (const frame of [4, 5, 6, 7]) {
       const position = translationOf(stream!.frames[frame]!.T_world_obj);
       expect(position[0]).toBeCloseTo(table.position[0], 5);
@@ -118,6 +120,7 @@ describe("contact solver", () => {
       sourceContactId: "cup_hold_01",
       startFrame: 0,
       endFrame: 4,
+      offset: { translation: PHASE0_CUP_IN_HAND_OFFSET },
     });
     expect(placed.attachments[1]).toEqual({
       objectId: CUP,
@@ -125,13 +128,19 @@ describe("contact solver", () => {
       sourceContactId: "cup_place_01",
       startFrame: 4,
       endFrame: 8,
+      offset: { translation: [0, 0, 0], rotation: [0, 0, 0, 1] },
     });
     expect(placed.attachments[1]?.rigPart).toBeUndefined();
     const solvedActor = placed.sequences[0]!;
     expect(solvedActor.frames[3]?.joints[SmplxSkeleton.pelvisIndex]?.translation).toEqual(
       actor.frames[3]?.joints[SmplxSkeleton.pelvisIndex]?.translation,
     );
-    expect(Vec.length(Vec.sub(wrist(solvedActor, 3, "left_wrist")!, table.position))).toBeLessThan(1e-3);
+    const grasp = [
+      table.position[0] - PHASE0_CUP_IN_HAND_OFFSET[0],
+      table.position[1] - PHASE0_CUP_IN_HAND_OFFSET[1],
+      table.position[2] - PHASE0_CUP_IN_HAND_OFFSET[2],
+    ] as [number, number, number];
+    expect(Vec.length(Vec.sub(wrist(solvedActor, 4, "left_wrist")!, grasp))).toBeLessThan(1e-3);
     expect(wrist(solvedActor, 0, "left_wrist")).toEqual(wrist(actor, 0, "left_wrist"));
 
     const missed = ContactSolver.solve({

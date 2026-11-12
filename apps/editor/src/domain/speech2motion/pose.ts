@@ -95,13 +95,13 @@ const PARENTS: readonly number[] = [
 
 const v = (x: number, y: number, z: number): Vec3 => [x, y, z];
 
-const handOffsets = (side: 1 | -1): Vec3[] => {
+const handOffsets = (side: 1 | -1, wristY: number, wristZ: number): Vec3[] => {
   const wristX = side * 0.71;
   const spreads = [0.03, 0.01, -0.01, -0.03];
   const fingers = spreads.flatMap((spread) =>
-    [1, 2, 3].map((step) => v(wristX + side * 0.03 * step, 0.44 + spread, 0.01 * step)),
+    [1, 2, 3].map((step) => v(wristX + side * 0.03 * step, wristY + spread, wristZ + 0.01 * step)),
   );
-  const thumb = [1, 2, 3].map((step) => v(wristX + side * 0.025 * step, 0.42, -0.02 * step));
+  const thumb = [1, 2, 3].map((step) => v(wristX + side * 0.025 * step, wristY - 0.02, wristZ - 0.02 * step));
   return [...fingers, ...thumb];
 };
 
@@ -123,17 +123,18 @@ const REST_OFFSET: readonly Vec3[] = [
   v(-0.06, 0.44, 0),
   v(0.06, 0.44, 0),
   v(0, 0.64, 0),
-  v(-0.18, 0.44, 0),
+  // Left shoulder matches the Phase 0 root offset so the 0.53 m arm reaches the table cup.
+  v(-0.18, 0.4, 0.02),
   v(0.18, 0.44, 0),
-  v(-0.46, 0.44, 0),
+  v(-0.46, 0.4, 0.02),
   v(0.46, 0.44, 0),
-  v(-0.71, 0.44, 0),
+  v(-0.71, 0.4, 0.02),
   v(0.71, 0.44, 0),
   v(0, 0.6, 0.04),
   v(-0.03, 0.68, 0.06),
   v(0.03, 0.68, 0.06),
-  ...handOffsets(-1),
-  ...handOffsets(1),
+  ...handOffsets(-1, 0.4, 0.02),
+  ...handOffsets(1, 0.44, 0),
 ];
 
 export interface LimbChain {
