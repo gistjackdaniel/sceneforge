@@ -10,7 +10,7 @@ FVD는 분포가 무너졌는지 보는 참고 수치다. 게이트의 합격 �
 
 ## 1. 공통 실행
 
-- 시계는 `Shot.time.fps = 16`, `durationFrames = 128`, `origin = "clip_local"`.
+- 시계는 그 샷의 `Shot.time.fps`만 쓴다. 데모 샷은 `16`, `durationFrames = 128`, `origin = "clip_local"`. Backbone `fps`는 이 필드의 복사다.
 - 해상도는 첫 실행 전에 하나로 고정하고 전 조건에 쓴다. Phase 0 제안은 480p 급이다. 가로·세로 픽셀은 provenance에 적는다. 조건마다 다른 해상도로 지표를 비교하지 않는다.
 - 시드는 샷×조건당 3개. 게이트는 샷 단위 평균을 본다. 최악 시드는 따로 표에 남긴다. 최악 시드만 버리고 평균을 다시 계산하지 않는다.
 - 배치 크기는 1이다. latency는 이 조건에서 잰다.
@@ -91,7 +91,7 @@ FVD는 분포가 무너졌는지 보는 참고 수치다. 게이트의 합격 �
 
 출력 층은 생성된 영상에서 잰다.
 
-- 프레임 오차: 접촉이 켜지고 꺼지는 프레임과 정답 `frameRange`의 차, 절댓값, fps 16 기준. 악수는 `[72, 112)`, 컵 안착은 프레임 48.
+- 프레임 오차: 접촉이 켜지고 꺼지는 프레임과 정답 `frameRange`의 차, 절댓값. 프레임은 `Shot.time.fps` 기준이다. 데모 샷에서 악수는 `[72, 112)`, 컵 안착은 프레임 48이다.
 - 위치 오차: 악수는 두 손목 중점, 컵은 컵 원점과 테이블 접촉점. 미터.
 - 침투: 손-손, 손-컵, 컵-테이블 메시가 겹친 깊이, 밀리미터. 최대와 평균.
 - 출력에서 메시가 없으면 결정적 depth와 파트 ID가 있는 조건(B 이상)은 depth로 침투를 근사할 수 있다. RGB만 있는 A는 2D 겹침을 침투 대리지표로 적되, 그 숫자로 침투 합격을 주지 않는다. 침투 합격은 메시 또는 보정된 depth가 있을 때만 준다.
@@ -249,8 +249,8 @@ D를 채택하는 조건은 hard 잠금 영역이 [속성 문서](03-editable-pr
 측정이 읽는 이름:
 
 - 신원 키: `SceneState.actors`의 id, `assetRef`, `skeleton.betas`. 샷 쪽은 `Subject.assetId`, `assetVersion`.
-- 포즈 정답: `backboneHumanPoseSchema`의 프레임. 퍼포먼스 소스의 권위는 수출 타입 `generated`다. 저장 열거형에는 아직 없다.
-- 카메라 정답: `backboneCameraSchema.frames[].c2w`. 원천은 `CameraTake.keys`와 `directionContract.shot`.
-- 접촉 정답: 컵은 `attachments`와 `T_world_obj`. 악수는 접촉 수출 `handshake_01`. `PerformanceCue`에는 `rigPart`가 없다.
+- 포즈 정답: `backboneHumanPoseSchema`의 프레임. 음성→모션의 소스는 `generated`다. 월드 봇이 모션 소스 열거형에 넣는 중이고, 스키마 반영은 대기 중이다.
+- 카메라 정답: 수출 OpenCV `c2w`. 계약 경계의 쿼터니언(`CameraKey.rotation`, `rotationQuaternion`)을 그 행렬로 굽는다. 샷 오브젝트 회전의 저장은 `rotationEuler`(XYZ, 씬 소유)다.
+- 접촉 정답: 컵의 밀집 궤적은 비디오 출력 `T_world_obj`이고, 희소 `Motion` 키는 월드 봇의 베이크다. 악수 손은 `rigPartSchema`다. 월드 봇이 이 열거형을 `PerformanceCue`와 `SceneState`에 연결하며, 스키마 반영은 대기 중이다. 컵의 초기 부모는 데모 스크립트의 A다.
 - 편집 범위: `StateSelector`의 `preserve` / `recompute`. 픽셀 마스크는 파트 ID에서 만든다. `channelControls`는 배우 한 명의 손보다 굵다.
 - 비용이 붙는 영수증: `ShotRender.modelVersion`, `connectorId`, `generateHash`, `artifactUri`. 시드와 패스 해시는 영수증에 아직 없다. 평가 로그가 그 칸을 채운다. 정의는 속성 문서의 provenance다.

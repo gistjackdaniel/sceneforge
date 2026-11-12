@@ -39,10 +39,10 @@ G3가 읽는다. 최악 시드 기준이다.
 | rig / facial controls | 몸은 geometry, 얼굴은 구간별 | 몸과 손은 입력 SMPL-X. A의 얼굴은 대사 구간 `[8, 40)`만 geometry. 그 밖과 B의 얼굴은 hard (입력 `jaw_pose`, `expression` 고정). | `skeleton.model = "smplx"`, `betas` 길이 10, `rig.partMap`, `SMPLX_PART_JOINT`, Backbone `jaw_pose`, `expression`, `left_hand_pose`, `right_hand_pose`. 채널 `performance_body`, `performance_face` | 페이셜 리그는 SMPL-X 표정 10과 턱 3이다. FACS 슬라이더는 없다. |
 | hair / groom | generative | 신원 실루엣을 바꾸는 기장·형태 변경은 이 샷의 편집 명령에 없다. 가닥 디테일은 생성에 맡긴다. | 없음. `assetKindSchema`에 groom이 없다. | 그룸 AOV와 가닥 곡선이 없다. hard로 올리려면 결정적 헤어 패스를 마스크에 넣고 수준을 바꿔야 한다. |
 | material | 방·테이블·컵은 hard, 옷의 미세 텍스처는 generative | 컵과 세트의 재질 id는 유지. 옷 주름의 고주파만 생성. | 리비전 `uri`. B2의 material AOV는 렌더 수출이지 샷 필드가 아니다. | `Shot`과 `SceneState`에 재질 슬롯이 없다. `WorldElement.kind`에 `material_slot`만 있다. |
-| pose | geometry | A, B의 관절 궤적. 스크립트 E에서 A는 편집 전과 동일한 배열로 hard에 가깝게 고정된다 (`actor_motion`). | `PerformancePlanParams`, Backbone 사람 프레임, 샷 `Motion` (`explicit` 키, `provenance.kind: "keyed"`) | 음성 모션 타입 `generated`는 열거형에 없다. 샷 키는 희소 요약이라 포즈 정답이 아니다. |
-| contact | geometry | `handshake_01`, `cup_hold_01`, `cup_place_01`. 스크립트 E는 컵 접촉 둘을 `preserve`로 고정. | 컵: `attachments[]`의 `parentInstanceId`, `rigPart`, `offset`, `frameRange`, `sourceContactId`. 보존 셀렉터 `contact` | 악수 레코드와 `rigPart`는 씬 스키마에 없다. `PerformanceCue`에도 `rigPart`가 없다. `directionContract.shot.ignoredCharacterSignals`에 `contact`가 있어, 접촉은 샷 연출 쪽이 아니라 퍼포먼스·접촉 그래프 쪽이다. |
-| object transform | 컵은 geometry, 테이블은 hard | 컵은 매 프레임 `T_world_obj`와 부착이 같이 있다. 테이블은 `motionMode: "static"`, `restTransform` 고정. | `motionMode`, `restTransform` (`translation`, `rotation`, `scale`), `backboneObjectPoseSchema.frames[].T_world_obj`. 샷 `placement`는 `position`, `rotationEuler`, `scale` | `motionMode: "dynamic"`은 플래그다. 월드 레인은 솔버를 돌리지 않는다. 샷 `Motion`은 매 프레임 행렬을 저장하지 않는다. |
-| camera | hard | 테이크 전체. 스크립트 E에서 키와 `c2w`가 편집 전과 같다. | `Shot.camera`, `CameraTake.source`, `CameraKey`, `directionContract.shot`, `channelControls.camera.locked` 기본 `true`, Backbone `c2w` | 샷 회전 필드는 `rotation`, 연출 계약은 `rotationQuaternion`. 그래프 보간의 `bezier`는 샷에 없다. |
+| pose | geometry | A, B의 관절 궤적. 스크립트 E에서 A는 편집 전과 동일한 배열로 hard에 가깝게 고정된다 (`actor_motion`). | `PerformancePlanParams`, Backbone 사람 프레임. 음성→모션 소스는 `generated`. | 월드 봇이 `generated`를 모션 소스에 추가한다. 스키마 반영 대기. |
+| contact | geometry | `handshake_01`, `cup_hold_01`, `cup_place_01`. 스크립트 E는 컵 접촉 둘을 `preserve`로 고정. 악수 손은 `rigPartSchema`. | 컵 부착의 `rigPart`. 보존 셀렉터 `contact`. 연출 계약의 샷 쪽 `ignoredCharacterSignals`에는 `contact`가 있어 접촉은 퍼포먼스·씬 쪽에 있다. | 월드 봇이 `rigPartSchema`를 `PerformanceCue`와 `SceneState`에 연결한다. 스키마 반영 대기. 컵의 초기 부모는 데모 기준인 A다. 픽스처 수정은 월드 봇. |
+| object transform | 컵은 geometry, 테이블은 hard | 컵은 비디오의 매 프레임 `T_world_obj`와 부착이 같이 있다. 테이블은 `motionMode: "static"`, `restTransform` 고정. | 밀집: `backboneObjectPoseSchema.frames[].T_world_obj`. 희소: 샷 `Motion` 키. `placement.rotationEuler`는 XYZ, 씬 소유. | 비디오가 밀집 변환을 출력한다. 월드 봇이 그 변환을 희소 `Motion` 키로 굽는 규칙을 정의한다. `motionMode: "dynamic"`은 모드 플래그다. |
+| camera | hard | 테이크 전체. 스크립트 E에서 계약 경계 쿼터니언과 수출 `c2w`가 편집 전과 같다. | `Shot.camera`, `CameraKey.rotation`(쿼터니언), `directionContract`의 `rotationQuaternion`, Backbone `c2w`. `channelControls.camera.locked` 기본 `true`. | 카메라 수출 표기는 OpenCV `c2w` 하나다. 샷 보간 `bezier`는 쓰지 않는다. |
 | lighting | 실용 조명은 hard, 분위기 잔광은 generative | 샷에 `kind: "light"` 주체가 있으면 `intensity`와 `color`는 hard. 없으면 세트 리비전에 구운 조명을 hard로 보고, 생성 모델의 노출 드리프트만 정성으로 본다. | `LightSubject.intensity`, `color`. 씬 오브젝트 `role: "light"`에는 세기 필드가 없다. | 대상 샷의 필수 출연은 배우 둘, 컵, 방, 카메라다. 조명은 방 리비전에 포함된다. 샷 라이트와 씬 라이트의 필드가 같지 않다. |
 | identity | hard | `actor-a`, `actor-b`, `object-cup`의 id, `assetRef`, 배우 `betas`. `instance_identity`는 보존 검사가 항상 포함한다. | 씬 인스턴스 id, `assetRef`, `betas`. 샷 `assetId`, `assetVersion`, `Subject.id` | 샷 id와 씬 id를 묶는 외래 키는 없다. 데모 수출은 같은 문자열을 쓴다. `generateHash`는 표시 이름을 제외한다. 이름을 바꿔도 신원 해시는 유지되는 쪽이 맞다. |
 
@@ -52,10 +52,10 @@ G3가 읽는다. 최악 시드 기준이다.
 
 편집 가능한 것:
 
-- B의 악수 손 (`handshake_01.targetRigPart`, B의 손 포즈와 그 팔의 IK).
-- 음성에서 다시 뽑는 B의 `actor_motion`. 소스 타입은 수출에서 `generated`.
+- B의 악수 손. `rigPartSchema`의 `left_hand`, B의 손 포즈와 그 팔의 IK. 월드 봇이 이 열거형을 `PerformanceCue`와 `SceneState`에 연결한다.
+- 음성에서 다시 뽑는 B의 `actor_motion`. 소스는 `generated`다. 월드 봇이 열거형에 넣는 중이고 스키마 반영은 대기 중이다.
 - generative로 남긴 그룸 디테일과 옷의 고주파.
-- 샷 길이와 fps. 바꾸면 다른 샷이다. 8.0초, fps 16은 이 데모의 시계다.
+- 샷 길이와 `Shot.time.fps`. 이 데모는 8.0초, `Shot.time.fps = 16`이다. fps는 이 필드만 바꾼다.
 
 보호되는 것:
 
@@ -158,12 +158,15 @@ G3가 읽는다. 최악 시드 기준이다.
 
 ## 7. 정합 메모
 
-월드 씬 v0 (`sceneStateSchema`, `schemaVersion: 1`)는 월드 레인이 소유한다. 모션 클립, 접촉 이벤트, 카메라 샘플은 그 스키마가 저장하지 않는다고 적혀 있다. 이 문서가 그 셋을 씬 객체에 새로 넣으라고 요구하지 않는다. 포즈는 퍼포먼스 플랜과 Backbone, 카메라는 샷 테이크와 연출 계약, 악수는 접촉 수출, 컵의 재질화된 부착만 씬의 `attachments`다.
+합의된 소유는 [데모 스크립트](01-demo-scripts.md) §3의 표다. 요약하면 다음과 같다.
 
-샷 기록 (`Shot`, `schemaVersion: 1`)은 이 브랜치의 저장 문서다. `ShotModelInput` (`schemaVersion: 2`, `source: "editable_scene"`, `rasterKeyframes: "forbidden"`)은 거기서 파생된다. 모델 내부를 샷 필드에 넣지 않는다. Wan의 토큰 레이아웃, 어댑터 텐서 모양, DiT 블록 번호는 provenance의 `model.id`와 `weightsHash` 밖에 적지 않는다.
+- 음성→모션 소스는 `generated`다. 추가 소유는 월드 봇이고 스키마 반영은 대기 중이다.
+- 컵의 밀집 `T_world_obj`는 비디오 출력이다. 희소 `Motion` 키로 굽는 규칙은 월드 봇이 정의한다.
+- 악수 손은 `rigPartSchema`다. 월드 봇이 `PerformanceCue`와 `SceneState`에 연결한다.
+- 샷 오브젝트 회전은 `rotationEuler`(XYZ, 씬 소유)다. 계약 경계는 쿼터니언이고, 카메라 수출은 OpenCV `c2w`다.
+- 컵의 초기 부모는 이 데모의 A다. 월드 픽스처를 그 기준으로 고친다.
+- fps는 `Shot.time.fps`만 쓴다.
 
-`sceneConditioning`은 그래프 경로의 이전 입력이다. `time.frameOrigin`은 샷의 `time.origin`과 같은 `"clip_local"`이다. 샷 기록이 있는 실행의 파생 입력은 `ShotModelInput`이다.
-
-`coordinates.ts`는 fps의 권위를 아직 없는 타임라인 `Shot`으로 적는다. 권위는 이 브랜치의 `Shot.time.fps`다. 월드 씬은 fps를 저장하지 않고, 프레임 정수는 `ShotLocalFrame`이다.
+월드 씬 v0 (`sceneStateSchema`, `schemaVersion: 1`)는 월드 레인이 소유한다. 샷 기록 (`Shot`, `schemaVersion: 1`)에서 `ShotModelInput`(`schemaVersion: 2`, `source: "editable_scene"`, `rasterKeyframes: "forbidden"`)이 파생된다. 모델 내부를 샷 필드에 넣지 않는다. Wan의 토큰 레이아웃, 어댑터 텐서 모양, DiT 블록 번호는 provenance의 `model.id`와 `weightsHash` 밖에 적지 않는다. `sceneConditioning.time.frameOrigin`은 `Shot.time.origin`과 같은 `"clip_local"`이다. 샷이 있는 실행의 파생 입력은 `ShotModelInput`이다.
 
 프리뷰 증류본의 가중치 해시는 최종 `weightsHash`와 다르다. 둘을 한 `modelVersion` 문자열에 섞지 않는다. 최종 `ShotRender.modelVersion`은 전체 모델과 조건 이름(예를 들어 `Wan2.2-Fun-5B-Control-Camera+B2`)이 식별되게 적는다. 시드와 패스 해시는 `modelVersion`에 인코딩하지 않고 provenance 객체에 둔다.
