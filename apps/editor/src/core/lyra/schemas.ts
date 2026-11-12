@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { PERFORMANCE_SOURCE_TYPES } from "../../domain/performance";
+import { rigPartSchema } from "../../domain/worlds/sceneState";
 
 const lyraJobStatusSchema = z.enum(["idle", "queued", "running", "completed", "failed"]);
 
@@ -33,7 +35,7 @@ const worldArtifactsSchema = z.object({
 
 const performanceSourceSchema = z.object({
   id: z.string(),
-  type: z.enum(["text_prompt", "live_action", "motion_capture", "key_animation_2d"]),
+  type: z.enum(PERFORMANCE_SOURCE_TYPES),
   label: z.string(),
   uri: z.string().optional(),
   assetId: z.string().optional(),
@@ -59,6 +61,8 @@ const performanceCueSchema = z.object({
   actor: z.string().optional(),
   actorId: z.string().optional(),
   targetActorId: z.string().optional(),
+  rigPart: rigPartSchema.optional(),
+  targetRigPart: rigPartSchema.optional(),
   sourceId: z.string().optional(),
   reactionToCueId: z.string().optional(),
   overlapMode: z.enum(["allow", "avoid", "interrupt"]).optional(),
@@ -106,12 +110,8 @@ const directionCapabilityNegotiationSchema = z.object({
       issues: z.array(z.string()),
     }),
   ),
-  acceptedPerformanceSourceTypes: z.array(
-    z.enum(["text_prompt", "live_action", "motion_capture", "key_animation_2d"]),
-  ),
-  rejectedPerformanceSourceTypes: z.array(
-    z.enum(["text_prompt", "live_action", "motion_capture", "key_animation_2d"]),
-  ),
+  acceptedPerformanceSourceTypes: z.array(z.enum(PERFORMANCE_SOURCE_TYPES)),
+  rejectedPerformanceSourceTypes: z.array(z.enum(PERFORMANCE_SOURCE_TYPES)),
   frameAccurateCues: z.enum(["accepted", "degraded", "unused"]),
   editedAudio: z.enum(["accepted", "degraded", "unused"]),
   warnings: z.array(z.string()),

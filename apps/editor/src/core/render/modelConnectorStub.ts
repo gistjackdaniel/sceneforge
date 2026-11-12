@@ -22,7 +22,7 @@ export const STUB_DIRECTION_CAPABILITIES: ModelDirectionCapabilities = {
     performance_face: { mode: "prompt", supportsLock: false, supportsStrength: true, supportsMask: false },
     audio: { mode: "unsupported", supportsLock: false, supportsStrength: false, supportsMask: false },
   },
-  performanceSourceTypes: ["text_prompt", "live_action", "motion_capture", "key_animation_2d"],
+  performanceSourceTypes: ["text_prompt", "live_action", "motion_capture", "key_animation_2d", "generated"],
   supportsFrameAccurateCues: false,
   supportsEditedAudio: false,
 };
