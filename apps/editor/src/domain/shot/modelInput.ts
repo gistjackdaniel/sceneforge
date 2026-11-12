@@ -1,4 +1,11 @@
-import { SCENE_COORDINATE_CONTRACT, applyImportTransform, buildImportTransform, type Mat4 } from "../worlds/coordinates";
+import {
+  DEFAULT_HANDEDNESS,
+  SCENE_COORDINATE_CONTRACT,
+  applyImportTransform,
+  buildImportTransform,
+  defaultFrontAxis,
+  type Mat4,
+} from "../worlds/coordinates";
 import { eulerToQuaternion } from "./eulerAdapter";
 import { generateHash, hasSelectedTake, selectedTake } from "./queries";
 import type { CanonicalPlacement, EnvironmentView, GenerateBlocker, Shot, ShotModelInput, Transform } from "./types";
@@ -18,15 +25,20 @@ const canonicalPlacement = (placement: Transform): CanonicalPlacement => ({
 
 /**
  * Map a world source file into the canonical scene.
- * A Y-up, meter, +Z source is already canonical and returns undefined.
- * `Z_UP` (default front `-Y`, right-handed) is converted here, not in the stored shot.
+ * A Y-up, meter, right-handed, +Z source is already canonical and returns undefined.
+ * `frontAxis` and `handedness` on the source are used when present.
+ * Missing axes fall back to right-handed and `defaultFrontAxis` (`+Z`, or `-Y` when Z-up).
+ * The stored shot is not rewritten.
  */
-export const environmentImportTransform = (environment: Pick<EnvironmentView, "coordinateSystem" | "unitScaleMeters">): Mat4 | undefined => {
+export const environmentImportTransform = (
+  environment: Pick<EnvironmentView, "coordinateSystem" | "unitScaleMeters" | "handedness" | "frontAxis">,
+): Mat4 | undefined => {
   const upAxis = environment.coordinateSystem === "Z_UP" ? "Z" : "Y";
   const meters = environment.unitScaleMeters > 0 ? environment.unitScaleMeters : 1;
-  const frontAxis = upAxis === "Z" ? "-Y" : "+Z";
-  if (upAxis === "Y" && meters === 1) return undefined;
-  return buildImportTransform({ upAxis, handedness: "right", frontAxis, metersPerUnit: meters });
+  const handedness = environment.handedness ?? DEFAULT_HANDEDNESS;
+  const frontAxis = environment.frontAxis ?? defaultFrontAxis(environment.coordinateSystem);
+  if (upAxis === "Y" && meters === 1 && handedness === "right" && frontAxis === "+Z") return undefined;
+  return buildImportTransform({ upAxis, handedness, frontAxis, metersPerUnit: meters });
 };
 
 export { applyImportTransform };

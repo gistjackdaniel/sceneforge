@@ -15,7 +15,7 @@ import { eulerToQuaternion } from "./eulerAdapter";
 import { linkPosedSubject } from "./instanceLink";
 import { bakeDenseObjectMotion, worldMatrixFromShotPose, type DenseObjectFrame } from "./motionBake";
 import { parseShot } from "./schema";
-import { shotId, subjectId, takeId, type Shot, type Vec3 } from "./types";
+import { shotId, subjectId, takeId, type Quat, type Shot, type Vec3 } from "./types";
 
 /**
  * Phase 0 demo shot from Backbone research (`docs/phase0`, PR #30).
@@ -31,17 +31,64 @@ export const PHASE0_WORLD_ID = "world-apartment-livingroom";
 export const PHASE0_FPS = 16;
 export const PHASE0_DURATION_FRAMES = 128;
 
-const P0: Vec3 = [0.15, 1.05, 0.25];
-const P1: Vec3 = [0.5, 0.78, 0.4];
 const IDENTITY_EULER: Vec3 = [0, 0, 0];
 const UNIT_SCALE: Vec3 = [1, 1, 1];
+const IDENTITY_QUAT: Quat = [0, 0, 0, 1];
 
-const mix = (start: number, end: number, amount: number) => start + (end - start) * amount;
+const add = (left: Vec3, right: Vec3): Vec3 => [left[0] + right[0], left[1] + right[1], left[2] + right[2]];
+const sub = (left: Vec3, right: Vec3): Vec3 => [left[0] - right[0], left[1] - right[1], left[2] - right[2]];
+const scale = (value: Vec3, factor: number): Vec3 => [value[0] * factor, value[1] * factor, value[2] * factor];
+const length = (value: Vec3) => Math.hypot(value[0], value[1], value[2]);
+
+/**
+ * Table rest from the Phase 0 demo. Y is up, so `0.72` is the tabletop height.
+ * The cup's placed origin is this same point.
+ */
+export const PHASE0_TABLE_POSITION: Vec3 = [1.25, 0.72, 0.1];
+
+/** Wrist-to-cup offset in the `left_hand` frame. This is not a world position. */
+export const PHASE0_CUP_IN_HAND_OFFSET: Vec3 = [0.03, 0.02, 0.05];
+
+/** Stub reach from actor A's left shoulder to `left_hand`. */
+export const PHASE0_STUB_ARM_LENGTH_M = 0.53;
+
+/** Left shoulder in actor A's root frame, identity rotation. */
+export const PHASE0_LEFT_SHOULDER_IN_ROOT: Vec3 = [-0.18, 0.4, 0.02];
+
+/**
+ * Root moved off the origin so the 0.53 m stub arm reaches the cup on the table at frame 48.
+ * B stays 1 m to +X, which puts the table between the two roots.
+ */
+export const PHASE0_ACTOR_A_ROOT: Vec3 = [1.001, 0.38, -0.309];
+export const PHASE0_ACTOR_B_ROOT: Vec3 = [2.001, 0.38, -0.309];
+
+const shoulderWorld = (): Vec3 => add(PHASE0_ACTOR_A_ROOT, PHASE0_LEFT_SHOULDER_IN_ROOT);
+
+const handOnTable = (): Vec3 => sub(PHASE0_TABLE_POSITION, PHASE0_CUP_IN_HAND_OFFSET);
+
+const handAtStart = (): Vec3 => {
+  const towardChest: Vec3 = [-0.08, -0.16, 0.22];
+  return add(shoulderWorld(), scale(towardChest, 0.28 / length(towardChest)));
+};
+
+/**
+ * Actor A's `left_hand` world pose while the cup is in that hand.
+ * Frame 48 is the release: the wrist is on the tabletop cup, still inside the stub arm.
+ * Root translation stays at `PHASE0_ACTOR_A_ROOT`; only the arm reaches.
+ */
+export const phase0LeftHandWorldPose = (frame: number): { translation: Vec3; rotation: Quat } => {
+  const amount = Math.min(1, Math.max(0, frame / 48));
+  const start = handAtStart();
+  const end = handOnTable();
+  return {
+    translation: add(start, scale(sub(end, start), amount)),
+    rotation: IDENTITY_QUAT,
+  };
+};
 
 const cupPosition = (frame: number): Vec3 => {
-  if (frame >= 48) return P1;
-  const amount = frame / 48;
-  return [mix(P0[0], P1[0], amount), mix(P0[1], P1[1], amount), mix(P0[2], P1[2], amount)];
+  if (frame >= 48) return PHASE0_TABLE_POSITION;
+  return add(phase0LeftHandWorldPose(frame).translation, PHASE0_CUP_IN_HAND_OFFSET);
 };
 
 /** Dense `T_world_obj` for the cup. Authority for evaluation; the shot stores the bake. */
@@ -148,7 +195,7 @@ export const phase0Scene = (): SceneState => {
         aliases: [],
         localizedNames: {},
         assetRef: pin(aAsset, aRev),
-        restTransform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+        restTransform: { translation: PHASE0_ACTOR_A_ROOT, rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
         legacyRefs: [{ kind: "shot_subject", shotId: PHASE0_SHOT_ID, subjectId: "actor-a" }],
         skeleton: { model: "smplx", gender: "neutral", betas },
       },
@@ -159,7 +206,7 @@ export const phase0Scene = (): SceneState => {
         aliases: [],
         localizedNames: {},
         assetRef: pin(bAsset, bRev),
-        restTransform: { translation: [1, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+        restTransform: { translation: PHASE0_ACTOR_B_ROOT, rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
         legacyRefs: [{ kind: "shot_subject", shotId: PHASE0_SHOT_ID, subjectId: "actor-b" }],
         skeleton: { model: "smplx", gender: "neutral", betas },
       },
@@ -173,7 +220,7 @@ export const phase0Scene = (): SceneState => {
         aliases: [],
         localizedNames: {},
         assetRef: pin(tableAsset, tableRev),
-        restTransform: { translation: [0.5, 0, 0.4], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+        restTransform: { translation: PHASE0_TABLE_POSITION, rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
         legacyRefs: [],
         motionMode: "static",
         attachments: [],
@@ -186,20 +233,20 @@ export const phase0Scene = (): SceneState => {
         aliases: [],
         localizedNames: {},
         assetRef: pin(cupAsset, cupRev),
-        restTransform: { translation: P0, rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+        restTransform: { translation: cupPosition(0), rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
         legacyRefs: [{ kind: "shot_subject", shotId: PHASE0_SHOT_ID, subjectId: "object-cup" }],
         motionMode: "dynamic",
         attachments: [
           {
             parentInstanceId: "actor-a",
             rigPart: "left_hand",
-            offset: { translation: [0.15, 1.05, 0.25], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+            offset: { translation: PHASE0_CUP_IN_HAND_OFFSET, rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
             frameRange: [0, 48],
             sourceContactId: "cup_hold_01",
           },
           {
             parentInstanceId: "object-table",
-            offset: { translation: [0, 0.78, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+            offset: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
             frameRange: [48, 128],
             sourceContactId: "cup_place_01",
           },
@@ -241,8 +288,8 @@ export const phase0Shot = (): Shot => {
     name: "Handshake cup",
     time: clock,
     subjects: [
-      actor("actor-a", "ast_phase0_a", "rev_phase0_a_v1", "meshes/phase0/actor-a.glb", [0, 0, 0]),
-      actor("actor-b", "ast_phase0_b", "rev_phase0_b_v1", "meshes/phase0/actor-b.glb", [1, 0, 0]),
+      actor("actor-a", "ast_phase0_a", "rev_phase0_a_v1", "meshes/phase0/actor-a.glb", PHASE0_ACTOR_A_ROOT),
+      actor("actor-b", "ast_phase0_b", "rev_phase0_b_v1", "meshes/phase0/actor-b.glb", PHASE0_ACTOR_B_ROOT),
       linkPosedSubject(PHASE0_SHOT_ID, {
         id: subjectId("object-cup"),
         instanceId: "object-cup",
@@ -251,7 +298,7 @@ export const phase0Shot = (): Shot => {
         assetRef: pin("ast_phase0_cup", "rev_phase0_cup_v1"),
         name: "컵",
         uri: "meshes/phase0/cup.glb",
-        placement: placement(P0),
+        placement: placement(cupPosition(0)),
         visible: true,
         locked: false,
         kind: "object",

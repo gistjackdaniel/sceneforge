@@ -4,7 +4,7 @@ import { projectWithShots } from "../project/migrateToShot";
 import { targetResolverForProject } from "../project/sceneLink";
 import type { Project } from "../project/types";
 import { deserializeProject, serializeProject } from "../../infrastructure/persistence/serializeProject";
-import { applyImportTransform, shotFps } from "../worlds/coordinates";
+import { applyImportTransform, shotFps, type Mat4 } from "../worlds/coordinates";
 import { createPersistentIdFactory } from "../worlds/ids";
 import { cloneInstance, renameInstance } from "../worlds/sceneState";
 import { SHOT_EULER_ORDER, eulerToQuaternion, quaternionToEuler } from "./eulerAdapter";
@@ -16,12 +16,19 @@ import {
   renamePosedSubject,
   revisionIdForAssetVersion,
 } from "./instanceLink";
-import { bakeDenseObjectMotion, worldMatrixFromShotPose } from "./motionBake";
+import { bakeDenseObjectMotion, shotPoseFromWorldMatrix, worldMatrixFromShotPose } from "./motionBake";
 import { environmentImportTransform, prepareModelInput } from "./modelInput";
 import {
+  PHASE0_ACTOR_A_ROOT,
+  PHASE0_ACTOR_B_ROOT,
+  PHASE0_CUP_IN_HAND_OFFSET,
   PHASE0_DURATION_FRAMES,
   PHASE0_FPS,
+  PHASE0_LEFT_SHOULDER_IN_ROOT,
+  PHASE0_STUB_ARM_LENGTH_M,
+  PHASE0_TABLE_POSITION,
   phase0CupDenseFrames,
+  phase0LeftHandWorldPose,
   phase0PerformancePlan,
   phase0Project,
   phase0Scene,
@@ -126,7 +133,7 @@ describe("phase 0 fixture", () => {
     if (baked.channel !== "explicit") return;
     expect(baked.keys.map((key) => key.frame)).toEqual([0, 48, 127]);
     expect(baked.keys[0]?.rotationEuler).toEqual([0, 0, 0]);
-    expect(baked.keys[0]?.position[0]).toBeCloseTo(0.15, 6);
+    expect(baked.keys[0]?.position[0]).toBeCloseTo(phase0CupDenseFrames()[0]!.T_world_obj[0][3], 6);
     const again = bakeDenseObjectMotion(clock, phase0CupDenseFrames());
     expect(again).toEqual(baked);
     expect("fps" in baked).toBe(false);
@@ -175,6 +182,118 @@ describe("phase 0 fixture", () => {
       eulerToQuaternion(shot.subjects[0]!.placement.rotationEuler),
     );
     expect(environmentImportTransform({ coordinateSystem: "Y_UP", unitScaleMeters: 1 })).toBeUndefined();
+  });
+
+  it("composes the cup from the hand-local offset and reaches the tabletop", () => {
+    const scene = phase0Scene();
+    const shot = phase0Shot();
+    const cup = scene.objects["object-cup"];
+    const table = scene.objects["object-table"];
+    const hold = cup?.attachments[0];
+    const placed = cup?.attachments[1];
+    expect(table?.restTransform.translation).toEqual([...PHASE0_TABLE_POSITION]);
+    expect(scene.actors["actor-a"]?.restTransform.translation).toEqual([...PHASE0_ACTOR_A_ROOT]);
+    expect(scene.actors["actor-b"]?.restTransform.translation).toEqual([...PHASE0_ACTOR_B_ROOT]);
+    expect(shot.subjects[0]?.placement.position).toEqual(PHASE0_ACTOR_A_ROOT);
+    expect(shot.subjects[1]?.placement.position).toEqual(PHASE0_ACTOR_B_ROOT);
+    expect(PHASE0_ACTOR_A_ROOT[0]).toBeLessThan(PHASE0_TABLE_POSITION[0]);
+    expect(PHASE0_TABLE_POSITION[0]).toBeLessThan(PHASE0_ACTOR_B_ROOT[0]);
+    expect(hold?.offset.translation).toEqual([...PHASE0_CUP_IN_HAND_OFFSET]);
+    const start = phase0CupDenseFrames()[0]!.T_world_obj;
+    expect(hold?.offset.translation).not.toEqual([start[0][3], start[1][3], start[2][3]]);
+
+    const multiply = (parent: Mat4, local: Mat4): Mat4 => ([0, 1, 2, 3] as const).map((row) =>
+      ([0, 1, 2, 3] as const).map((column) =>
+        parent[row][0] * local[0][column]
+        + parent[row][1] * local[1][column]
+        + parent[row][2] * local[2][column]
+        + parent[row][3] * local[3][column]),
+    ) as Mat4;
+
+    const quatAngle = (left: readonly number[], right: readonly number[]) => {
+      const dot = Math.abs(left[0]! * right[0]! + left[1]! * right[1]! + left[2]! * right[2]! + left[3]! * right[3]!);
+      return 2 * Math.acos(Math.min(1, dot));
+    };
+
+    for (const frame of phase0CupDenseFrames()) {
+      const holding = frame.t < 48;
+      const parentTranslation = holding
+        ? phase0LeftHandWorldPose(frame.t).translation
+        : table!.restTransform.translation;
+      const offset = holding ? hold!.offset : placed!.offset;
+      const composed = multiply(
+        worldMatrixFromShotPose({ position: [...parentTranslation], rotationEuler: [0, 0, 0], scale: [1, 1, 1] }),
+        worldMatrixFromShotPose({
+          position: [...offset.translation],
+          rotationEuler: quaternionToEuler([...offset.rotation]),
+          scale: [...offset.scale],
+        }),
+      );
+      const expected = shotPoseFromWorldMatrix(frame.T_world_obj);
+      const actual = shotPoseFromWorldMatrix(composed);
+      const gap = Math.hypot(
+        actual.position[0] - expected.position[0],
+        actual.position[1] - expected.position[1],
+        actual.position[2] - expected.position[2],
+      );
+      expect(gap).toBeLessThanOrEqual(0.005);
+      expect(quatAngle(eulerToQuaternion(actual.rotationEuler), eulerToQuaternion(expected.rotationEuler)))
+        .toBeLessThanOrEqual((2 * Math.PI) / 180);
+    }
+
+    const shoulder = [
+      PHASE0_ACTOR_A_ROOT[0] + PHASE0_LEFT_SHOULDER_IN_ROOT[0],
+      PHASE0_ACTOR_A_ROOT[1] + PHASE0_LEFT_SHOULDER_IN_ROOT[1],
+      PHASE0_ACTOR_A_ROOT[2] + PHASE0_LEFT_SHOULDER_IN_ROOT[2],
+    ];
+    for (let frame = 0; frame <= 48; frame += 1) {
+      const hand = phase0LeftHandWorldPose(frame).translation;
+      const reach = Math.hypot(hand[0] - shoulder[0], hand[1] - shoulder[1], hand[2] - shoulder[2]);
+      expect(reach).toBeLessThanOrEqual(PHASE0_STUB_ARM_LENGTH_M + 1e-9);
+    }
+    const release = phase0LeftHandWorldPose(48).translation;
+    const releaseReach = Math.hypot(release[0] - shoulder[0], release[1] - shoulder[1], release[2] - shoulder[2]);
+    expect(releaseReach).toBeGreaterThan(0.5);
+    expect(releaseReach).toBeLessThanOrEqual(PHASE0_STUB_ARM_LENGTH_M);
+  });
+
+  it("uses a recorded front axis and handedness, and the defaults only when they are absent", () => {
+    expect(environmentImportTransform({
+      coordinateSystem: "Y_UP",
+      unitScaleMeters: 1,
+      handedness: "right",
+      frontAxis: "+Z",
+    })).toBeUndefined();
+
+    const facingX = environmentImportTransform({
+      coordinateSystem: "Y_UP",
+      unitScaleMeters: 1,
+      handedness: "right",
+      frontAxis: "+X",
+    });
+    expect(facingX).toBeDefined();
+    expect(applyImportTransform(facingX!, [1, 0, 0])[2]).toBeCloseTo(1, 6);
+
+    const left = environmentImportTransform({
+      coordinateSystem: "Y_UP",
+      unitScaleMeters: 1,
+      handedness: "left",
+      frontAxis: "+Z",
+    });
+    expect(applyImportTransform(left!, [1, 0, 0])[0]).toBeCloseTo(-1, 6);
+
+    const defaultZ = environmentImportTransform({ coordinateSystem: "Z_UP", unitScaleMeters: 1 });
+    expect(environmentImportTransform({
+      coordinateSystem: "Z_UP",
+      unitScaleMeters: 1,
+      handedness: "right",
+      frontAxis: "-Y",
+    })).toEqual(defaultZ);
+    expect(environmentImportTransform({
+      coordinateSystem: "Z_UP",
+      unitScaleMeters: 1,
+      frontAxis: "+X",
+    })).not.toEqual(defaultZ);
   });
 });
 

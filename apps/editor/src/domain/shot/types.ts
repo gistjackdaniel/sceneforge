@@ -169,6 +169,10 @@ export type EnvironmentView = {
   geometryUri?: string;
   coordinateSystem: "Y_UP" | "Z_UP";
   unitScaleMeters: number;
+  /** Source-file handedness. Omitted values use the world default (`right`). */
+  handedness?: "right" | "left";
+  /** Source-file forward axis. Omitted values use `+Z` for Y-up and `-Y` for Z-up. */
+  frontAxis?: "+X" | "-X" | "+Y" | "-Y" | "+Z" | "-Z";
 };
 
 /** Contract-boundary pose. Rotation is a quaternion. The shot document still stores euler. */
