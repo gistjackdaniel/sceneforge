@@ -154,17 +154,35 @@ const RIG_PART_ALIASES: Record<RigPart, readonly string[]> = {
   pelvis: ["pelvis", "골반"],
 };
 
+const rigPartQuery = (refText: string): string => refText.toLowerCase().normalize("NFKC").trim();
+
+/** Every rig part named in the text. "손" matches none. "오른손과 왼손" matches both. */
+export const matchRigParts = (refText: string): RigPart[] => {
+  const query = rigPartQuery(refText);
+  if (!query) return [];
+  return rigPartSchema.options.filter((part) =>
+    RIG_PART_ALIASES[part].some((alias) => query.includes(alias.toLowerCase())),
+  );
+};
+
+/** Drop rig-part words so the remainder can be resolved as an actor or object. */
+export const stripRigPartWords = (refText: string): string => {
+  let text = refText.normalize("NFKC");
+  const aliases = rigPartSchema.options.flatMap((part) => [...RIG_PART_ALIASES[part]]);
+  aliases.sort((a, b) => b.length - a.length);
+  for (const alias of aliases) {
+    text = text.replace(new RegExp(alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ");
+  }
+  return text.replace(/\s+/g, " ").trim();
+};
+
 /**
  * Map a spoken or written part name to a rig part and its default SMPL-X joint.
  * Returns undefined when the text names zero parts or more than one.
- * This is not on `TargetResolver`; that port only gained optional instance and element ids.
+ * `createWorldTargetResolver().resolveMention` is the speech path that pairs this part with an instance id.
  */
 export const resolveRigPart = (refText: string): { rigPart: RigPart; joint: string } | undefined => {
-  const query = refText.toLowerCase().normalize("NFKC").trim();
-  if (!query) return undefined;
-  const hits = rigPartSchema.options.filter((part) =>
-    RIG_PART_ALIASES[part].some((alias) => query.includes(alias.toLowerCase())),
-  );
+  const hits = matchRigParts(refText);
   if (hits.length !== 1) return undefined;
   const rigPart = hits[0]!;
   return { rigPart, joint: SMPLX_PART_JOINT[rigPart] };

@@ -7,6 +7,7 @@ import type { WorldAsset } from "../worlds/types";
 import type { ModelExecutionRecord } from "../worlds/modelExecution";
 import type { ClipGraph, DependencyMap } from "./clipGraph";
 import type { Shot } from "../shot/types";
+import type { ActionGraph } from "../speech2motion/actionGraph";
 
 export interface ExternalConnector {
   id: string;
@@ -45,4 +46,9 @@ export interface Project {
   connectors: Record<string, ExternalConnector>;
   libraryNodeIds: string[];
   modelExecutions?: Record<string, ModelExecutionRecord>;
+  /**
+   * Ready speech2motion graphs keyed by shot id.
+   * Present only after `RECORD_SPEECH2MOTION`. Domain producers do not write this field.
+   */
+  speech2motion?: Record<string, ActionGraph>;
 }

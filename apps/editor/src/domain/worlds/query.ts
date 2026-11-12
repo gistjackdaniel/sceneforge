@@ -1,4 +1,4 @@
-import type { SceneState } from "./sceneState";
+import { matchRigParts, stripRigPartWords, type RigPart, type SceneState } from "./sceneState";
 import type { WorldAsset, WorldElement } from "./types";
 
 export type TargetKind = "character" | "prop" | "location";
@@ -217,9 +217,68 @@ export const createWorldQueryIndex = (
   return { getWorldById, resolveCandidates };
 };
 
+export type MentionEntityKind = "actor" | "object" | "location";
+
+export type MentionCandidate = {
+  persistentId: string;
+  entityKind: MentionEntityKind;
+  displayName: string;
+  score: number;
+};
+
+export type MentionContext = ResolveContext & {
+  /** Restrict candidates before the ambiguity check. */
+  entityKind?: MentionEntityKind;
+};
+
+/**
+ * Speech mention result.
+ * Ambiguous demonstratives stay unresolved. The caller asks; this function does not pick one.
+ */
+export type MentionResolution =
+  | {
+      status: "resolved";
+      persistentId: string;
+      entityKind: MentionEntityKind;
+      displayName: string;
+      rigPart?: RigPart;
+    }
+  | { status: "ambiguous"; candidates: MentionCandidate[]; rigPart?: RigPart }
+  | { status: "part"; rigPart: RigPart }
+  | { status: "missing"; rigPart?: RigPart };
+
+const AMBIGUOUS_SCORE_GAP = 12;
+
+const TRAILING_PARTICLE = /(?:으로|에서|에게|한테|이랑|은|는|을|를|와|과|의|에|로|도|이|가)$/u;
+
+const DEMONSTRATIVE = /^(?:이것|저것|그것|이거|저거|그거|this|that|the|이|그|저)\s+/i;
+
+const entityKindOf = (kind: TargetKind): MentionEntityKind => {
+  if (kind === "character") return "actor";
+  if (kind === "prop") return "object";
+  return "location";
+};
+
+const cleanMentionText = (text: string): { query: string; demonstrative: boolean } => {
+  let value = text.normalize("NFKC").replace(/\s+/g, " ").trim();
+  const demonstrative = DEMONSTRATIVE.test(value);
+  value = value.replace(DEMONSTRATIVE, "").trim();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const next = value.replace(TRAILING_PARTICLE, "").trim();
+    if (next.length === 0 || next === value) break;
+    value = next;
+  }
+  return { query: value, demonstrative };
+};
+
 // Agentic lane TargetResolver port
 export type TargetResolver = {
   resolve: (refText: string, ctx: ResolveContext) => TargetMatch[];
+  /**
+   * Resolve one spoken mention to a persistent instance id and, when the words name one, a rig part.
+   * Two close matches, including "그 컵" when two cups exist, come back as `ambiguous`.
+   */
+  resolveMention: (refText: string, ctx: MentionContext) => MentionResolution;
 };
 
 export const createWorldTargetResolver = (
@@ -227,8 +286,46 @@ export const createWorldTargetResolver = (
   sceneStates?: Record<string, SceneState>,
 ): TargetResolver => {
   const index = createWorldQueryIndex(worlds, sceneStates);
+  const resolveMention = (refText: string, ctx: MentionContext): MentionResolution => {
+    const parts = matchRigParts(refText);
+    const rigPart = parts.length === 1 ? parts[0] : undefined;
+    const { query, demonstrative } = cleanMentionText(stripRigPartWords(refText));
+    if (!query) {
+      return rigPart ? { status: "part", rigPart } : { status: "missing", ...(rigPart ? { rigPart } : {}) };
+    }
+    const ranked = new Map<string, MentionCandidate>();
+    for (const match of index.resolveCandidates(query, ctx)) {
+      if (!match.instanceId) continue;
+      const entityKind = entityKindOf(match.kind);
+      if (ctx.entityKind && ctx.entityKind !== entityKind) continue;
+      const current = ranked.get(match.instanceId);
+      if (!current || match.score > current.score) {
+        ranked.set(match.instanceId, {
+          persistentId: match.instanceId,
+          entityKind,
+          displayName: match.displayName,
+          score: match.score,
+        });
+      }
+    }
+    const candidates = [...ranked.values()].sort((a, b) => b.score - a.score);
+    if (candidates.length === 0) return { status: "missing", ...(rigPart ? { rigPart } : {}) };
+    const selected = candidates.filter((candidate) => ctx.selectionIds.includes(candidate.persistentId));
+    const closeGap = demonstrative ? 20 : AMBIGUOUS_SCORE_GAP;
+    const close = candidates.length > 1 && candidates[1]!.score >= candidates[0]!.score - closeGap;
+    const winner = selected.length === 1 ? selected[0] : !close ? candidates[0] : undefined;
+    if (!winner) return { status: "ambiguous", candidates, ...(rigPart ? { rigPart } : {}) };
+    return {
+      status: "resolved",
+      persistentId: winner.persistentId,
+      entityKind: winner.entityKind,
+      displayName: winner.displayName,
+      ...(rigPart ? { rigPart } : {}),
+    };
+  };
   return {
     resolve: (refText: string, ctx: ResolveContext) => index.resolveCandidates(refText, ctx),
+    resolveMention,
   };
 };
 

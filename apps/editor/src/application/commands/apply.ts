@@ -12,6 +12,7 @@ import type { CommandResult, DomainCommand, DomainEvent } from "./types";
 import { cameraPathParamsFromNode, deleteCameraKeyframe, keyframeAtExactFrame, upsertCameraKeyframe } from "../../domain/graph/cameraPath";
 import { lensNodeIdForClip, lensParamsFromNode } from "../../domain/graph/lens";
 import { applyShotCommand } from "../../domain/shot";
+import { ActionGraphSchema } from "../../domain/speech2motion/actionGraph";
 
 const event = (type: DomainEvent["type"], payload: Record<string, unknown>, timestamp: string): DomainEvent => ({
   type,
@@ -717,6 +718,42 @@ export const applyCommand = (
           command,
           inverse: edited.inverse ? { type: "SHOT", command: edited.inverse } : undefined,
           events: [event("ShotChanged", { shotId: edited.shot.id }, timestamp)],
+        },
+      };
+    }
+    case "RECORD_SPEECH2MOTION": {
+      const current = project.shots?.[command.shotId];
+      if (!current) return fail("Shot not found.");
+      const previous = project.speech2motion?.[command.shotId] ?? null;
+      if (command.graph === null) {
+        if (!previous) return { project, result: { ok: true, command, events: [] } };
+        const rest = { ...(project.speech2motion ?? {}) };
+        delete rest[command.shotId];
+        const speech2motion = Object.keys(rest).length > 0 ? rest : undefined;
+        return {
+          project: speech2motion ? { ...project, speech2motion } : { ...project, speech2motion: undefined },
+          result: {
+            ok: true,
+            command,
+            inverse: { type: "RECORD_SPEECH2MOTION", shotId: command.shotId, graph: previous },
+            events: [event("Speech2MotionRecorded", { shotId: command.shotId, cleared: true }, timestamp)],
+          },
+        };
+      }
+      const parsed = ActionGraphSchema.safeParse(command.graph);
+      if (!parsed.success) return fail("Action graph does not match the v0.1 contract.");
+      if (parsed.data.status !== "ready") return fail("Only a ready action graph can be recorded.");
+      if (parsed.data.shot_id !== command.shotId) return fail("Action graph shot does not match the command.");
+      return {
+        project: {
+          ...project,
+          speech2motion: { ...project.speech2motion, [command.shotId]: parsed.data },
+        },
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "RECORD_SPEECH2MOTION", shotId: command.shotId, graph: previous },
+          events: [event("Speech2MotionRecorded", { shotId: command.shotId, graphVersion: parsed.data.graph_version }, timestamp)],
         },
       };
     }
