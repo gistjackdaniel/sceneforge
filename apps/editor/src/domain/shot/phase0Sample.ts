@@ -8,6 +8,7 @@ import {
   SMPLX_PART_JOINT,
   type Asset,
   type AssetRevision,
+  type RigPart,
   type SceneState,
 } from "../worlds/sceneState";
 import type { WorldAsset } from "../worlds/types";
@@ -30,6 +31,44 @@ export const PHASE0_SHOT_ID = "shot-handshake-cup";
 export const PHASE0_WORLD_ID = "world-apartment-livingroom";
 export const PHASE0_FPS = 16;
 export const PHASE0_DURATION_FRAMES = 128;
+
+type Phase0ContactEnd = { actor: string; part?: RigPart };
+
+/**
+ * Demo contact graph from #30. `a` is the cue actor, `b` is the other end.
+ * A contact scope is `{ kind: "contact", contact_id }`. Actor ids are read from `a` / `b`.
+ * This list is not stored on `SceneState`.
+ */
+export const PHASE0_CONTACT_GRAPH: readonly {
+  contact_id: string;
+  a: Phase0ContactEnd;
+  b: Phase0ContactEnd;
+}[] = [
+  {
+    contact_id: "handshake_01",
+    a: { actor: "actor-a", part: "right_hand" },
+    b: { actor: "actor-b", part: "right_hand" },
+  },
+  {
+    contact_id: "cup_hold_01",
+    a: { actor: "actor-a", part: "left_hand" },
+    b: { actor: "object-cup" },
+  },
+  {
+    contact_id: "cup_place_01",
+    a: { actor: "object-cup" },
+    b: { actor: "object-table" },
+  },
+];
+
+/** Scope key for one contact. Actors are not on the scope; they come from `a` / `b`. */
+export const phase0ContactScope = (contact_id: string) => ({ kind: "contact" as const, contact_id });
+
+const phase0Contact = (contact_id: string) => {
+  const contact = PHASE0_CONTACT_GRAPH.find((item) => item.contact_id === contact_id);
+  if (!contact) throw new Error(`Missing contact ${contact_id}.`);
+  return contact;
+};
 
 const IDENTITY_EULER: Vec3 = [0, 0, 0];
 const UNIT_SCALE: Vec3 = [1, 1, 1];
@@ -236,21 +275,26 @@ export const phase0Scene = (): SceneState => {
         restTransform: { translation: cupPosition(0), rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
         legacyRefs: [{ kind: "shot_subject", shotId: PHASE0_SHOT_ID, subjectId: "object-cup" }],
         motionMode: "dynamic",
-        attachments: [
-          {
-            parentInstanceId: "actor-a",
-            rigPart: "left_hand",
-            offset: { translation: PHASE0_CUP_IN_HAND_OFFSET, rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
-            frameRange: [0, 48],
-            sourceContactId: "cup_hold_01",
-          },
-          {
-            parentInstanceId: "object-table",
-            offset: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
-            frameRange: [48, 128],
-            sourceContactId: "cup_place_01",
-          },
-        ],
+        attachments: (() => {
+          const hold = phase0Contact("cup_hold_01");
+          const place = phase0Contact("cup_place_01");
+          if (!hold.a.part) throw new Error("cup_hold_01 is missing a hand.");
+          return [
+            {
+              parentInstanceId: hold.a.actor,
+              rigPart: hold.a.part,
+              offset: { translation: PHASE0_CUP_IN_HAND_OFFSET, rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+              frameRange: [0, 48] as [number, number],
+              sourceContactId: hold.contact_id,
+            },
+            {
+              parentInstanceId: place.b.actor,
+              offset: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+              frameRange: [48, 128] as [number, number],
+              sourceContactId: place.contact_id,
+            },
+          ];
+        })(),
       },
     },
   });
@@ -328,8 +372,10 @@ export const phase0Shot = (): Shot => {
   });
 };
 
-/** Speech motion stays `generated`. The handshake names both right hands. */
-export const phase0PerformancePlan = (): PerformancePlanParams => performancePlanFromNode({
+/** Speech motion stays `generated`. The handshake cue points at `handshake_01`. */
+export const phase0PerformancePlan = (): PerformancePlanParams => {
+  const handshake = phase0Contact("handshake_01");
+  return performancePlanFromNode({
   sources: [{
     id: "speech-motion-01",
     type: "generated",
@@ -357,10 +403,11 @@ export const phase0PerformancePlan = (): PerformancePlanParams => performancePla
       direction: "A and B shake right hands.",
       startFrame: 72,
       endFrame: 112,
-      actorId: "actor-a",
-      targetActorId: "actor-b",
-      rigPart: "right_hand",
-      targetRigPart: "right_hand",
+      actorId: handshake.a.actor,
+      targetActorId: handshake.b.actor,
+      rigPart: handshake.a.part,
+      targetRigPart: handshake.b.part,
+      contactId: handshake.contact_id,
       sourceId: "speech-motion-01",
     },
   ],
@@ -371,6 +418,7 @@ export const phase0PerformancePlan = (): PerformancePlanParams => performancePla
     transcript: "컵은 여기 둘게.",
   },
 });
+};
 
 /** Opt-in project. The editor boot project is unchanged. */
 export const phase0Project = (): Project => {

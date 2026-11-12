@@ -26,7 +26,9 @@ import {
   PHASE0_FPS,
   PHASE0_LEFT_SHOULDER_IN_ROOT,
   PHASE0_STUB_ARM_LENGTH_M,
+  PHASE0_CONTACT_GRAPH,
   PHASE0_TABLE_POSITION,
+  phase0ContactScope,
   phase0CupDenseFrames,
   phase0LeftHandWorldPose,
   phase0PerformancePlan,
@@ -376,6 +378,41 @@ describe("euler adapter", () => {
       const length = Math.hypot(...quat);
       expect(length).toBeCloseTo(1, 6);
     }
+  });
+});
+
+describe("contact graph", () => {
+  it("uses #30 part names and derives actors from a and b", () => {
+    const handshakeScope = phase0ContactScope("handshake_01");
+    expect(handshakeScope).toEqual({ kind: "contact", contact_id: "handshake_01" });
+    const handshake = PHASE0_CONTACT_GRAPH.find((item) => item.contact_id === handshakeScope.contact_id);
+    const hold = PHASE0_CONTACT_GRAPH.find((item) => item.contact_id === phase0ContactScope("cup_hold_01").contact_id);
+    const place = PHASE0_CONTACT_GRAPH.find((item) => item.contact_id === phase0ContactScope("cup_place_01").contact_id);
+    expect(handshake?.a).toEqual({ actor: "actor-a", part: "right_hand" });
+    expect(handshake?.b).toEqual({ actor: "actor-b", part: "right_hand" });
+    expect(hold?.a).toEqual({ actor: "actor-a", part: "left_hand" });
+    expect(hold?.b.actor).toBe("object-cup");
+    expect(place?.a).toEqual({ actor: "object-cup" });
+    expect(place?.b).toEqual({ actor: "object-table" });
+    expect(place?.a.part).toBeUndefined();
+    expect(place?.b.part).toBeUndefined();
+
+    const plan = phase0PerformancePlan();
+    const cue = plan.cues.find((item) => item.contactId === handshakeScope.contact_id);
+    expect(cue?.actorId).toBe(handshake?.a.actor);
+    expect(cue?.targetActorId).toBe(handshake?.b.actor);
+    expect(cue?.rigPart).toBe(handshake?.a.part);
+    expect(cue?.targetRigPart).toBe(handshake?.b.part);
+    const saved = performancePlanFromNode(JSON.parse(JSON.stringify(plan)) as Record<string, unknown>);
+    expect(saved.cues.find((item) => item.id === "handshake")?.contactId).toBe(handshakeScope.contact_id);
+
+    const attachments = phase0Scene().objects["object-cup"]?.attachments ?? [];
+    const held = attachments.find((item) => item.sourceContactId === hold?.contact_id);
+    const placed = attachments.find((item) => item.sourceContactId === place?.contact_id);
+    expect(held?.parentInstanceId).toBe(hold?.a.actor);
+    expect(held?.rigPart).toBe(hold?.a.part);
+    expect(placed?.parentInstanceId).toBe(place?.b.actor);
+    expect(placed?.rigPart).toBeUndefined();
   });
 });
 

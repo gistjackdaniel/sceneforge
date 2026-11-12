@@ -148,6 +148,7 @@ export interface PerformanceDirectionInput {
     targetActorId?: string;
     rigPart?: RigPart;
     targetRigPart?: RigPart;
+    contactId?: string;
     sourceId?: string;
     reactionToCueId?: string;
     overlapMode?: "allow" | "avoid" | "interrupt";

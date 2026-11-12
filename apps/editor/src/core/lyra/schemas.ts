@@ -63,6 +63,7 @@ const performanceCueSchema = z.object({
   targetActorId: z.string().optional(),
   rigPart: rigPartSchema.optional(),
   targetRigPart: rigPartSchema.optional(),
+  contactId: z.string().min(1).optional(),
   sourceId: z.string().optional(),
   reactionToCueId: z.string().optional(),
   overlapMode: z.enum(["allow", "avoid", "interrupt"]).optional(),
