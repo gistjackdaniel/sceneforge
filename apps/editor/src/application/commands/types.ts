@@ -3,6 +3,7 @@ import type { NodeReference, ReferenceType } from "../../domain/graph/references
 import type { GraphEdge } from "../../domain/graph/types";
 import type { CameraRigPreset } from "../../domain/graph/cameraRig";
 import type { ShotCommand } from "../../domain/shot";
+import type { ActionGraph } from "../../domain/speech2motion/actionGraph";
 
 /** PRD §13.1 — domain commands. UI-only actions are not commands. */
 export type DomainCommand =
@@ -103,7 +104,16 @@ export type DomainCommand =
       /** Optional message for logs/UI; callers may log separately. */
       logMessage?: string;
     }
-  | { type: "SHOT"; command: ShotCommand };
+  | { type: "SHOT"; command: ShotCommand }
+  | {
+      /**
+       * Store a ready speech2motion graph for one shot.
+       * `graph: null` drops a graph recorded earlier. This is the only write path for that document.
+       */
+      type: "RECORD_SPEECH2MOTION";
+      shotId: string;
+      graph: ActionGraph | null;
+    };
 
 export type DomainEventType =
   | "NodeCreated"
@@ -119,7 +129,8 @@ export type DomainEventType =
   | "RenderQueued"
   | "RenderCompleted"
   | "RenderFailed"
-  | "ShotChanged";
+  | "ShotChanged"
+  | "Speech2MotionRecorded";
 
 export interface DomainEvent {
   type: DomainEventType;

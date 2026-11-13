@@ -38,6 +38,10 @@ export {
   type TargetKind,
   type TargetMatch,
   type ResolveContext,
+  type MentionCandidate,
+  type MentionContext,
+  type MentionEntityKind,
+  type MentionResolution,
 } from "./query";
 export { WorldDomainError } from "./errors";
 export {
@@ -95,9 +99,11 @@ export {
   jointForRigPart,
   objectInstanceSchema,
   pinInstanceRevision,
+  matchRigParts,
   renameInstance,
   resolveRigPart,
   restoreInstance,
+  stripRigPartWords,
   retargetInstanceAsset,
   rigPartSchema,
   scenePersistentIds,
