@@ -1,4 +1,5 @@
 import type { NodeBase } from "../graph/types";
+import { rigPartSchema, type RigPart } from "../worlds/sceneState";
 import {
   mergeDirectionInvalidations,
   normalizeDirectionChannelControls,
@@ -12,6 +13,7 @@ export const PERFORMANCE_SOURCE_TYPES = [
   "live_action",
   "motion_capture",
   "key_animation_2d",
+  "generated",
 ] as const;
 
 export type PerformanceSourceType = (typeof PERFORMANCE_SOURCE_TYPES)[number];
@@ -58,6 +60,18 @@ export interface PerformanceCue {
   actor?: string;
   actorId?: string;
   targetActorId?: string;
+  /**
+   * Hand used by `actorId`. Same enum as `SceneState` attachment `rigPart`.
+   * A handshake sets this and `targetRigPart` (`left_hand` or `right_hand`).
+   */
+  rigPart?: RigPart;
+  /** Hand used by `targetActorId`. */
+  targetRigPart?: RigPart;
+  /**
+   * Contact graph id this cue names, for example `handshake_01`.
+   * Actor ids and parts come from that contact's `a` / `b` ends.
+   */
+  contactId?: string;
   sourceId?: string;
   reactionToCueId?: string;
   overlapMode?: "allow" | "avoid" | "interrupt";
@@ -160,6 +174,11 @@ const normalizeSource = (value: unknown, index: number): PerformanceSource | und
   };
 };
 
+const rigPartOf = (value: unknown): RigPart | undefined => {
+  const parsed = rigPartSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+};
+
 const normalizeCue = (value: unknown, index: number): PerformanceCue | undefined => {
   const record = asRecord(value);
   if (!record) {
@@ -167,6 +186,9 @@ const normalizeCue = (value: unknown, index: number): PerformanceCue | undefined
   }
   const startFrame = Math.round(asFiniteNumber(record.startFrame, 0));
   const endFrame = Math.round(asFiniteNumber(record.endFrame, startFrame + 1));
+  const rigPart = rigPartOf(record.rigPart);
+  const targetRigPart = rigPartOf(record.targetRigPart);
+  const contactId = asOptionalString(record.contactId);
   return {
     id: asOptionalString(record.id) ?? `performance-cue-${index + 1}`,
     kind: isCueKind(record.kind) ? record.kind : "action",
@@ -177,6 +199,9 @@ const normalizeCue = (value: unknown, index: number): PerformanceCue | undefined
     actor: asOptionalString(record.actor),
     actorId: asOptionalString(record.actorId),
     targetActorId: asOptionalString(record.targetActorId),
+    ...(rigPart ? { rigPart } : {}),
+    ...(targetRigPart ? { targetRigPart } : {}),
+    ...(contactId ? { contactId } : {}),
     sourceId: asOptionalString(record.sourceId),
     reactionToCueId: asOptionalString(record.reactionToCueId),
     overlapMode:

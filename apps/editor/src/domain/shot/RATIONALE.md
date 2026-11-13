@@ -28,6 +28,12 @@ Mounted Stage also edits visibility, lock, light color, camera interpolation, an
 
 `marker` is a representation. Shared primitive asset ids are `primitive:box`, `primitive:sphere`, `primitive:light`, and `primitive:marker`.
 
+Object rotation stays `rotationEuler`. `SHOT_EULER_ORDER` is `XYZ` (Scene 레인 확정, `StageViewport.tsx`). The coordinate-contract boundary converts that euler to a quaternion. The shot document does not store object rotation as a quaternion.
+
+A posed subject also carries a persistent `instanceId` and an `{ assetId, revisionId }` pin. Integer `assetVersion` N maps to revision id `rev_legacy_<asset>__vN`. Older `subject-*`, `primitive:*`, and `file:*` ids stay in `legacyRefs`. Take ids stay opaque strings.
+
+Camera export stays Backbone `convention: "opencv_c2w"` (`frames[].c2w`). This module does not rebuild that matrix.
+
 `REPLACE_SUBJECT`, `REPLACE_CAMERA`, `REPLACE_SHOT`, and `DROP_RENDER` exist so undo can restore a previous subject, camera, or receipt. The panels do not dispatch them except as inverses produced by the command applier.
 
 Playhead and output aspect stay outside the shot. The stub connector id is `stub`, its model version is `none`, and its status is `stubbed`.
