@@ -5,23 +5,9 @@ import { evaluateShotWorkflow } from "../../domain/workflow";
 import { exportPerformancePlanToOtio, serializeOtio } from "../../domain/editorial";
 import { performancePlanFromNode, performancePlanNodeIdForClip } from "../../domain/performance";
 import { shotFpsForClip } from "../../domain/timeline/shotClock";
-import { clipDurationFrames } from "../../domain/timeline/timing";
+import { frameToTimecode, isPositiveIntegerFps, shotLocalFrame } from "../../domain/timeline/timecode";
+import { clipDurationFrames, clipStartFrame } from "../../domain/timeline/timing";
 import { downloadTextFile, editorialFilename } from "../editorialDownload";
-
-const formatTimecode = (frame: number, fps: number): string => {
-  const totalSeconds = Math.floor(frame / fps);
-  const frames = frame % fps;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  return [
-    String(hours).padStart(2, "0"),
-    String(mins).padStart(2, "0"),
-    String(seconds).padStart(2, "0"),
-    String(frames).padStart(2, "0"),
-  ].join(":");
-};
 
 export const PlaybackPanel = () => {
   const {
@@ -36,8 +22,15 @@ export const PlaybackPanel = () => {
   const videoPath = finalCache?.artifactPath ?? (proxyCache?.status === "valid" ? proxyCache.artifactPath : undefined);
   const videoRenderJob = ui.videoRenderJob;
   const pendingDirectionInvalidations = finalCache?.directionInvalidations ?? [];
+  const shot = project.shots?.[clip.id];
   const fps = shotFpsForClip(project, clip.id);
-  const timecode = formatTimecode(sequence.playhead, fps);
+  const frame = shotLocalFrame({
+    playhead: sequence.playhead,
+    clipStartFrame: clipStartFrame(clip),
+    durationFrames: shot?.time.durationFrames,
+  });
+  const timecode = isPositiveIntegerFps(fps) ? frameToTimecode(frame, fps) : "—";
+  const clockLabel = `${frame}f ${timecode}`;
   const shotWorkflow = evaluateShotWorkflow({
     clip,
     graph: project.clipGraphs[clip.clipGraphId],
@@ -99,7 +92,7 @@ export const PlaybackPanel = () => {
           />
         ) : (
           <div className="playback-placeholder">
-            <span className="rec-badge">● REC {timecode}</span>
+            <span className="rec-badge">● REC {clockLabel}</span>
             <p>Render a clip to preview generative video output.</p>
             <p className="muted">
               {!shotWorkflow.readyForRender
@@ -144,7 +137,7 @@ export const PlaybackPanel = () => {
             ⏭
           </button>
         </div>
-        <span className="transport-timecode">{timecode}</span>
+        <span className="transport-timecode">{clockLabel}</span>
         <button
           id="playback-render-button"
           type="button"
