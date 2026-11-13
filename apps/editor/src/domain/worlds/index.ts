@@ -72,6 +72,7 @@ export {
   quatSchema,
   sceneCoordinateContractSchema,
   sourceAxesFromWorldAsset,
+  shotFps,
   sourceAxesSchema,
   transformSchema,
   vec3Schema,
@@ -79,6 +80,7 @@ export {
   type SceneCoordinateContract,
   type ShotFpsRef,
   type ShotLocalFrame,
+  type ShotTimeSource,
   type SourceAxes,
   type Transform,
 } from "./coordinates";

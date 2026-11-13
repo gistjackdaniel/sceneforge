@@ -91,6 +91,8 @@ export const legacyRefSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("world_element"), worldId: z.string(), elementId: z.string() }),
   z.object({ kind: z.literal("world_prop_name"), worldId: z.string(), propName: z.string() }),
   z.object({ kind: z.literal("scene_object"), sceneObjectId: z.string() }),
+  z.object({ kind: z.literal("shot_subject"), shotId: z.string().min(1), subjectId: z.string().min(1) }),
+  z.object({ kind: z.literal("shot_asset"), assetId: z.string().min(1) }),
 ]);
 
 export type LegacyRef = z.infer<typeof legacyRefSchema>;
@@ -188,7 +190,7 @@ export const resolveRigPart = (refText: string): { rigPart: RigPart; joint: stri
   return { rigPart, joint: SMPLX_PART_JOINT[rigPart] };
 };
 
-/** Shot-local `[start, end)`. `Shot.fps` is not stored; see `ShotLocalFrame`. */
+/** Shot-local `[start, end)`. `Shot.time.fps` is not stored; see `ShotLocalFrame`. */
 export const frameRangeSchema = z
   .tuple([z.number().int().nonnegative(), z.number().int().nonnegative()])
   .refine(([start, end]) => end > start, "frame range must be [start, end)");
