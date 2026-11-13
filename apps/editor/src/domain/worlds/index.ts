@@ -121,6 +121,20 @@ export {
   migrateWorldToSceneState,
 } from "./migrateInstances";
 export {
+  collectImportedBones,
+  convertSourceRotation,
+  importRiggedActor,
+  invertImportTransform,
+  mapImportedRigParts,
+  riggedActorImportTransform,
+  riggedActorSourceKey,
+  type ImportedSkeletonNode,
+  type RiggedActorImportResult,
+  type RiggedActorImportSource,
+  type RiggedActorSourceAxes,
+  type RigPartDiagnostic,
+} from "./riggedActorImport";
+export {
   createPreservationCheck,
   projectSceneSelector,
   temporaryCanonicalize,
