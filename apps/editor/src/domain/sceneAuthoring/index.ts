@@ -21,7 +21,7 @@ export { readContact, type ContactGraphEntry, type ContactRangeRef } from "./con
 export {
   GENERATED_POSE_SOURCE,
   PLAYBACK_FORMAT,
-  PROXY_PART_JOINT,
+  SMPLX_PART_JOINT,
   contactEffectorOverrideSchema,
   interactionPreviewSchema,
   rigPartSchema,
@@ -31,7 +31,7 @@ export {
   type RigPart,
   type SubjectBinding,
 } from "./contract";
-export { EULER_ORDER, eulerToQuaternion, quaternionToEuler } from "./eulerOrder";
+export { SHOT_EULER_ORDER, eulerToQuaternion, quaternionToEuler } from "../shot/eulerAdapter";
 export { materializeAttachments, resolveContacts, type AttachmentSpan } from "./contacts";
 export {
   poseSourceFromChannels,

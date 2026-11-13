@@ -1,5 +1,8 @@
 import { z } from "zod";
+import { rigPartSchema, SMPLX_PART_JOINT, type RigPart } from "../worlds/sceneState";
 import type { Quat, Vec3 } from "./math";
+
+export { rigPartSchema, SMPLX_PART_JOINT, type RigPart };
 
 /**
  * Playback format shared with the Video lane's pose export.
@@ -27,26 +30,6 @@ export const PLAYBACK_FORMAT = {
 
 /** Video lane's motion source. Not written into `MotionProvenance` — that enum is only `keyed` here. */
 export const GENERATED_POSE_SOURCE = "generated" as const;
-
-export const rigPartSchema = z.enum([
-  "left_hand",
-  "right_hand",
-  "left_foot",
-  "right_foot",
-  "head",
-  "pelvis",
-]);
-export type RigPart = z.infer<typeof rigPartSchema>;
-
-/** Proxy joint until a Video-lane skeleton arrives. Same names as the World draft. */
-export const PROXY_PART_JOINT: Record<RigPart, string> = {
-  left_hand: "left_wrist",
-  right_hand: "right_wrist",
-  left_foot: "left_ankle",
-  right_foot: "right_ankle",
-  head: "head",
-  pelvis: "pelvis",
-};
 
 const finite = z.number().finite();
 export const vec3Schema = z.tuple([finite, finite, finite]);

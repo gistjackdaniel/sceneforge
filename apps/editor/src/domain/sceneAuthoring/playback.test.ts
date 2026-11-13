@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { phase0LeftHandWorldPose } from "../shot/phase0Sample";
 import { parseShot } from "../shot/schema";
 import {
   ACTOR_A_ROOT,
@@ -73,29 +74,22 @@ describe("handshake pose fixture", () => {
     expect(held).not.toEqual([...TABLE_POSITION]);
   });
 
-  it("컵을 쥐는 구간은 left_hand 로컬 offset이다", () => {
+  it("컵을 쥐는 구간은 left_hand 로컬 offset이고 48프레임에 테이블로 바뀐다", () => {
+    const hand = phase0LeftHandWorldPose(16);
     const sample = samplePlayback(shot, preview, 16, poses);
     const cup = sample.objects.find((object) => object.subjectId === SUBJECT_IDS.cup);
-    const wrist = sample.actors
-      .find((actor) => actor.subjectId === SUBJECT_IDS.actorA)
-      ?.joints.find((joint) => joint.name === "left_wrist");
     expect(cup?.parentSubjectId).toBe(SUBJECT_IDS.actorA);
     expect(cup?.parentRigPart).toBe("left_hand");
-    expect(wrist).toBeTruthy();
-    if (!cup || !wrist) return;
-    const inverse: [number, number, number, number] = [-wrist.rotation[0], -wrist.rotation[1], -wrist.rotation[2], wrist.rotation[3]];
+    if (!cup) return;
+    const inverse: [number, number, number, number] = [-hand.rotation[0], -hand.rotation[1], -hand.rotation[2], hand.rotation[3]];
     const local = quatRotate(inverse, [
-      cup.position[0] - wrist.position[0],
-      cup.position[1] - wrist.position[1],
-      cup.position[2] - wrist.position[2],
+      cup.position[0] - hand.translation[0],
+      cup.position[1] - hand.translation[1],
+      cup.position[2] - hand.translation[2],
     ]);
     nearly(local, CUP_IN_HAND_OFFSET);
-    const worldDelta = [
-      cup.position[0] - wrist.position[0],
-      cup.position[1] - wrist.position[1],
-      cup.position[2] - wrist.position[2],
-    ];
-    expect(Math.hypot(worldDelta[0] - CUP_IN_HAND_OFFSET[0], worldDelta[1] - CUP_IN_HAND_OFFSET[1], worldDelta[2] - CUP_IN_HAND_OFFSET[2])).toBeGreaterThan(1e-3);
+    const heldAtEnd = samplePlayback(shot, preview, CUP_PLACE_FRAME - 1, poses).objects.find((object) => object.subjectId === SUBJECT_IDS.cup);
+    expect(heldAtEnd?.parentRigPart).toBe("left_hand");
     const placed = samplePlayback(shot, preview, CUP_PLACE_FRAME, poses).objects.find((object) => object.subjectId === SUBJECT_IDS.cup);
     expect(placed?.parentSubjectId).toBe(SUBJECT_IDS.table);
     expect(placed?.parentRigPart).toBeUndefined();

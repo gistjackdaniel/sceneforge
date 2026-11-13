@@ -3,6 +3,7 @@ import type { NodeReference, ReferenceType } from "../../domain/graph/references
 import type { GraphEdge } from "../../domain/graph/types";
 import type { CameraRigPreset } from "../../domain/graph/cameraRig";
 import type { ShotCommand } from "../../domain/shot";
+import type { RigPart } from "../../domain/worlds/sceneState";
 
 /** PRD §13.1 — domain commands. UI-only actions are not commands. */
 export type DomainCommand =
@@ -119,7 +120,7 @@ export type DomainCommand =
       subjectRef: string;
       locale: "ko" | "en";
       contactId: string;
-      rigPart: "left_hand" | "right_hand" | "left_foot" | "right_foot" | "head" | "pelvis";
+      rigPart: RigPart;
     }
   | {
       type: "SET_INTERACTION_OVERRIDES";
@@ -128,7 +129,7 @@ export type DomainCommand =
         contactId: string;
         worldAssetId: string;
         subjectId: string;
-        rigPart: "left_hand" | "right_hand" | "left_foot" | "right_foot" | "head" | "pelvis";
+        rigPart: RigPart;
       }>;
     };
 

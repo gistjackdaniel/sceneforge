@@ -1,5 +1,12 @@
 import { parseShot } from "../shot/schema";
 import { sampleSubjectPose } from "../shot/queries";
+import {
+  PHASE0_ACTOR_A_ROOT,
+  PHASE0_ACTOR_B_ROOT,
+  PHASE0_CUP_IN_HAND_OFFSET,
+  PHASE0_TABLE_POSITION,
+  phase0LeftHandWorldPose,
+} from "../shot/phase0Sample";
 import type { Shot } from "../shot/types";
 import { normalizeWorldAsset } from "../worlds/normalize";
 import type { WorldAsset } from "../worlds/types";
@@ -10,8 +17,7 @@ import {
   type InteractionPreviewRecord,
   type RigPart,
 } from "./contract";
-import { eulerToQuaternion } from "./eulerOrder";
-import { addVec3, asVec3, quatFromAxisAngle, quatIdentity, quatMul, quatRotate, worldMatrix, type Quat, type Vec3 } from "./math";
+import { addVec3, asQuat, asVec3, quatFromAxisAngle, quatIdentity, quatMul, quatRotate, worldMatrix, type Quat, type Vec3 } from "./math";
 import {
   poseSourceFromChannels,
   type AuthoredPoseChannel,
@@ -20,13 +26,12 @@ import {
   type RotationKey,
   type ShotPoseFrame,
 } from "./poseSource";
-import { solveJoints } from "./rig";
 import { readContact, type ContactGraphEntry, type ContactRangeRef } from "./contactGraph";
 
 /**
  * Subject ids match the #29 handshake fixture. They are opaque strings.
- * `act_` / `obj_` ids from the unmerged world schema pass through the same path.
- * Nothing here imports `instanceLink`, `motionBake`, or the Video lane.
+ * `act_` / `obj_` ids pass through the same path.
+ * Positions and the held-cup wrist come from the phase 0 sample. This file does not solve a wrist.
  */
 export const HANDSHAKE_SHOT_ID = "shot-handshake-preview";
 export const HANDSHAKE_TAKE_ID = "cam_fixture_handshake";
@@ -53,16 +58,13 @@ export const FIXTURE_DURATION_FRAMES = 128;
 /** Frame the cup's parent becomes the table. Hold is `[0, CUP_PLACE_FRAME)`. */
 export const CUP_PLACE_FRAME = 48;
 
-/**
- * World positions from the Phase 0 demo (+Y up, meters).
- * Tabletop and the placed cup share one point. Actor roots do not travel.
- */
-export const TABLE_POSITION: readonly [number, number, number] = [1.25, 0.72, 0.1];
-export const ACTOR_A_ROOT: readonly [number, number, number] = [1.001, 0.38, -0.309];
-export const ACTOR_B_ROOT: readonly [number, number, number] = [2.001, 0.38, -0.309];
+/** Phase 0 world positions (+Y up, meters). The placed cup uses the table point. */
+export const TABLE_POSITION = PHASE0_TABLE_POSITION;
+export const ACTOR_A_ROOT = PHASE0_ACTOR_A_ROOT;
+export const ACTOR_B_ROOT = PHASE0_ACTOR_B_ROOT;
 
 /** Wrist-to-cup offset in A's `left_hand` frame. Not a world position. */
-export const CUP_IN_HAND_OFFSET: Vec3 = [0.03, 0.02, 0.05];
+export const CUP_IN_HAND_OFFSET = PHASE0_CUP_IN_HAND_OFFSET;
 
 const FIXTURE_CLOCK = "2026-11-12T00:00:00.000Z";
 const ROOT_EULER: [number, number, number] = [0, 0, 0];
@@ -385,7 +387,7 @@ export const createHandshakePoseSource = (
   let cupStream: ObjectPoseStream | undefined;
   const objectStream = (subjectId: string): ObjectPoseStream | undefined => {
     if (subjectId !== SUBJECT_IDS.cup) return undefined;
-    if (!cupStream) cupStream = denseCupStream(shot, joints);
+    if (!cupStream) cupStream = denseCupStream(shot);
     return cupStream;
   };
   return {
@@ -396,11 +398,11 @@ export const createHandshakePoseSource = (
   };
 };
 
-const denseCupStream = (shot: Shot, joints: Pick<PoseSequenceSource, "joints">): ObjectPoseStream => {
+const denseCupStream = (shot: Shot): ObjectPoseStream => {
   const frameCount = shot.time.durationFrames;
   const frames = [];
   for (let t = 0; t < frameCount; t += 1) {
-    const position = t < CUP_PLACE_FRAME ? cupOnHand(shot, joints, t) : asVec3(TABLE_POSITION);
+    const position = t < CUP_PLACE_FRAME ? cupOnHand(t) : asVec3(TABLE_POSITION);
     frames.push({ t, T_world_obj: worldMatrix(position) });
   }
   return {
@@ -411,16 +413,8 @@ const denseCupStream = (shot: Shot, joints: Pick<PoseSequenceSource, "joints">):
   };
 };
 
-const cupOnHand = (shot: Shot, joints: Pick<PoseSequenceSource, "joints">, frame: number): Vec3 => {
-  const pelvis = pelvisOf(shot, SUBJECT_IDS.actorA, frame);
-  if (!pelvis) return asVec3(TABLE_POSITION);
-  const solved = solveJoints(
-    asVec3(pelvis.position),
-    eulerToQuaternion(pelvis.rotationEuler),
-    joints.joints(SUBJECT_IDS.actorA, frame),
-  );
-  const wrist = solved.find((joint) => joint.name === "left_wrist");
-  if (!wrist) return asVec3(pelvis.position);
-  // Hand-local offset. `phase0LeftHandWorldPose` is only on the unmerged world branch.
-  return addVec3(wrist.position, quatRotate(wrist.rotation, CUP_IN_HAND_OFFSET));
+/** Cup origin in A's `left_hand` frame. The wrist pose is `phase0LeftHandWorldPose`. */
+const cupOnHand = (frame: number): Vec3 => {
+  const hand = phase0LeftHandWorldPose(frame);
+  return addVec3(asVec3(hand.translation), quatRotate(asQuat(hand.rotation), asVec3(CUP_IN_HAND_OFFSET)));
 };

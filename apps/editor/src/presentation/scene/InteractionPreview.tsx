@@ -11,6 +11,7 @@ import {
   type RigPart,
 } from "../../domain/sceneAuthoring";
 import type { Shot } from "../../domain/shot/types";
+import { SMPLX_PART_JOINT } from "../../domain/worlds/sceneState";
 
 const CONTACT_COLOR: Record<string, string> = {
   hand_hand: "#ffd166",
@@ -72,7 +73,7 @@ const paint = (
     group.add(mesh);
     if (!object.parentSubjectId) continue;
     const parentActor = sample.actors.find((actor) => actor.subjectId === object.parentSubjectId);
-    const wristName = object.parentRigPart === "left_hand" ? "left_wrist" : object.parentRigPart === "right_hand" ? "right_wrist" : undefined;
+    const wristName = object.parentRigPart ? SMPLX_PART_JOINT[object.parentRigPart] : undefined;
     const parentJoint = wristName ? parentActor?.joints.find((joint) => joint.name === wristName) : undefined;
     const parentObject = sample.objects.find((item) => item.subjectId === object.parentSubjectId);
     const parentPosition = parentJoint?.position ?? parentObject?.position;

@@ -1,4 +1,4 @@
-import type { RigPart } from "./contract";
+import { SMPLX_PART_JOINT, type RigPart } from "../worlds/sceneState";
 import { addVec3, quatIdentity, quatMul, quatRotate, type Quat, type Vec3 } from "./math";
 
 export interface ProxyJoint {
@@ -10,15 +10,15 @@ export interface ProxyJoint {
 
 /** Proxy skeleton. Local offsets are meters in the parent joint frame. +Z is forward. */
 export const PROXY_JOINTS: readonly ProxyJoint[] = [
-  { name: "pelvis", parent: null, translation: [0, 0.95, 0], rigPart: "pelvis" },
-  { name: "spine", parent: "pelvis", translation: [0, 0.22, 0] },
-  { name: "head", parent: "spine", translation: [0, 0.24, 0], rigPart: "head" },
+  { name: SMPLX_PART_JOINT.pelvis, parent: null, translation: [0, 0.95, 0], rigPart: "pelvis" },
+  { name: "spine", parent: SMPLX_PART_JOINT.pelvis, translation: [0, 0.22, 0] },
+  { name: SMPLX_PART_JOINT.head, parent: "spine", translation: [0, 0.24, 0], rigPart: "head" },
   { name: "left_shoulder", parent: "spine", translation: [-0.18, 0.16, 0] },
   { name: "left_elbow", parent: "left_shoulder", translation: [0, -0.27, 0] },
-  { name: "left_wrist", parent: "left_elbow", translation: [0, -0.25, 0], rigPart: "left_hand" },
+  { name: SMPLX_PART_JOINT.left_hand, parent: "left_elbow", translation: [0, -0.25, 0], rigPart: "left_hand" },
   { name: "right_shoulder", parent: "spine", translation: [0.18, 0.16, 0] },
   { name: "right_elbow", parent: "right_shoulder", translation: [0, -0.27, 0] },
-  { name: "right_wrist", parent: "right_elbow", translation: [0, -0.25, 0], rigPart: "right_hand" },
+  { name: SMPLX_PART_JOINT.right_hand, parent: "right_elbow", translation: [0, -0.25, 0], rigPart: "right_hand" },
 ];
 
 export interface SolvedJoint {

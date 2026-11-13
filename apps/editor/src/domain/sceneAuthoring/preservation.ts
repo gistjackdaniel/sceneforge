@@ -2,7 +2,7 @@ import type { Shot } from "../shot/types";
 import { selectedTake } from "../shot/queries";
 import { materializeAttachments, resolveContacts } from "./contacts";
 import type { InteractionPreviewRecord } from "./contract";
-import { EULER_ORDER } from "./eulerOrder";
+import { SHOT_EULER_ORDER } from "../shot/eulerAdapter";
 import { createHandshakePoseSource } from "./fixture";
 import { resolvedJointTrack, samplePlayback } from "./playback";
 import type { PoseSequenceSource } from "./poseSource";
@@ -48,7 +48,7 @@ const rootMotion = (shot: Shot, subjectId: string): unknown => {
       position: key.position,
       rotationEuler: key.rotationEuler,
       scale: key.scale,
-      eulerOrder: EULER_ORDER,
+      eulerOrder: SHOT_EULER_ORDER,
     }));
   }
   return [{
@@ -56,7 +56,7 @@ const rootMotion = (shot: Shot, subjectId: string): unknown => {
     position: subject.placement.position,
     rotationEuler: subject.placement.rotationEuler,
     scale: subject.placement.scale,
-    eulerOrder: EULER_ORDER,
+    eulerOrder: SHOT_EULER_ORDER,
   }];
 };
 

@@ -1,8 +1,8 @@
 import type { Shot } from "../shot/types";
 import { sampleCameraPose, sampleSubjectPose, selectedTake } from "../shot/queries";
 import { materializeAttachments, resolveContacts, type AttachmentSpan } from "./contacts";
-import { PROXY_PART_JOINT, type ContactEvent, type InteractionPreviewRecord, type RigPart, type SubjectBinding } from "./contract";
-import { EULER_ORDER, eulerToQuaternion } from "./eulerOrder";
+import { SMPLX_PART_JOINT, type ContactEvent, type InteractionPreviewRecord, type RigPart, type SubjectBinding } from "./contract";
+import { SHOT_EULER_ORDER, eulerToQuaternion } from "../shot/eulerAdapter";
 import {
   addVec3,
   asQuat,
@@ -35,7 +35,7 @@ export interface SampledActor {
   root: {
     position: Vec3;
     rotationEuler: Vec3;
-    eulerOrder: typeof EULER_ORDER;
+    eulerOrder: typeof SHOT_EULER_ORDER;
     rotation: Quat;
     scale: Vec3;
   };
@@ -83,7 +83,7 @@ export const frameAtTime = (timeSeconds: number, shot: Pick<Shot, "time">): numb
 };
 
 const jointWorld = (actor: SampledActor, part: RigPart): { position: Vec3; rotation: Quat } | undefined => {
-  const name = PROXY_PART_JOINT[part];
+  const name = SMPLX_PART_JOINT[part];
   const joint = actor.joints.find((item) => item.name === name);
   return joint ? { position: joint.position, rotation: joint.rotation } : undefined;
 };
@@ -100,8 +100,8 @@ const sampleActor = (
   const root = {
     position: asVec3(pose.position),
     rotationEuler: asVec3(pose.rotationEuler),
-    eulerOrder: EULER_ORDER,
-    rotation: eulerToQuaternion(pose.rotationEuler),
+    eulerOrder: SHOT_EULER_ORDER,
+    rotation: asQuat(eulerToQuaternion(pose.rotationEuler)),
     scale: asVec3(pose.scale),
   };
   const joints: SampledJoint[] = solveJoints(root.position, root.rotation, poses.joints(binding.subjectId, frame));
@@ -147,7 +147,7 @@ const sampleObjects = (
         placed.set(binding.subjectId, {
           ...base,
           position: streamed ? translationOf(streamed.T_world_obj) : asVec3(pose.position),
-          rotation: eulerToQuaternion(pose.rotationEuler),
+          rotation: asQuat(eulerToQuaternion(pose.rotationEuler)),
         });
         continue;
       }
@@ -160,7 +160,7 @@ const sampleObjects = (
           position: streamed
             ? translationOf(streamed.T_world_obj)
             : addVec3(joint!.position, quatRotate(joint!.rotation, attachment.offset.translation)),
-          rotation: joint ? quatMul(joint.rotation, attachment.offset.rotation) : eulerToQuaternion(pose.rotationEuler),
+          rotation: joint ? quatMul(joint.rotation, attachment.offset.rotation) : asQuat(eulerToQuaternion(pose.rotationEuler)),
           parentSubjectId: attachment.parentSubjectId,
           parentRigPart: attachment.rigPart,
           sourceContactId: attachment.sourceContactId,
