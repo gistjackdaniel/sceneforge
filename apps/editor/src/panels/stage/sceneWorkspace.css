@@ -36,6 +36,8 @@
 .scene-workspace .stage-viewport canvas { display: block; outline: none; }
 .scene-workspace .viewport-overlay { top: auto; bottom: 12px; left: 16px; right: auto; color: #b6c1ba; background: #101511a6; padding: 4px 7px; border-radius: 3px; font-size: 9px; pointer-events: none; max-width: 55%; }
 .scene-workspace .viewport-overlay > span:first-child, .scene-workspace .viewport-overlay > span:nth-child(2):not(:last-child) { display: none; }
+.scene-workspace .viewport-rig-warnings { position: absolute; top: 12px; left: 16px; right: 16px; z-index: 2; display: flex; flex-direction: column; gap: 4px; max-height: 28%; overflow: hidden; pointer-events: none; }
+.scene-workspace .viewport-rig-warnings p { margin: 0; padding: 4px 8px; border-radius: 3px; background: #3a2e14cc; color: #e6c07b; font-size: 11px; line-height: 1.4; }
 .scene-rail { position: absolute; top: 16px; left: 16px; display: flex; flex-direction: column; gap: 3px; background: #191e1beF; border: 1px solid #3b443d; border-radius: 8px; padding: 4px; z-index: 4; box-shadow: 0 6px 20px #0003; }
 .scene-rail button { width: 34px; height: 34px; padding: 0; }
 .scene-view-controls { position: absolute; top: 16px; right: 16px; display: flex; gap: 4px; padding: 3px; background: #191e1bf0; border: 1px solid #3b443d; border-radius: 7px; z-index: 2; }

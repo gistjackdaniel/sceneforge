@@ -29,6 +29,9 @@ import {
 } from "../../domain/shot";
 import type { SceneObject } from "../../domain/worlds/sceneObjects";
 import { subjectDraftFromObject } from "./subjectDraft";
+import { gltfRiggedActorCommand, rigImportAlreadyApplied } from "../../application/commands/gltfRiggedActor";
+import { rigWarningsForActors } from "../../presentation/viewport/skinnedMeshBones";
+import type { GlbRigRead } from "./readSkinnedMesh";
 import "./sceneWorkspace.css";
 
 const tuple3 = (value: readonly [number, number, number]): [number, number, number] => [value[0], value[1], value[2]];
@@ -126,6 +129,35 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const canEdit = Boolean(shot && clip && !previewOnly);
   const cameraView = recording && !freeView && selectedId === "camera";
   const previewPlan = useMemo(() => resolveViewportRepresentation(world), [world]);
+  const rigWarnings = useMemo(() => {
+    if (!world) return [];
+    const actors = project.sceneStates?.[world.id]?.actors ?? {};
+    const live = new Set(Object.values(actors).filter((actor) => !actor.deletedAt).map((actor) => actor.id));
+    return rigWarningsForActors(ui.commandBus.events, world.id, live);
+  }, [world, project.sceneStates, ui.commandBus.events]);
+  const importRiggedModel = useCallback((payload: GlbRigRead & { objectId: string }) => {
+    if (!world || !shot) return;
+    const subject = subjects.find((item) => item.id === payload.objectId);
+    if (!subject || subject.kind !== "human" || !subject.assetRef) return;
+    const command = gltfRiggedActorCommand({
+      worldId: world.id,
+      assetId: subject.assetRef.assetId,
+      revisionId: subject.assetRef.revisionId,
+      sourcePath: subject.uri,
+      nodeName: payload.nodeName,
+      bones: payload.bones,
+      label: subject.name,
+      restTranslation: payload.restTranslation,
+      restRotation: payload.restRotation,
+      restScale: payload.restScale,
+      legacySubjectId: subject.id,
+      shotId: shot.id,
+      legacyAssetId: subject.assetId,
+    });
+    if (!command || command.type !== "IMPORT_RIGGED_ACTOR") return;
+    if (rigImportAlreadyApplied(project.sceneStates?.[world.id], command.source)) return;
+    dispatch({ type: "agent-execute-commands", commands: [command], logMessage: "리깅된 액터를 가져왔습니다." });
+  }, [world, shot, subjects, project.sceneStates, dispatch]);
   const fallbackImageUri = useMemo(() => firstViewportImageUri(world, project.assets), [world, project.assets]);
   const pathSamples = useMemo(() => (shot ? sampleCameraPathPositions(shot, 64) : []).map(tuple3), [shot]);
   const lighting = useMemo(() => {
@@ -437,6 +469,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
             if (object) commitPose(object, { position: payload.position, rotation: payload.rotation, scale: payload.scale ?? object.scale });
           }}
           onLoadStateChange={(state, message) => setLoad({ state, message })}
+          onRiggedModelLoaded={importRiggedModel}
+          rigWarnings={rigWarnings}
           onCapturePose={captureCamera}
           onLiveCameraPose={(camera) => {
             livePoseRef.current = { position: camera.position, rotation: camera.rotation };
