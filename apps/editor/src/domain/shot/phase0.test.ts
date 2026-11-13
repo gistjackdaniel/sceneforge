@@ -37,6 +37,7 @@ import {
   phase0Shot,
 } from "./phase0Sample";
 import { parseShot } from "./schema";
+import { legacyCameraTakeId } from "./takeId";
 import type { PosedSubject, Shot } from "./types";
 
 const posed = (shot: Shot): PosedSubject[] =>
@@ -64,7 +65,10 @@ describe("phase 0 fixture", () => {
     });
     expect(scene.objects["object-cup"]?.attachments[1]?.rigPart).toBeUndefined();
     expect(scene.objects["object-cup"]?.attachments[1]?.parentInstanceId).toBe("object-table");
-    expect(shot.camera.status === "ready" && shot.camera.selectedTakeId).toBe("cam-take-01");
+    expect(shot.camera.status === "ready" && shot.camera.selectedTakeId).toBe(legacyCameraTakeId(shot.id, "cam-take-01"));
+    const phase0Take = shot.camera.status === "ready" ? shot.camera.takes[0] : undefined;
+    expect(phase0Take?.legacyRefs).toEqual([{ kind: "camera_take", shotId: shot.id, takeId: "cam-take-01" }]);
+    expect(phase0Take?.rotationStorage).toBe("quaternion_xyzw");
     expect(shot.coordinateContract?.exportCameraFrame).toBe("opencv");
   });
 

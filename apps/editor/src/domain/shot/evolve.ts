@@ -1,6 +1,13 @@
 import type { AssetRecord } from "../assets/types";
 import { createPersistentIdFactory, type PersistentIdFactory } from "../worlds/ids";
 import {
+  identityCalibration,
+  identityMapping,
+  mirrorsSamples,
+  resolveVirtualKeyframes,
+  samplesFromKeyframes,
+} from "./cameraTrack";
+import {
   linkPosedSubject,
   persistentAssetIdForLegacy,
   reservedInstanceIds,
@@ -8,11 +15,15 @@ import {
 } from "./instanceLink";
 import { parseShot } from "./schema";
 import { generateHash } from "./queries";
+import { mintCameraTakeId, reservedCameraTakeIds } from "./takeId";
 import type {
   AssetId,
+  CameraKey,
+  CameraSample,
   CameraTake,
   Motion,
   Shot,
+  ShotCamera,
   ShotCommand,
   Subject,
   SubjectDraft,
@@ -95,16 +106,90 @@ const textMotion = (prompt: string): Motion => {
   return trimmed ? { channel: "text", prompt: trimmed } : { channel: "unset" };
 };
 
-const withTake = (shot: Shot, take: CameraTake, now: string, source: CameraTake["source"], name?: string): ShotEdit => {
-  const stored: CameraTake = { ...take, source, name: name ?? take.name, createdAt: take.createdAt || now };
-  const takes = shot.camera.status === "ready" ? [...shot.camera.takes, stored] : [stored];
+const withTake = (shot: Shot, take: CameraTake): ShotEdit => {
+  const takes = shot.camera.status === "ready" ? [...shot.camera.takes, take] : [take];
   const packed = nonEmpty(takes);
   if (!packed) return { ok: false, reason: "A camera take needs a key inside the shot." };
   return finish(
-    { ...shot, camera: { status: "ready", lens: shot.camera.lens, interpolation: shot.camera.interpolation, selectedTakeId: stored.id, takes: packed } },
+    {
+      ...shot,
+      camera: {
+        status: "ready",
+        lens: shot.camera.lens,
+        interpolation: shot.camera.interpolation,
+        selectedTakeId: take.id,
+        takes: packed,
+        retiredTakeIds: shot.camera.retiredTakeIds,
+      },
+    },
     { type: "REPLACE_CAMERA", shotId: shot.id, camera: shot.camera },
     true,
   );
+};
+
+const takeNumber = (camera: ShotCamera): number => {
+  const names = camera.status === "ready" ? camera.takes.map((take) => take.name) : [];
+  const used = names.map((name) => {
+    const match = /^Take (\d+)$/.exec(name);
+    return match ? Number(match[1]) : 0;
+  });
+  return Math.max(0, ...used, camera.status === "ready" ? camera.takes.length : 0) + 1;
+};
+
+const copySample = (sample: CameraSample): CameraSample => ({
+  ...sample,
+  position: [sample.position[0], sample.position[1], sample.position[2]],
+  rotation: [sample.rotation[0], sample.rotation[1], sample.rotation[2], sample.rotation[3]],
+  trackingState: sample.trackingState,
+});
+
+const buildTake = (
+  shot: Shot,
+  input: {
+    source: CameraTake["source"];
+    name: string;
+    keys: readonly CameraKey[];
+    samples?: readonly CameraSample[];
+    intrinsics?: CameraTake["intrinsics"];
+    calibration?: CameraTake["calibration"];
+    trackingEvents?: CameraTake["trackingEvents"];
+    mapping?: CameraTake["mapping"];
+    now: string;
+  },
+): CameraTake | undefined => {
+  const calibration = input.calibration ?? identityCalibration();
+  const mapping = input.mapping ?? identityMapping();
+  const provided = (input.samples ?? []).filter((sample) => inClock(shot, sample.frame)).map(copySample);
+  const keyed = input.keys.filter((key) => inClock(shot, key.frame));
+  const samples = provided.length > 0 ? provided : samplesFromKeyframes(keyed, shot.time.fps);
+  if (samples.length === 0) return undefined;
+  const keys = nonEmpty(resolveVirtualKeyframes({ samples, calibration, mapping, intrinsics: input.intrinsics }));
+  if (!keys) return undefined;
+  return {
+    schemaVersion: 1,
+    id: brandId<TakeId>(mintCameraTakeId(reservedCameraTakeIds(shot.camera))),
+    name: input.name,
+    source: input.source,
+    keys,
+    createdAt: input.now,
+    samples,
+    intrinsics: input.intrinsics,
+    calibration,
+    trackingEvents: input.trackingEvents ? [...input.trackingEvents] : [],
+    mapping,
+    legacyRefs: [],
+    rotationStorage: "quaternion_xyzw",
+  };
+};
+
+const retarget = (
+  take: CameraTake,
+  patch: { mapping?: CameraTake["mapping"]; calibration?: CameraTake["calibration"] },
+): CameraTake | undefined => {
+  const next = { ...take, ...patch, samples: take.samples };
+  const keys = nonEmpty(resolveVirtualKeyframes(next));
+  if (!keys) return undefined;
+  return { ...next, keys };
 };
 
 export const applyShotCommand = (
@@ -270,38 +355,35 @@ export const applyShotCommand = (
     }
     case "COMMIT_CAMERA_TAKE":
     case "APPLY_CAMERA_PRESET": {
-      const keys = nonEmpty(sortKeys(command.keys).filter((key) => inClock(shot, key.frame)));
-      if (!keys) return fail("A camera take needs a key inside the shot.");
-      const index = shot.camera.status === "ready" ? shot.camera.takes.length + 1 : 1;
-      const take: CameraTake = {
-        schemaVersion: 1,
-        id: brandId<TakeId>(`take-${shot.id}-${index}`),
-        name: command.type === "COMMIT_CAMERA_TAKE" ? command.name ?? `Take ${index}` : `Take ${index}`,
+      const number = takeNumber(shot.camera);
+      const take = buildTake(shot, {
         source: command.type === "APPLY_CAMERA_PRESET" ? "preset" : command.source,
-        keys,
-        createdAt: now,
-      };
-      return withTake(shot, take, now, take.source, take.name);
+        name: command.type === "COMMIT_CAMERA_TAKE" ? command.name ?? `Take ${number}` : `Take ${number}`,
+        keys: command.keys,
+        samples: command.type === "COMMIT_CAMERA_TAKE" ? command.samples : undefined,
+        intrinsics: command.type === "COMMIT_CAMERA_TAKE" ? command.intrinsics : undefined,
+        calibration: command.type === "COMMIT_CAMERA_TAKE" ? command.calibration : undefined,
+        trackingEvents: command.type === "COMMIT_CAMERA_TAKE" ? command.trackingEvents : undefined,
+        mapping: command.type === "COMMIT_CAMERA_TAKE" ? command.mapping : undefined,
+        now,
+      });
+      if (!take) return fail("A camera take needs a key inside the shot.");
+      return withTake(shot, take);
     }
     case "KEY_CAMERA": {
       if (!inClock(shot, command.key.frame)) return fail("Frame is outside the shot.");
       if (shot.camera.status === "empty") {
-        const take: CameraTake = {
-          schemaVersion: 1,
-          id: brandId<TakeId>(`take-${shot.id}-1`),
-          name: "Take 1",
-          source: "manual",
-          keys: [command.key],
-          createdAt: now,
-        };
-        return withTake(shot, take, now, "manual", "Take 1");
+        const take = buildTake(shot, { source: "manual", name: "Take 1", keys: [command.key], now });
+        if (!take) return fail("A camera take needs a key inside the shot.");
+        return withTake(shot, take);
       }
       const camera = shot.camera;
       const selectedId = camera.selectedTakeId;
       const selected = camera.takes.find((take) => take.id === selectedId) ?? camera.takes[0];
       const keys = nonEmpty(sortKeys([...selected.keys.filter((key) => key.frame !== command.key.frame), command.key]));
       if (!keys) return fail("A camera take needs a key inside the shot.");
-      const takes = nonEmpty(camera.takes.map((take) => take.id === selected.id ? { ...take, keys } : take));
+      const samples = mirrorsSamples(selected) ? samplesFromKeyframes(keys, shot.time.fps) : selected.samples;
+      const takes = nonEmpty(camera.takes.map((take) => take.id === selected.id ? { ...take, keys, samples } : take));
       if (!takes) return fail("A camera take needs a key inside the shot.");
       return finish(
         { ...shot, camera: { ...shot.camera, takes } },
@@ -317,8 +399,11 @@ export const applyShotCommand = (
       if (!selected) return fail("Camera take not found.");
       const keys = nonEmpty(selected.keys.filter((key) => key.frame !== command.frame));
       const previous = camera;
+      const retire = (id: TakeId) => [...camera.retiredTakeIds, id];
       const takes = keys
-        ? camera.takes.map((take) => take.id === selected.id ? { ...take, keys } : take)
+        ? camera.takes.map((take) => take.id === selected.id
+          ? { ...take, keys, samples: mirrorsSamples(take) ? samplesFromKeyframes(keys, shot.time.fps) : take.samples }
+          : take)
         : camera.takes.filter((take) => take.id !== selected.id);
       const packed = nonEmpty(takes);
       const nextCamera = packed
@@ -326,9 +411,29 @@ export const applyShotCommand = (
             ...camera,
             selectedTakeId: packed.some((take) => take.id === selectedId) ? selectedId : packed[0].id,
             takes: packed,
+            retiredTakeIds: keys ? camera.retiredTakeIds : retire(selected.id),
           }
-        : { status: "empty" as const, lens: camera.lens, interpolation: camera.interpolation };
+        : { status: "empty" as const, lens: camera.lens, interpolation: camera.interpolation, retiredTakeIds: retire(selected.id) };
       return finish({ ...shot, camera: nextCamera }, { type: "REPLACE_CAMERA", shotId: shot.id, camera: previous }, true);
+    }
+    case "SET_CAMERA_TRACK_MAPPING":
+    case "SET_DEVICE_CALIBRATION": {
+      if (shot.camera.status !== "ready") return fail("Camera take not found.");
+      const camera = shot.camera;
+      const targetId = command.takeId ?? camera.selectedTakeId;
+      const selected = camera.takes.find((take) => take.id === targetId);
+      if (!selected) return fail("Camera take not found.");
+      const next = retarget(selected, command.type === "SET_CAMERA_TRACK_MAPPING"
+        ? { mapping: command.mapping }
+        : { calibration: command.calibration });
+      if (!next) return fail("A camera take needs a key inside the shot.");
+      const takes = nonEmpty(camera.takes.map((take) => take.id === selected.id ? next : take));
+      if (!takes) return fail("A camera take needs a key inside the shot.");
+      return finish(
+        { ...shot, camera: { ...camera, takes } },
+        { type: "REPLACE_CAMERA", shotId: shot.id, camera: camera },
+        true,
+      );
     }
     case "SELECT_CAMERA_TAKE": {
       if (shot.camera.status !== "ready" || !shot.camera.takes.some((take) => take.id === command.takeId)) return fail("Camera take not found.");
@@ -344,14 +449,18 @@ export const applyShotCommand = (
       const camera = shot.camera;
       const selectedId = camera.selectedTakeId;
       const previous = camera;
+      const removed = camera.takes.find((take) => take.id === command.takeId);
+      if (!removed) return fail("Camera take not found.");
+      const retiredTakeIds = [...camera.retiredTakeIds, removed.id];
       const packed = nonEmpty(camera.takes.filter((take) => take.id !== command.takeId));
       const nextCamera = packed
         ? {
             ...camera,
             selectedTakeId: packed.some((take) => take.id === selectedId) ? selectedId : packed[0].id,
             takes: packed,
+            retiredTakeIds,
           }
-        : { status: "empty" as const, lens: camera.lens, interpolation: camera.interpolation };
+        : { status: "empty" as const, lens: camera.lens, interpolation: camera.interpolation, retiredTakeIds };
       return finish({ ...shot, camera: nextCamera }, { type: "REPLACE_CAMERA", shotId: shot.id, camera: previous }, true);
     }
     case "SET_LENS":
@@ -375,14 +484,32 @@ export const applyShotCommand = (
       });
       let camera = shot.camera;
       if (camera.status === "ready") {
+        const dropped: TakeId[] = [];
         const takes = nonEmpty(camera.takes.flatMap((take) => {
-          const keys = nonEmpty(take.keys.filter((key) => inClock(shot, key.frame)));
-          return keys ? [{ ...take, keys }] : [];
+          const samples = take.samples.filter((sample) => inClock(shot, sample.frame));
+          const keys = nonEmpty(samples.length > 0
+            ? resolveVirtualKeyframes({ ...take, samples })
+            : take.keys.filter((key) => inClock(shot, key.frame)));
+          if (!keys) {
+            dropped.push(take.id);
+            return [];
+          }
+          return [{ ...take, keys, samples: samples.length > 0 ? samples : samplesFromKeyframes(keys, shot.time.fps) }];
         }));
         const selectedId = camera.selectedTakeId;
         camera = takes
-          ? { ...camera, selectedTakeId: takes.some((take) => take.id === selectedId) ? selectedId : takes[0].id, takes }
-          : { status: "empty", lens: camera.lens, interpolation: camera.interpolation };
+          ? {
+              ...camera,
+              selectedTakeId: takes.some((take) => take.id === selectedId) ? selectedId : takes[0].id,
+              takes,
+              retiredTakeIds: [...camera.retiredTakeIds, ...dropped],
+            }
+          : {
+              status: "empty",
+              lens: camera.lens,
+              interpolation: camera.interpolation,
+              retiredTakeIds: [...camera.retiredTakeIds, ...camera.takes.map((take) => take.id)],
+            };
       }
       return finish({ ...shot, subjects, camera }, { type: "REPLACE_SHOT", shotId: shot.id, shot }, true);
     }

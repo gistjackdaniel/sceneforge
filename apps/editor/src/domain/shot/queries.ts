@@ -1,4 +1,14 @@
-import type { CameraInterpolation, CameraKey, CameraTake, Quat, Shot, ShotCamera, TakeId, Transform, Vec3 } from "./types";
+import { resolveVirtualKeyframes } from "./cameraTrack";
+import type { CameraInterpolation, CameraKey, CameraTake, Quat, Shot, ShotCamera, Transform, Vec3 } from "./types";
+
+/** The only frame rate recording and export may read. */
+export const readShotTimeFps = (shot: Pick<Shot, "time">): number => {
+  const fps = shot.time.fps;
+  if (!(typeof fps === "number" && Number.isFinite(fps) && fps > 0)) {
+    throw new Error("Shot time.fps is required.");
+  }
+  return fps;
+};
 
 export const selectedTake = (shot: Shot): CameraTake | undefined => {
   if (shot.camera.status !== "ready") return undefined;
@@ -119,6 +129,32 @@ export const sampleSubjectPose = (subject: Shot["subjects"][number], frame: numb
 export const subjectPoseKeys = (subject: Shot["subjects"][number]): readonly number[] =>
   subject.kind === "light" || subject.motion.channel !== "explicit" ? [] : subject.motion.keys.map((key) => key.frame);
 
+const nonemptyKeys = (keys: readonly CameraKey[]): CameraTake["keys"] | undefined =>
+  keys.length > 0 ? [keys[0], ...keys.slice(1)] : undefined;
+
+/** Viewport playback from the stored virtual keys. */
+export const viewportPlaybackPoses = (shot: Shot, frameCount: number): ReturnType<typeof sampleCameraPose>[] => {
+  const take = selectedTake(shot);
+  if (!take || shot.camera.status !== "ready") return [];
+  const count = Math.max(0, Math.floor(frameCount));
+  const interpolation = shot.camera.interpolation;
+  return Array.from({ length: count }, (_, frame) => sampleCameraPose(take, frame, interpolation));
+};
+
+/**
+ * Playback re-derived from the original samples, calibration, and mapping.
+ * Does not read the stored virtual keys, so a mapping change cannot hide a rewritten sample.
+ */
+export const recordedTakePlaybackPoses = (shot: Shot, frameCount: number, take: CameraTake | undefined = selectedTake(shot)): ReturnType<typeof sampleCameraPose>[] => {
+  if (!take || shot.camera.status !== "ready") return [];
+  const keys = nonemptyKeys(resolveVirtualKeyframes(take));
+  if (!keys) return [];
+  const virtual: CameraTake = { ...take, keys };
+  const count = Math.max(0, Math.floor(frameCount));
+  const interpolation = shot.camera.interpolation;
+  return Array.from({ length: count }, (_, frame) => sampleCameraPose(virtual, frame, interpolation));
+};
+
 export const sampleCameraPathPositions = (shot: Shot, count = 64): Vec3[] => {
   const take = selectedTake(shot);
   if (!take || shot.camera.status !== "ready") return [];
@@ -169,7 +205,17 @@ export const generateHash = (shot: Shot): string => {
       };
     }),
     camera: take
-      ? { interpolation: shot.camera.interpolation, lens: shot.camera.lens, takeId: take.id, keys: take.keys }
+      ? {
+          interpolation: shot.camera.interpolation,
+          lens: shot.camera.lens,
+          takeId: take.id,
+          keys: take.keys,
+          samples: take.samples,
+          calibration: take.calibration,
+          mapping: take.mapping,
+          intrinsics: take.intrinsics ?? null,
+          trackingEvents: take.trackingEvents,
+        }
       : { interpolation: shot.camera.interpolation, lens: shot.camera.lens, takeId: null },
   };
   return fnv(JSON.stringify(stable(body)));

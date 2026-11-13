@@ -1,3 +1,4 @@
+import { eulerToQuaternion } from "../shot/euler";
 import type { CameraKeyframe } from "./cameraPath";
 
 export type CameraRigPreset =
@@ -50,22 +51,6 @@ export const normalizeLegacyRig = (rig: string): CameraRigPreset => {
   return CAMERA_RIG_PRESETS.some((item) => item.id === rig) ? (rig as CameraRigPreset) : "static";
 };
 
-const quatFromEuler = (euler: [number, number, number]): [number, number, number, number] => {
-  const [x, y, z] = euler;
-  const cx = Math.cos(x / 2);
-  const sx = Math.sin(x / 2);
-  const cy = Math.cos(y / 2);
-  const sy = Math.sin(y / 2);
-  const cz = Math.cos(z / 2);
-  const sz = Math.sin(z / 2);
-  return [
-    sx * cy * cz - cx * sy * sz,
-    cx * sy * cz + sx * cy * sz,
-    cx * cy * sz - sx * sy * cz,
-    cx * cy * cz + sx * sy * sz,
-  ];
-};
-
 const keyframe = (
   frame: number,
   position: [number, number, number],
@@ -74,7 +59,7 @@ const keyframe = (
 ): CameraKeyframe => ({
   frame,
   position,
-  rotation: quatFromEuler(rotation),
+  rotation: eulerToQuaternion(rotation),
   focalLengthMm,
 });
 
