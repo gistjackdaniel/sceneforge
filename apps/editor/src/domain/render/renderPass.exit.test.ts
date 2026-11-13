@@ -4,7 +4,7 @@ import { parseShot } from "../shot/schema";
 import { selectedTake } from "../shot/queries";
 import { shotId, subjectId, type Shot } from "../shot/types";
 import { sanitizeLegacyToken } from "../worlds/ids";
-import { hashNormalized } from "./hashNormalized";
+import { hashNormalized, hashString } from "./hashNormalized";
 import { deriveInstanceTable } from "./instanceTable";
 import { renderPassHashInput, upstreamPassRecord } from "./passHash";
 import {
@@ -299,5 +299,28 @@ describe("phase 2 render passes", () => {
     for (const kind of RENDER_PASS_KINDS) expect(otherRange.hashes[kind]).not.toBe(hashed.hashes[kind]);
     const otherFps = hashesOf(reload({ ...shot, time: { ...shot.time, fps: 24 } }));
     for (const kind of RENDER_PASS_KINDS) expect(otherFps[kind]).not.toBe(hashed.hashes[kind]);
+  });
+
+  it("locks per-pass golden hashes and reference pixel digests", () => {
+    const output = render(phase0Shot());
+    expect(output.hashes).toEqual({
+      rgb: "ecb96de0",
+      depth: "f1acda6a",
+      normal: "f8939ae8",
+      world_position: "a5f0fc39",
+      instance_id: "b39c68c7",
+    });
+    const digest = (data: ArrayBufferView) =>
+      hashString(Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("base64"));
+    const pixels = Object.fromEntries(output.frames.map((frame) => {
+      const row: Record<string, string> = {};
+      for (const kind of RENDER_PASS_KINDS) row[kind] = digest(frame[kind].data);
+      return [frame.frame, row];
+    }));
+    expect(pixels).toEqual({
+      0: { rgb: "f92bca0f", depth: "94c19014", normal: "76fe4699", world_position: "936ad02d", instance_id: "fa1f547a" },
+      64: { rgb: "2818d77f", depth: "f6b55275", normal: "5de49596", world_position: "7e774b73", instance_id: "1c4a7858" },
+      127: { rgb: "cd191952", depth: "8241b8c0", normal: "edc11da8", world_position: "0327c371", instance_id: "46fea3a1" },
+    });
   });
 });
