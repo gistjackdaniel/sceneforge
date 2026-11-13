@@ -21,6 +21,7 @@ import type { CameraKeyframe } from "../../domain/graph/cameraPath";
 import type { SceneObject } from "../../domain/worlds/sceneObjects";
 import { quaternionToAxisAngle } from "../../domain/utils/quaternion";
 import type { JointTarget } from "../../domain/performance/poseTrack";
+import { smplxJointForRigPart } from "../../domain/performance/rigJoints";
 import { JointPickPriority } from "../../presentation/pose/pickPriority";
 
 export interface StageObjectTransform {
@@ -877,7 +878,7 @@ export const StageViewport = ({
     group.position.copy(selected.position);
     group.rotation.copy(selected.rotation);
     const JOINTS: Array<{ name: string; target: JointTarget; pos: [number, number, number] }> = [
-      { name: "pelvis", target: { kind: "global_orient" }, pos: [0, 0.9, 0] },
+      { name: smplxJointForRigPart("pelvis"), target: { kind: "global_orient" }, pos: [0, 0.9, 0] },
       { name: "spine", target: { kind: "body", index: 0 }, pos: [0, 1.1, 0] },
       { name: "neck", target: { kind: "body", index: 3 }, pos: [0, 1.45, 0] },
       { name: "jaw", target: { kind: "jaw" }, pos: [0, 1.55, 0.08] },
