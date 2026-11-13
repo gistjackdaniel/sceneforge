@@ -74,6 +74,8 @@ interface StageViewportProps {
   objectTransforms?: StageObjectTransform[];
   keyframes?: CameraKeyframe[];
   pathSamples?: Array<[number, number, number]>;
+  /** RGB 0..1, one color per path sample. Loss intervals use a different tint. */
+  pathColors?: Array<[number, number, number]>;
   lookAtTargetId?: string;
   fovDegrees?: number;
   playheadFrame?: number;
@@ -226,6 +228,7 @@ export const StageViewport = ({
   objectTransforms = [],
   keyframes = [],
   pathSamples = [],
+  pathColors,
   lookAtTargetId,
   fovDegrees = 50,
   playheadFrame = 0,
@@ -902,10 +905,27 @@ export const StageViewport = ({
     }
 
     if (pathSamples.length > 0) {
-      api.pathLine.geometry.dispose();
-      api.pathLine.geometry = new THREE.BufferGeometry().setFromPoints(
+      const geometry = new THREE.BufferGeometry().setFromPoints(
         pathSamples.map((point) => new THREE.Vector3(...point)),
       );
+      const material = api.pathLine.material as THREE.LineBasicMaterial;
+      if (pathColors && pathColors.length === pathSamples.length) {
+        const colors = new Float32Array(pathColors.length * 3);
+        pathColors.forEach((color, index) => {
+          colors[index * 3] = color[0];
+          colors[index * 3 + 1] = color[1];
+          colors[index * 3 + 2] = color[2];
+        });
+        geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+        material.vertexColors = true;
+        material.color.setHex(0xffffff);
+      } else {
+        material.vertexColors = false;
+        material.color.setHex(0x79c0ff);
+      }
+      material.needsUpdate = true;
+      api.pathLine.geometry.dispose();
+      api.pathLine.geometry = geometry;
       const current = cameraPose?.position ?? pathSamples[0];
       api.playheadMarker.position.set(...current);
     }
@@ -918,7 +938,7 @@ export const StageViewport = ({
         lookTarget.position.clone(),
       ]);
     }
-  }, [keyframes, playheadFrame, cameraViz, pathSamples, lookAtTargetId, workspace, cameraPose]);
+  }, [keyframes, playheadFrame, cameraViz, pathSamples, pathColors, lookAtTargetId, workspace, cameraPose]);
 
   useEffect(() => {
     const api = sceneApiRef.current;

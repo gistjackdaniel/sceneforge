@@ -176,6 +176,13 @@ export type CameraMotionMapping = {
   smoothing: number;
   timeScale: number;
   timeOffsetFrames: number;
+  /**
+   * How virtual keys fill samples whose tracking state is limited or lost.
+   * `preserve` keeps the recorded pose. The original samples are not rewritten.
+   */
+  lossPolicy?: "preserve" | "hold" | "interpolate";
+  /** When false or omitted, `drift_correction` events are ignored. */
+  applyDriftCorrection?: boolean;
 };
 
 export type CameraTake = {

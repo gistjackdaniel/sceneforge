@@ -1,5 +1,8 @@
+import { BackboneCameraBuilder } from "../rendering/backboneV01";
+import type { SensorPreset } from "../graph/lens";
 import { resolveVirtualKeyframes } from "./cameraTrack";
-import type { CameraInterpolation, CameraKey, CameraTake, Quat, Shot, ShotCamera, Transform, Vec3 } from "./types";
+import { detectTrackingLoss } from "./trackingContinuity";
+import type { CameraInterpolation, CameraTake, Quat, Shot, ShotCamera, TrackingState, Transform, Vec3 } from "./types";
 
 /** The only frame rate recording and export may read. */
 export const readShotTimeFps = (shot: Pick<Shot, "time">): number => {
@@ -129,39 +132,170 @@ export const sampleSubjectPose = (subject: Shot["subjects"][number], frame: numb
 export const subjectPoseKeys = (subject: Shot["subjects"][number]): readonly number[] =>
   subject.kind === "light" || subject.motion.channel !== "explicit" ? [] : subject.motion.keys.map((key) => key.frame);
 
-const nonemptyKeys = (keys: readonly CameraKey[]): CameraTake["keys"] | undefined =>
-  keys.length > 0 ? [keys[0], ...keys.slice(1)] : undefined;
+const sensorPresetOf = (value: string | undefined): SensorPreset =>
+  value === "super35" || value === "micro-four-thirds" || value === "full-frame" ? value : "full-frame";
 
-/** Viewport playback from the stored virtual keys. */
+/** Per-frame camera. Numbers only — no take id, calibration id, or shot id. */
+export type ResolvedCameraIntrinsics = {
+  fx: number;
+  fy: number;
+  cx: number;
+  cy: number;
+  K: readonly [
+    readonly [number, number, number],
+    readonly [number, number, number],
+    readonly [number, number, number],
+  ];
+};
+
+export type ResolvedCameraFrame = {
+  frame: number;
+  position: Vec3;
+  rotation: Quat;
+  focalLengthMm: number;
+  focusDistanceM?: number;
+  aperture?: number;
+  intrinsics: ResolvedCameraIntrinsics;
+  /** OpenCV c2w, row-major. Same composition as `BackboneCameraBuilder`. */
+  c2w: readonly [
+    readonly [number, number, number, number],
+    readonly [number, number, number, number],
+    readonly [number, number, number, number],
+    readonly [number, number, number, number],
+  ];
+};
+
+export type ResolveCameraTakeOptions = {
+  /** Shot-local integer frames. Defaults to every frame in `shot.time`. */
+  frames?: readonly number[];
+  /** Pixel size for K. Defaults to the take's stored image size. */
+  imageSize?: readonly [number, number];
+};
+
+const asMat3 = (
+  rows: readonly [readonly [number, number, number], readonly [number, number, number], readonly [number, number, number]],
+): ResolvedCameraIntrinsics["K"] => rows;
+
+const asMat4 = (rows: number[][]): ResolvedCameraFrame["c2w"] => [
+  [rows[0]?.[0] ?? 0, rows[0]?.[1] ?? 0, rows[0]?.[2] ?? 0, rows[0]?.[3] ?? 0],
+  [rows[1]?.[0] ?? 0, rows[1]?.[1] ?? 0, rows[1]?.[2] ?? 0, rows[1]?.[3] ?? 0],
+  [rows[2]?.[0] ?? 0, rows[2]?.[1] ?? 0, rows[2]?.[2] ?? 0, rows[2]?.[3] ?? 0],
+  [rows[3]?.[0] ?? 0, rows[3]?.[1] ?? 0, rows[3]?.[2] ?? 0, rows[3]?.[3] ?? 1],
+];
+
+const intrinsicsFor = (
+  take: CameraTake,
+  shot: Pick<Shot, "camera">,
+  focalLengthMm: number,
+  imageSize: readonly [number, number] | undefined,
+): ResolvedCameraIntrinsics => {
+  const size = imageSize ?? take.intrinsics?.imageSize;
+  if (size) {
+    const fit = take.intrinsics?.sensorFit;
+    const K = BackboneCameraBuilder.computeIntrinsicsK(
+      { focalLengthMm, sensorPreset: sensorPresetOf(shot.camera.lens.sensorPreset) },
+      [size[0], size[1]],
+      fit === "vertical" || fit === "auto" ? fit : "horizontal",
+    );
+    return { fx: K[0][0], fy: K[1][1], cx: K[0][2], cy: K[1][2], K };
+  }
+  const stored = take.intrinsics?.K;
+  if (stored) return { fx: stored[0][0], fy: stored[1][1], cx: stored[0][2], cy: stored[1][2], K: asMat3(stored) };
+  const K = BackboneCameraBuilder.computeIntrinsicsK(
+    { focalLengthMm, sensorPreset: sensorPresetOf(shot.camera.lens.sensorPreset) },
+    [1280, 720],
+    "horizontal",
+  );
+  return { fx: K[0][0], fy: K[1][1], cx: K[0][2], cy: K[1][2], K };
+};
+
+const layeredKeys = (take: CameraTake): CameraTake["keys"] | undefined => {
+  const keys = resolveVirtualKeyframes(take);
+  if (keys.length === 0) return undefined;
+  return [keys[0], ...keys.slice(1)];
+};
+
+/**
+ * Original samples, then calibration, tracking-loss fill, drift correction, and
+ * motion mapping, in that order. Each requested frame is the OpenCV c2w and
+ * the intrinsics of that pose. The returned objects contain no id strings.
+ * Viewport playback and recorded-take playback both call this.
+ */
+export const resolveCameraTakeFrames = (
+  take: CameraTake,
+  shot: Pick<Shot, "time" | "camera">,
+  options?: ResolveCameraTakeOptions,
+): ResolvedCameraFrame[] => {
+  const keys = layeredKeys(take);
+  if (!keys) return [];
+  const virtual: CameraTake = { ...take, keys };
+  const frames = options?.frames ?? Array.from({ length: Math.max(0, Math.floor(shot.time.durationFrames)) }, (_, frame) => frame);
+  return frames.map((frame) => {
+    const pose = sampleCameraPose(virtual, frame, shot.camera.interpolation);
+    const rotation: [number, number, number, number] = [pose.rotation[0], pose.rotation[1], pose.rotation[2], pose.rotation[3]];
+    const position: [number, number, number] = [pose.position[0], pose.position[1], pose.position[2]];
+    const c2w = BackboneCameraBuilder.composeC2W(
+      position,
+      BackboneCameraBuilder.glToOpenCvRotation(BackboneCameraBuilder.quatToMat3(rotation)),
+    );
+    return {
+      frame,
+      position,
+      rotation,
+      focalLengthMm: pose.focalLengthMm,
+      focusDistanceM: pose.focusDistanceM,
+      aperture: pose.aperture,
+      intrinsics: intrinsicsFor(take, shot, pose.focalLengthMm, options?.imageSize),
+      c2w: asMat4(c2w),
+    };
+  });
+};
+
+const posesFromFrames = (frames: readonly ResolvedCameraFrame[]): ReturnType<typeof sampleCameraPose>[] =>
+  frames.map((frame) => ({
+    position: frame.position,
+    rotation: frame.rotation,
+    focalLengthMm: frame.focalLengthMm,
+    focusDistanceM: frame.focusDistanceM,
+    aperture: frame.aperture,
+  }));
+
+/** Viewport playback. Same frames as recorded-take playback. */
 export const viewportPlaybackPoses = (shot: Shot, frameCount: number): ReturnType<typeof sampleCameraPose>[] => {
   const take = selectedTake(shot);
   if (!take || shot.camera.status !== "ready") return [];
   const count = Math.max(0, Math.floor(frameCount));
-  const interpolation = shot.camera.interpolation;
-  return Array.from({ length: count }, (_, frame) => sampleCameraPose(take, frame, interpolation));
+  return posesFromFrames(resolveCameraTakeFrames(take, shot, { frames: Array.from({ length: count }, (_, frame) => frame) }));
 };
 
 /**
- * Playback re-derived from the original samples, calibration, and mapping.
- * Does not read the stored virtual keys, so a mapping change cannot hide a rewritten sample.
+ * Recorded-take playback. Re-derived from samples and layers, not from stored keys.
  */
 export const recordedTakePlaybackPoses = (shot: Shot, frameCount: number, take: CameraTake | undefined = selectedTake(shot)): ReturnType<typeof sampleCameraPose>[] => {
   if (!take || shot.camera.status !== "ready") return [];
-  const keys = nonemptyKeys(resolveVirtualKeyframes(take));
-  if (!keys) return [];
-  const virtual: CameraTake = { ...take, keys };
   const count = Math.max(0, Math.floor(frameCount));
-  const interpolation = shot.camera.interpolation;
-  return Array.from({ length: count }, (_, frame) => sampleCameraPose(virtual, frame, interpolation));
+  return posesFromFrames(resolveCameraTakeFrames(take, shot, { frames: Array.from({ length: count }, (_, frame) => frame) }));
 };
 
 export const sampleCameraPathPositions = (shot: Shot, count = 64): Vec3[] => {
   const take = selectedTake(shot);
   if (!take || shot.camera.status !== "ready") return [];
-  const interpolation = shot.camera.interpolation;
   const end = Math.max(take.keys[take.keys.length - 1]?.frame ?? 0, 1);
-  return Array.from({ length: count }, (_, index) =>
-    sampleCameraPose(take, (end * index) / Math.max(1, count - 1), interpolation).position);
+  const frames = Array.from({ length: count }, (_, index) => (end * index) / Math.max(1, count - 1));
+  return resolveCameraTakeFrames(take, shot, { frames }).map((frame) => frame.position);
+};
+
+/** Tracking state of the original samples along the same path samples the viewport draws. */
+export const sampleCameraPathStates = (shot: Shot, count = 64): TrackingState[] => {
+  const take = selectedTake(shot);
+  if (!take || shot.camera.status !== "ready") return [];
+  const intervals = detectTrackingLoss(take.samples);
+  const end = Math.max(take.keys[take.keys.length - 1]?.frame ?? 0, 1);
+  return Array.from({ length: count }, (_, index) => {
+    const frame = (end * index) / Math.max(1, count - 1);
+    const hit = intervals.find((interval) => frame >= interval.startFrame && frame < interval.endFrame);
+    return hit?.state ?? "normal";
+  });
 };
 
 export const clipLocalFrame = (playhead: number, shot: Shot) =>

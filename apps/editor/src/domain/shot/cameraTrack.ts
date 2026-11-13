@@ -8,7 +8,8 @@ import {
   type Quat,
   type Vec3,
 } from "./cameraRotation";
-import type { CameraIntrinsics, CameraKey, CameraMotionMapping, CameraSample, DeviceCalibration } from "./types";
+import { applyLossPolicy, applySceneDrift } from "./trackingContinuity";
+import type { CameraIntrinsics, CameraKey, CameraMotionMapping, CameraSample, DeviceCalibration, TrackingEvent } from "./types";
 
 const vec3Schema = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
 const quatSchema = z.tuple([
@@ -39,6 +40,8 @@ export const identityMapping = (): CameraMotionMapping => ({
   smoothing: 0,
   timeScale: 1,
   timeOffsetFrames: 0,
+  lossPolicy: "preserve",
+  applyDriftCorrection: false,
 });
 
 /** True when virtual keys are the calibrated samples with no extra motion mapping. */
@@ -46,7 +49,11 @@ export const mirrorsSamples = (input: {
   mapping: CameraMotionMapping;
   calibration: DeviceCalibration;
 }): boolean =>
-  input.mapping.mode === "one_to_one" && input.calibration.method === "identity" && input.calibration.scale === 1;
+  input.mapping.mode === "one_to_one"
+  && (input.mapping.lossPolicy ?? "preserve") === "preserve"
+  && input.mapping.applyDriftCorrection !== true
+  && input.calibration.method === "identity"
+  && input.calibration.scale === 1;
 
 const trackingStateSchema = z.enum(["normal", "limited", "not_available"]);
 const frameworkSchema = z.enum(["arkit", "arcore", "webxr", "viewport", "other"]);
@@ -213,19 +220,24 @@ const applyRetiming = (poses: ScenePose[], mapping: CameraMotionMapping): SceneP
 
 /**
  * Resolve original samples into virtual camera keys.
- * `one_to_one` keeps the calibrated poses. Other modes do not edit `samples`.
+ * Order: calibration, tracking-loss fill, drift correction, then motion mapping.
+ * None of those steps write back into `samples`.
  */
 export const resolveVirtualKeyframes = (input: {
   samples: readonly CameraSample[];
   calibration: DeviceCalibration;
   mapping: CameraMotionMapping;
   intrinsics?: CameraIntrinsics;
+  trackingEvents?: readonly TrackingEvent[];
 }): CameraKey[] => {
-  const calibrated = calibrateSamples(input.samples, input.calibration);
-  let poses = calibrated;
-  if (input.mapping.mode === "gain") poses = applyGain(calibrated, input.mapping);
-  else if (input.mapping.mode === "smoothing") poses = applySmoothing(calibrated, input.mapping);
-  else if (input.mapping.mode === "retiming") poses = applyRetiming(calibrated, input.mapping);
+  const ordered = [...input.samples].sort((left, right) => left.frame - right.frame);
+  const calibrated = calibrateSamples(ordered, input.calibration);
+  const filled = applyLossPolicy(calibrated, ordered.map((sample) => sample.trackingState), input.mapping.lossPolicy ?? "preserve");
+  const corrected = applySceneDrift(filled, input.trackingEvents, input.mapping.applyDriftCorrection === true);
+  let poses = corrected;
+  if (input.mapping.mode === "gain") poses = applyGain(corrected, input.mapping);
+  else if (input.mapping.mode === "smoothing") poses = applySmoothing(corrected, input.mapping);
+  else if (input.mapping.mode === "retiming") poses = applyRetiming(corrected, input.mapping);
   return poses.map((pose) => ({
     frame: pose.frame,
     position: copyVec3(pose.position),
