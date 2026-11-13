@@ -1,7 +1,9 @@
 import type { DirectionChannelInvalidation } from "../../domain/direction";
-import type { DirectionCapabilityNegotiation } from "../../domain/rendering/capabilities";
 import type { CameraContinuityValidation } from "../../domain/graph/continuity";
+import type { PerformanceSourceType } from "../../domain/performance";
+import type { DirectionCapabilityNegotiation } from "../../domain/rendering/capabilities";
 import type { SceneConditioning } from "../../domain/rendering/sceneConditioning";
+import type { RigPart } from "../../domain/worlds/sceneState";
 
 export type LyraJobStatus = "idle" | "queued" | "running" | "completed" | "failed";
 
@@ -121,7 +123,7 @@ export interface PerformanceDirectionInput {
   planNodeId: string;
   sources: Array<{
     id: string;
-    type: "text_prompt" | "live_action" | "motion_capture" | "key_animation_2d";
+    type: PerformanceSourceType;
     label: string;
     uri?: string;
     assetId?: string;
@@ -144,6 +146,9 @@ export interface PerformanceDirectionInput {
     actor?: string;
     actorId?: string;
     targetActorId?: string;
+    rigPart?: RigPart;
+    targetRigPart?: RigPart;
+    contactId?: string;
     sourceId?: string;
     reactionToCueId?: string;
     overlapMode?: "allow" | "avoid" | "interrupt";

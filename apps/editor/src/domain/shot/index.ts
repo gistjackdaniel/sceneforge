@@ -38,11 +38,27 @@ export type {
   Transform,
   Vec3,
 } from "./types";
-export { EULER_ORDER, eulerToQuaternion, quaternionToEuler } from "./euler";
+export { EULER_ORDER } from "./euler";
 export { legacyCameraTakeId, mintCameraTakeId } from "./takeId";
 export { shotId, subjectId, takeId } from "./types";
 export { parseShot, parseShotModelInput, shotModelInputSchema, shotSchema } from "./schema";
 export { applyShotCommand, type ShotEdit } from "./evolve";
+export { SHOT_EULER_ORDER, eulerToQuaternion, quaternionToEuler } from "./eulerAdapter";
+export {
+  clonePosedSubject,
+  legacyShotInstanceId,
+  linkShotSubjects,
+  persistentAssetIdForLegacy,
+  renamePosedSubject,
+  revisionIdForAssetVersion,
+} from "./instanceLink";
+export {
+  MOTION_BAKE_TOLERANCE,
+  bakeDenseObjectMotion,
+  shotPoseFromWorldMatrix,
+  worldMatrixFromShotPose,
+} from "./motionBake";
+export { environmentImportTransform, prepareModelInput, type PreparedInput } from "./modelInput";
 export {
   clipLocalFrame,
   generateHash,
@@ -56,4 +72,3 @@ export {
   subjectPoseKeys,
   viewportPlaybackPoses,
 } from "./queries";
-export { prepareModelInput, type PreparedInput } from "./modelInput";

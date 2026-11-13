@@ -1,4 +1,5 @@
 import type { AssetRecord } from "../assets/types";
+import { createPersistentIdFactory, type PersistentIdFactory } from "../worlds/ids";
 import {
   identityCalibration,
   identityMapping,
@@ -6,6 +7,12 @@ import {
   resolveVirtualKeyframes,
   samplesFromKeyframes,
 } from "./cameraTrack";
+import {
+  linkPosedSubject,
+  persistentAssetIdForLegacy,
+  reservedInstanceIds,
+  revisionIdForAssetVersion,
+} from "./instanceLink";
 import { parseShot } from "./schema";
 import { generateHash } from "./queries";
 import { mintCameraTakeId, reservedCameraTakeIds } from "./takeId";
@@ -185,7 +192,12 @@ const retarget = (
   return { ...next, keys };
 };
 
-export const applyShotCommand = (shot: Shot, command: ShotCommand, now = new Date().toISOString()): ShotEdit => {
+export const applyShotCommand = (
+  shot: Shot,
+  command: ShotCommand,
+  now = new Date().toISOString(),
+  options?: { ids?: PersistentIdFactory },
+): ShotEdit => {
   if (command.type !== "REPLACE_SHOT" && command.shotId !== shot.id) return { ok: false, reason: "Shot not found." };
   const fail = (reason: string): ShotEdit => ({ ok: false, reason });
   const subjectAt = (id: SubjectId) => shot.subjects.find((item) => item.id === id);
@@ -206,14 +218,27 @@ export const applyShotCommand = (shot: Shot, command: ShotCommand, now = new Dat
         visible: true,
         locked: false,
       };
+      const ids = options?.ids ?? createPersistentIdFactory({ reserved: reservedInstanceIds(shot) });
+      if (options?.ids) {
+        for (const reserved of reservedInstanceIds(shot)) options.ids.reserve(reserved);
+      }
       const subject: Subject = command.draft.kind === "light"
         ? { ...base, kind: "light", representation: "light", intensity: 2, color: "#fff4d6" }
-        : {
+        : linkPosedSubject(shot.id, {
             ...base,
             kind: command.draft.kind === "human" ? "human" : command.draft.kind === "marker" ? command.draft.role : "object",
             representation: command.draft.kind === "marker" ? "marker" : "primitive" in command.draft ? command.draft.primitive : "mesh",
             motion: { channel: "unset" },
-          };
+            instanceId: ids.mint(
+              (command.draft.kind === "human" || (command.draft.kind === "marker" && command.draft.role === "human"))
+                ? "act"
+                : "obj",
+            ),
+            assetRef: {
+              assetId: persistentAssetIdForLegacy(asset.assetId),
+              revisionId: revisionIdForAssetVersion(asset.assetId, 1),
+            },
+          });
       return finish(
         { ...shot, subjects: [...shot.subjects, subject] },
         { type: "REMOVE_SUBJECT", shotId: shot.id, subjectId: id },
