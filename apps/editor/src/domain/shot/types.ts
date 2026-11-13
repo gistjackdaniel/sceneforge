@@ -1,5 +1,5 @@
 import type { Mat4, SceneCoordinateContract } from "../worlds/coordinates";
-import type { LegacyRef } from "../worlds/sceneState";
+import type { LegacyRef, RigPart } from "../worlds/sceneState";
 
 export type ShotId = string & { readonly __brand: "ShotId" };
 export type SubjectId = string & { readonly __brand: "SubjectId" };
@@ -147,10 +147,52 @@ export type ShotRender = {
   message: string;
 };
 
+/**
+ * Same pair as a world `AssetRef`. Shot-record asset ids include `primitive:*`,
+ * so the pin keeps those strings instead of the world persistent-id pattern.
+ */
+export type ShotAssetRef = {
+  assetId: string;
+  revisionId: string;
+};
+
+export type ShotContact = {
+  id: string;
+  actorId: SubjectId;
+  targetActorId?: SubjectId;
+  effector: RigPart;
+};
+
+/** Structured edit. `preserve` and `recompute` stay opaque strings. */
+export type ShotOverrideEvent = {
+  id: string;
+  operation: "change_contact_effector";
+  contactId: string;
+  actorId: SubjectId;
+  effector: RigPart;
+  preserve: readonly string[];
+  recompute: readonly string[];
+};
+
+export type ShotRevision = {
+  id: string;
+  parentId?: string;
+  createdAt: string;
+  overrides: readonly ShotOverrideEvent[];
+  assetRefs: readonly ShotAssetRef[];
+};
+
+export type ShotApproval = {
+  revisionId: string;
+  status: "pending" | "approved" | "rejected";
+  at?: string;
+};
+
 export type Shot = {
   schemaVersion: 1;
   id: ShotId;
   name: string;
+  /** `time.fps` is the only frame rate. `origin` stays `clip_local`. Frames are integers. */
   time: ShotTime;
   /**
    * Canonical scene frame (`SCENE_COORDINATE_CONTRACT`).
@@ -161,6 +203,13 @@ export type Shot = {
   camera: ShotCamera;
   environment?: { worldId: string };
   renders: readonly ShotRender[];
+  /** Base contacts. Override events do not replace this list. */
+  contacts?: readonly ShotContact[];
+  overrides?: readonly ShotOverrideEvent[];
+  revisions?: readonly ShotRevision[];
+  headRevisionId?: string;
+  /** Data only. No approval UI. */
+  approvals?: readonly ShotApproval[];
 };
 
 export type EnvironmentView = {
@@ -273,4 +322,17 @@ export type ShotCommand =
   | { type: "APPLY_CAMERA_PRESET"; shotId: ShotId; keys: readonly [CameraKey, ...CameraKey[]] }
   | { type: "TRIM_KEYS"; shotId: ShotId }
   | { type: "SET_SHOT_TIME"; shotId: ShotId; fps: number; durationFrames: number }
-  | { type: "RECORD_SHOT_RENDER"; shotId: ShotId; receipt: ShotRender };
+  | { type: "RECORD_SHOT_RENDER"; shotId: ShotId; receipt: ShotRender }
+  | {
+      type: "ADD_SHOT_OVERRIDE";
+      shotId: ShotId;
+      contactId: string;
+      actorSubjectId: SubjectId;
+      targetSubjectId?: SubjectId;
+      newEffector: string;
+      preserve: readonly string[];
+      recompute: readonly string[];
+    }
+  | { type: "UPDATE_SHOT_OVERRIDE"; shotId: ShotId; eventId: string; newEffector: string }
+  | { type: "REMOVE_SHOT_OVERRIDE"; shotId: ShotId; eventId: string }
+  | { type: "REVERT_SHOT_REVISION"; shotId: ShotId; revisionId: string };

@@ -16,8 +16,13 @@ export type {
   Quat,
   ReadyCamera,
   Shot,
+  ShotApproval,
+  ShotAssetRef,
   ShotCamera,
   ShotCommand,
+  ShotContact,
+  ShotOverrideEvent,
+  ShotRevision,
   ShotId,
   ShotModelInput,
   ShotRender,
@@ -34,6 +39,7 @@ export type {
 export { shotId, subjectId, takeId } from "./types";
 export { parseShot, parseShotModelInput, shotModelInputSchema, shotSchema } from "./schema";
 export { applyShotCommand, type ShotEdit } from "./evolve";
+export { resolveShotContacts, subjectForActorRef } from "./editorial";
 export { SHOT_EULER_ORDER, eulerToQuaternion, quaternionToEuler } from "./eulerAdapter";
 export {
   clonePosedSubject,
@@ -58,5 +64,6 @@ export {
   sampleCameraPose,
   sampleSubjectPose,
   selectedTake,
+  shotFps,
   subjectPoseKeys,
 } from "./queries";

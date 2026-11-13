@@ -5,6 +5,7 @@ import { normalizeWorldAsset } from "../../domain/worlds/normalize";
 import { cameraPathParamsFromNode } from "../../domain/graph/cameraPath";
 import { applyCommand } from "../commands/apply";
 import { readObjectTrack } from "../../domain/worlds/sceneObjects";
+import { parseShot } from "../../domain/shot";
 import { mapVoiceIntentToCommands } from "./intentToCommands";
 import type { VoiceIntent } from "../ports/IntentParser";
 import type { TargetMatch } from "../../domain/worlds/query";
@@ -144,9 +145,20 @@ describe("voice keyframe frame index", () => {
     expect(stored.keyframes.map((key) => key.frame)).toEqual([60]);
   });
 
-  it("uses Shot.fps when it is not 24", () => {
+  it("uses Shot.time.fps when it is not 24", () => {
     const project = createProject();
-    project.sequences.seq.fps = 30;
+    project.sequences.seq.fps = 24;
+    project.shots = {
+      c1: parseShot({
+        schemaVersion: 1,
+        id: "c1",
+        name: "C1",
+        time: { fps: 30, durationFrames: 100, origin: "clip_local" },
+        subjects: [],
+        camera: { status: "empty", lens: { focalLengthMm: 35 }, interpolation: "linear" },
+        renders: [],
+      }),
+    };
     const result = mapVoiceIntentToCommands(moveIntent(), [], {
       project,
       clipId: "c1",

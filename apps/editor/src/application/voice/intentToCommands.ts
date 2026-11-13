@@ -2,10 +2,10 @@ import type { VoiceIntent } from "../ports/IntentParser";
 import type { TargetMatch as ResolvedTarget } from "../../domain/worlds/query";
 import { cameraPathParamsFromNode } from "../../domain/graph/cameraPath";
 import type { Project } from "../../domain/project/types";
-import type { Sequence } from "../../domain/timeline/types";
+import { shotFpsForClip } from "../../domain/timeline/shotClock";
 import { objectTrackNodeId, objectKeyframeSchema, readObjectTrack, upsertObjectKeyframe } from "../../domain/worlds/sceneObjects";
 import type { DomainCommand } from "../commands/types";
-import { shotFps, toFrame } from "./toFrame";
+import { toFrame } from "./toFrame";
 
 export interface IntentMappingContext {
   project: Project;
@@ -14,11 +14,6 @@ export interface IntentMappingContext {
   /** Loop time in seconds. Domain keyframe commands store a frame index, not seconds. */
   tSeconds: number;
 }
-
-const shotForClip = (project: Project, clipId: string): Sequence | undefined => {
-  const owning = Object.values(project.sequences).find((sequence) => sequence.clipIds.includes(clipId));
-  return owning ?? project.sequences[project.activeSequenceId];
-};
 
 export interface IntentMappingResult {
   commands: DomainCommand[];
@@ -35,7 +30,7 @@ export const mapVoiceIntentToCommands = (
   ctx: IntentMappingContext,
 ): IntentMappingResult => {
   const { project, clipId, tSeconds } = ctx;
-  const fps = shotFps(shotForClip(project, clipId));
+  const fps = shotFpsForClip(project, clipId);
   const clip = project.clips[clipId];
   if (!clip) return { commands: [] };
 

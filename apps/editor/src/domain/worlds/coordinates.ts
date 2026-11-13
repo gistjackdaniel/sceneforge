@@ -35,7 +35,8 @@ export const shotFps = (shot: { time: ShotTimeSource }): number => {
 };
 
 /**
- * Canonical scene frame. Source files keep their own axes on `WorldAsset`
+ * Canonical scene frame. `timeBase` counts integer frames and is divided by `Shot.time.fps`.
+ * Source files keep their own axes on `WorldAsset`
  * (`coordinateSystem`, `unitScaleMeters`, `handedness`, `frontAxis`) and on
  * each asset revision's `sourceAxes`. Import converts them into this frame once.
  *
