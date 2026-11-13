@@ -8,6 +8,7 @@ import type { WorldAsset } from "../worlds/types";
 import type { ModelExecutionRecord } from "../worlds/modelExecution";
 import type { ClipGraph, DependencyMap } from "./clipGraph";
 import type { Shot } from "../shot/types";
+import type { InteractionPreviewRecord } from "../sceneAuthoring/contract";
 
 export interface ExternalConnector {
   id: string;
@@ -35,6 +36,11 @@ export interface Project {
   clips: Record<string, TimelineClip>;
   /** Persistent shot list. Absent on older fixtures until load migrates them. */
   shots?: Record<string, Shot>;
+  /**
+   * Interaction preview keyed by shot id. Contact overrides live here.
+   * Absent until a preview is installed. Shot pose, camera, and fps stay on `shots`.
+   */
+  interactionPreviews?: Record<string, InteractionPreviewRecord>;
   clipGraphs: Record<string, ClipGraph>;
   nodes: Record<string, NodeBase>;
   references: Record<string, NodeReference>;

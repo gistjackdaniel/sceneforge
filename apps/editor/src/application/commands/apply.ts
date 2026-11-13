@@ -12,6 +12,13 @@ import type { CommandResult, DomainCommand, DomainEvent } from "./types";
 import { cameraPathParamsFromNode, deleteCameraKeyframe, keyframeAtExactFrame, upsertCameraKeyframe } from "../../domain/graph/cameraPath";
 import { lensNodeIdForClip, lensParamsFromNode } from "../../domain/graph/lens";
 import { applyShotCommand } from "../../domain/shot";
+import {
+  changeContactEffector,
+  HANDSHAKE_SHOT_ID,
+  installInteractionScene,
+  setInteractionOverrides,
+  uninstallInteractionScene,
+} from "../../domain/sceneAuthoring";
 
 const event = (type: DomainEvent["type"], payload: Record<string, unknown>, timestamp: string): DomainEvent => ({
   type,
@@ -717,6 +724,72 @@ export const applyCommand = (
           command,
           inverse: edited.inverse ? { type: "SHOT", command: edited.inverse } : undefined,
           events: [event("ShotChanged", { shotId: edited.shot.id }, timestamp)],
+        },
+      };
+    }
+    case "INSTALL_INTERACTION_SCENE": {
+      const installed = installInteractionScene(project);
+      if (!installed.addedShot && !installed.addedPreview && installed.addedWorldIds.length === 0) {
+        return { project, result: { ok: true, command, events: [] } };
+      }
+      return {
+        project: installed.project,
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UNINSTALL_INTERACTION_SCENE",
+            shotId: HANDSHAKE_SHOT_ID,
+            removeShot: installed.addedShot,
+            removePreview: installed.addedPreview,
+            worldIds: installed.addedWorldIds,
+          },
+          events: [event("SceneAuthoringChanged", { shotId: HANDSHAKE_SHOT_ID, op: "install" }, timestamp)],
+        },
+      };
+    }
+    case "UNINSTALL_INTERACTION_SCENE": {
+      return {
+        project: uninstallInteractionScene(
+          project,
+          command.shotId,
+          command.removeShot,
+          command.removePreview,
+          command.worldIds,
+        ),
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "INSTALL_INTERACTION_SCENE" },
+          events: [event("SceneAuthoringChanged", { shotId: command.shotId, op: "uninstall" }, timestamp)],
+        },
+      };
+    }
+    case "CHANGE_CONTACT_EFFECTOR": {
+      const edited = changeContactEffector(project, command);
+      if ("error" in edited) return fail(edited.error);
+      if (!edited.changed) return { project, result: { ok: true, command, events: [] } };
+      return {
+        project: edited.project,
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "SET_INTERACTION_OVERRIDES", shotId: command.shotId, overrides: edited.previous },
+          events: [event("SceneAuthoringChanged", { shotId: command.shotId, contactId: command.contactId }, timestamp)],
+        },
+      };
+    }
+    case "SET_INTERACTION_OVERRIDES": {
+      const edited = setInteractionOverrides(project, command.shotId, command.overrides);
+      if ("error" in edited) return fail(edited.error);
+      if (!edited.changed) return { project, result: { ok: true, command, events: [] } };
+      return {
+        project: edited.project,
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "SET_INTERACTION_OVERRIDES", shotId: command.shotId, overrides: edited.previous },
+          events: [event("SceneAuthoringChanged", { shotId: command.shotId, op: "overrides" }, timestamp)],
         },
       };
     }
