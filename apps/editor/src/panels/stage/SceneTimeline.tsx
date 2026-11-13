@@ -11,7 +11,7 @@ export interface SceneTakeOption {
   id: string;
   name: string;
   keyCount: number;
-  source: "record" | "manual";
+  source: "record" | "manual" | "preset";
 }
 
 const frameAtClientX = (clientX: number, bounds: DOMRect, end: number): number =>

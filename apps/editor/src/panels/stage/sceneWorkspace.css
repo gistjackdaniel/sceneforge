@@ -72,8 +72,9 @@
 .scene-light-card { border-top: 1px solid var(--scene-border); margin-top: 12px; padding-top: 8px; }
 .scene-pipeline { display: flex; flex-direction: column; gap: 12px; margin-top: 24px; border-left: 1px solid #526456; padding-left: 14px; font-size: 11px; color: #c2d3c8; }
 .scene-help-toggle { position: absolute; right: 12px; bottom: 10px; z-index: 4; }
-.scene-help { position: absolute; z-index: 5; right: 16px; bottom: 48px; max-width: 300px; border: 1px solid #3b443d; border-radius: 7px; background: #191e1bf5; padding: 16px; line-height: 1.65; }
-.scene-help p { font-size: 11px; color: #a8b6ac; }
+.scene-help { position: absolute; z-index: 5; right: 16px; bottom: 48px; max-width: 340px; border: 1px solid #3b443d; border-radius: 7px; background: #191e1bf5; padding: 16px; line-height: 1.65; }
+.scene-help p { font-size: 11px; color: #a8b6ac; margin: 8px 0 0; }
+.scene-help p strong { color: #d5e4da; font-weight: 550; }
 .scene-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; pointer-events: none; padding: 70px; text-align: center; color: #b5c4b9; }
 .scene-empty > svg { width: 32px; height: 32px; opacity: 0.6; }
 .scene-empty h3 { font-size: 20px; font-weight: 450; letter-spacing: -0.4px; }

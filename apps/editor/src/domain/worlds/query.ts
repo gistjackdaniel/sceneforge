@@ -1,12 +1,18 @@
+import type { SceneState } from "./sceneState";
 import type { WorldAsset, WorldElement } from "./types";
 
 export type TargetKind = "character" | "prop" | "location";
 
 export type TargetMatch = {
+  /** `WorldAsset.id`, including matches that came from an element or an instance in that world. */
   assetId: WorldAsset["id"];
   kind: TargetKind;
   displayName: string;
   score: number;
+  /** Set when the match is one actor or object instance. Distinguishes A from B inside one world. */
+  instanceId?: string;
+  /** Set when the match came from a `WorldElement`. The element id used to be dropped. */
+  elementId?: string;
 };
 
 export type ResolveContext = { selectionIds: string[]; locale: "ko" | "en" };
@@ -17,6 +23,8 @@ type IndexedEntry = {
   labelEn: string;
   labelKo: string;
   synonyms: string[];
+  instanceId?: string;
+  elementId?: string;
 };
 
 const mapElementKindToTarget = (kind: WorldElement["kind"]): TargetKind | undefined => {
@@ -88,7 +96,10 @@ export interface WorldQueryIndex {
   resolveCandidates: (refText: string, ctx: ResolveContext) => TargetMatch[];
 }
 
-export const createWorldQueryIndex = (worlds: Record<string, WorldAsset>): WorldQueryIndex => {
+export const createWorldQueryIndex = (
+  worlds: Record<string, WorldAsset>,
+  sceneStates?: Record<string, SceneState>,
+): WorldQueryIndex => {
   const worldById = new Map<string, WorldAsset>(Object.values(worlds).map((w) => [w.id, w]));
   const entries: IndexedEntry[] = [];
 
@@ -127,6 +138,7 @@ export const createWorldQueryIndex = (worlds: Record<string, WorldAsset>): World
         labelEn,
         labelKo,
         synonyms,
+        elementId: element.id,
       });
     }
 
@@ -140,6 +152,23 @@ export const createWorldQueryIndex = (worlds: Record<string, WorldAsset>): World
         labelEn: label,
         labelKo: label,
         synonyms: [label],
+      });
+    }
+  }
+
+  for (const scene of Object.values(sceneStates ?? {})) {
+    const instances = [...Object.values(scene.actors), ...Object.values(scene.objects)];
+    for (const instance of instances) {
+      if (instance.deletedAt) continue;
+      const kind: TargetKind =
+        instance.type === "actor" ? "character" : instance.role === "set_piece" ? "location" : "prop";
+      entries.push({
+        assetId: scene.worldId,
+        kind,
+        labelEn: instance.localizedNames.en || instance.label,
+        labelKo: instance.localizedNames.ko || instance.label,
+        synonyms: pushSynonyms([instance.label, ...instance.aliases, ...Object.values(instance.localizedNames)]),
+        instanceId: instance.id,
       });
     }
   }
@@ -159,7 +188,13 @@ export const createWorldQueryIndex = (worlds: Record<string, WorldAsset>): World
         if (kindHint === entry.kind) score += 10;
         else score -= 15;
       }
-      if (ctx.selectionIds?.includes(entry.assetId)) score += 10;
+      if (
+        ctx.selectionIds?.includes(entry.assetId) ||
+        (entry.instanceId !== undefined && ctx.selectionIds?.includes(entry.instanceId)) ||
+        (entry.elementId !== undefined && ctx.selectionIds?.includes(entry.elementId))
+      ) {
+        score += 10;
+      }
       // Slight preference for exact label match
       const normQuery = normalize(query);
       const isExact = [entry.labelEn, entry.labelKo, ...entry.synonyms].some((s) => normalize(s) === normQuery);
@@ -171,6 +206,8 @@ export const createWorldQueryIndex = (worlds: Record<string, WorldAsset>): World
         kind: entry.kind,
         displayName: labelForLocale(entry, ctx.locale),
         score,
+        ...(entry.instanceId ? { instanceId: entry.instanceId } : {}),
+        ...(entry.elementId ? { elementId: entry.elementId } : {}),
       });
     }
     results.sort((a, b) => b.score - a.score);
@@ -185,8 +222,11 @@ export type TargetResolver = {
   resolve: (refText: string, ctx: ResolveContext) => TargetMatch[];
 };
 
-export const createWorldTargetResolver = (worlds: Record<string, WorldAsset>): TargetResolver => {
-  const index = createWorldQueryIndex(worlds);
+export const createWorldTargetResolver = (
+  worlds: Record<string, WorldAsset>,
+  sceneStates?: Record<string, SceneState>,
+): TargetResolver => {
+  const index = createWorldQueryIndex(worlds, sceneStates);
   return {
     resolve: (refText: string, ctx: ResolveContext) => index.resolveCandidates(refText, ctx),
   };

@@ -1,3 +1,4 @@
+import { DEFAULT_HANDEDNESS, defaultFrontAxis } from "./coordinates";
 import type { WorldAsset, WorldRepresentation } from "./types";
 
 const inferRepresentation = (world: Partial<WorldAsset>): WorldRepresentation => {
@@ -33,6 +34,8 @@ export const normalizeWorldAsset = (world: Partial<WorldAsset> & { id: string; n
     rootUri,
     previewUri,
     coordinateSystem: world.coordinateSystem ?? "Y_UP",
+    handedness: world.handedness ?? DEFAULT_HANDEDNESS,
+    frontAxis: world.frontAxis ?? defaultFrontAxis(world.coordinateSystem ?? "Y_UP"),
     unitScaleMeters: world.unitScaleMeters ?? 1,
     bounds: world.bounds,
     semanticTags: world.semanticTags ?? [],

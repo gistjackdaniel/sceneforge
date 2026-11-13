@@ -59,6 +59,10 @@ import { createStageRenderPassStub } from "../core/render/stageRenderPass";
 import { runGenerativeRefinementStub } from "../core/render/refinementStub";
 import type { WorldAsset, WorldMode } from "../core/world/types";
 import { assetFromWorld } from "../domain/assets";
+import { projectWithShots } from "../domain/project/migrateToShot";
+import type { ShotCommand } from "../domain/shot";
+import { environmentFromWorld } from "../application/services/shotEnvironment";
+import { startShotRender, type ShotRenderJobView } from "../application/services/runShotRender";
 import { sampleViewportWorlds } from "../domain/worlds";
 import { applyDirtyEventToNodes } from "../domain/graph/dependencyService";
 import { collectAllEdges, markDirty } from "../domain/graph/dirty";
@@ -162,6 +166,7 @@ export interface EditorUiState {
   highlightedNodeIds: string[];
   lyraJob?: LyraJobState;
   videoRenderJob?: LyraVideoRenderJobState;
+  shotRenderJob?: ShotRenderJobView;
   worldGenDraft: {
     imageName: string;
     imageAssetId: string;
@@ -332,6 +337,9 @@ type EditorAction =
   | { type: "set-prop-placement"; clipId: string; prop: string; position?: [number, number, number]; rotation?: [number, number, number] }
   | { type: "set-light-transform"; clipId: string; lightId: string; position: [number, number, number]; rotation: [number, number, number] }
   | { type: "submit-video-render"; clipId: string }
+  | { type: "shot"; command: ShotCommand; logMessage?: string }
+  | { type: "request-shot-render"; shotId: string; outputAspect: string }
+  | { type: "set-shot-render-job"; job?: ShotRenderJobView }
   | { type: "set-video-render-job"; job?: LyraVideoRenderJobState }
   | { type: "complete-video-render"; clipId: string; job: LyraVideoRenderJobState }
   | { type: "assistant-message"; message: string }
@@ -647,7 +655,7 @@ const createInitialProject = (): Project => {
 };
 
 const createInitialState = (): EditorState => {
-  const project = createInitialProject();
+  const project = projectWithShots(createInitialProject());
   return {
     project,
     ui: {
@@ -2131,6 +2139,10 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         ui: appendWorkflowLog(state.ui, `Light ${action.lightId} transform updated.`),
       };
     }
+    case "shot":
+      return runDomainCommand(state, { type: "SHOT", command: action.command }, action.logMessage ?? false);
+    case "set-shot-render-job":
+      return { ...state, ui: { ...state.ui, shotRenderJob: action.job } };
     case "set-video-render-job":
       return {
         ...state,
@@ -2605,7 +2617,7 @@ const runVideoRenderJob = async (
 
 const composePersistedEditor = (state: EditorState): string =>
   JSON.stringify({
-    project: serializeProject(migrateLoadedProject(state.project)),
+    project: serializeProject(projectWithShots(migrateLoadedProject(state.project))),
     ui: {
       selectedClipId: state.ui.selectedClipId,
       selectedNodeId: state.ui.selectedNodeId,
@@ -2664,7 +2676,7 @@ const parsePersistedEditor = (raw: string): EditorState | undefined => {
         lyraJob: undefined,
         worldGenJob: undefined,
       },
-      project: loadAndMigrateProject(projectRaw),
+      project: projectWithShots(loadAndMigrateProject(projectRaw)),
     };
   } catch {
     return undefined;
@@ -2690,9 +2702,30 @@ export const EditorStoreProvider = ({ children }: { children: ReactNode }) => {
     typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `sf-${Date.now()}`,
   );
 
+  const renderAbortRef = useRef<AbortController | null>(null);
   const dispatch = useCallback((action: EditorAction) => {
     if (action.type === "submit-video-render") {
       void runVideoRenderJob(stateRef.current, action.clipId, baseDispatch);
+      return;
+    }
+    if (action.type === "request-shot-render") {
+      renderAbortRef.current?.abort();
+      const controller = new AbortController();
+      renderAbortRef.current = controller;
+      const current = stateRef.current;
+      const shot = current.project.shots?.[action.shotId];
+      const world = shot?.environment?.worldId ? current.project.worlds[shot.environment.worldId] : undefined;
+      void startShotRender({
+        shot,
+        environment: environmentFromWorld(world),
+        outputAspect: action.outputAspect,
+        lyraCloudUrl: import.meta.env.VITE_LYRA_CLOUD_URL,
+        signal: controller.signal,
+        listener: {
+          onJob: (job) => baseDispatch({ type: "set-shot-render-job", job }),
+          onReceipt: (command) => baseDispatch({ type: "shot", command }),
+        },
+      });
       return;
     }
     baseDispatch(action);

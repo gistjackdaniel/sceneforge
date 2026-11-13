@@ -4,24 +4,37 @@ import { StageViewport, type StageCameraPose, type ViewportSelection } from "./S
 import { SceneIcon, type SceneIconName } from "./SceneIcon";
 import { SceneTimeline } from "./SceneTimeline";
 import { SceneAssets } from "./SceneAssets";
-import {
-  cameraPathParamsFromNode,
-  interpolateCameraPose,
-  sampleCameraPath,
-  type CameraKeyframe,
-} from "../../domain/graph/cameraPath";
-import { lensNodeIdForClip, lensParamsFromNode, verticalFovFromLens } from "../../domain/graph/lens";
-import { clipDurationFrames, clipStartFrame } from "../../domain/timeline/timing";
+import { type CameraKeyframe } from "../../domain/graph/cameraPath";
+import { verticalFovFromLens } from "../../domain/graph/lens";
+import { buildRigPreset, CAMERA_RIG_PRESETS, type CameraRigPreset } from "../../domain/graph/cameraRig";
+import { clipStartFrame } from "../../domain/timeline/timing";
 import { firstViewportImageUri, resolveViewportRepresentation, type ViewportLoadState } from "../../domain/worlds/viewportRepresentation";
-import { cameraPathNodeIdForClip, eulerToQuaternionApprox, quaternionToEulerApprox, placementNodeIdForElement } from "../../application/services/viewportCommit";
-import { resolveSceneObjects, readObjectTrack, sampleObjectTrack, objectTrackNodeId, type ObjectPose, type SceneObject } from "../../domain/worlds/sceneObjects";
-import { buildSceneConditioning } from "../../domain/rendering/sceneConditioning";
+import { eulerToQuaternionApprox, quaternionToEulerApprox } from "../../application/services/viewportCommit";
+import { environmentFromWorld } from "../../application/services/shotEnvironment";
+import { type ObjectPose } from "../../domain/worlds/sceneObjects";
 import { OUTPUT_ASPECT_PRESETS, outputAspectRatio, type OutputAspectPreset } from "../../domain/rendering";
-import { CAMERA_RIG_PRESETS, type CameraRigPreset } from "../../domain/graph/cameraRig";
+import {
+  clipLocalFrame,
+  prepareModelInput,
+  sampleCameraPathPositions,
+  sampleCameraPose,
+  sampleSubjectPose,
+  selectedTake,
+  shotId,
+  subjectId,
+  takeId,
+  subjectPoseKeys,
+  type Lens,
+  type ShotCommand,
+} from "../../domain/shot";
+import type { SceneObject } from "../../domain/worlds/sceneObjects";
+import { subjectDraftFromObject } from "./subjectDraft";
 import "./sceneWorkspace.css";
 import { PoseAuthoringController } from "../../presentation/pose/PoseAuthoringController";
+
+const tuple3 = (value: readonly [number, number, number]): [number, number, number] => [value[0], value[1], value[2]];
+const tuple4 = (value: readonly [number, number, number, number]): [number, number, number, number] => [value[0], value[1], value[2], value[3]];
 import { createLoopClock } from "../../application/ports/LoopClock";
-import type { DomainCommand } from "../../application/commands";
 import { validateOutputAspect } from "./recordingPreflight";
 
 type LivePose = { position: [number, number, number]; rotation: [number, number, number] };
@@ -55,7 +68,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const takeRecordingRef = useRef(false);
   const takeFinishingRef = useRef(false);
   const livePoseRef = useRef<LivePose | null>(null);
-  const lensRef = useRef(lensParamsFromNode({}));
+  const lensRef = useRef<Lens>({ focalLengthMm: 35, focusDistanceM: 3, aperture: 2.8 });
   const playbackRef = useRef({ duration: 1, start: 0, fps: 24, clipId: "" });
   const finishTakeRecordingRef = useRef<(reason: "stop" | "complete") => void>(() => undefined);
   const [captureSignal, setCaptureSignal] = useState(0);
@@ -65,44 +78,68 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [load, setLoad] = useState<{ state: ViewportLoadState; message?: string }>({ state: "idle" });
   const [notice, setNotice] = useState("");
   const [selectedFrames, setSelectedFrames] = useState<number[]>([]);
-  const duration = clip ? clipDurationFrames(clip) : 1;
+  const shot = clip ? project.shots?.[clip.id] : undefined;
+  const duration = shot?.time.durationFrames ?? 1;
   const start = clip ? clipStartFrame(clip) : 0;
-  const frame = Math.max(0, Math.min(duration - 1, (sequence?.playhead ?? start) - start));
-  const fps = sequence?.fps ?? 24;
+  const frame = shot ? clipLocalFrame((sequence?.playhead ?? start) - start, shot) : 0;
+  const fps = shot?.time.fps ?? 24;
   playbackRef.current = { duration, start, fps, clipId: clip?.id ?? "" };
-  const graph = clip ? project.clipGraphs[clip.clipGraphId] : undefined;
-  const nodes = useMemo(() => graph?.nodeIds.flatMap((id) => project.nodes[id] ? [project.nodes[id]] : []) ?? [], [graph, project.nodes]);
-  const objects = useMemo(() => resolveSceneObjects(world, previewOnly ? [] : nodes), [world, nodes, previewOnly]);
-  const cameraNode = clip ? project.nodes[cameraPathNodeIdForClip(clip)] : undefined;
-  const cameraParams = useMemo(() => cameraPathParamsFromNode(cameraNode?.parameters ?? {}), [cameraNode]);
-  const lens = lensParamsFromNode(clip ? project.nodes[lensNodeIdForClip(clip.id)]?.parameters ?? {} : {});
+  const subjects = shot && !previewOnly ? shot.subjects : [];
+  const objects = useMemo(() => subjects.map((subject) => {
+    const pose = recording ? sampleSubjectPose(subject, frame) : subject.placement;
+    return {
+      id: subject.id,
+      name: subject.name,
+      kind: subject.kind === "human" ? "actor" as const : subject.kind === "light" ? "light" as const : "prop" as const,
+      representation: subject.kind === "light" ? "marker" as const : subject.representation,
+      uri: subject.uri.startsWith("primitive:") ? undefined : subject.uri,
+      position: tuple3(pose.position),
+      rotation: tuple3(pose.rotationEuler),
+      scale: tuple3(pose.scale),
+      visible: subject.visible,
+      locked: subject.locked,
+      color: subject.kind === "light" ? subject.color : "#d8d2c4",
+      intensity: subject.kind === "light" ? subject.intensity : 2,
+      posePrompt: subject.kind !== "light" && subject.motion.channel === "text" ? subject.motion.prompt : undefined,
+    };
+  }), [subjects, recording, frame]);
+  const take = shot ? selectedTake(shot) : undefined;
+  const cameraParams = {
+    keyframes: (take?.keys ?? []).map((key) => ({ ...key, position: tuple3(key.position), rotation: tuple4(key.rotation) })),
+    takes: shot?.camera.status === "ready" ? shot.camera.takes : [],
+    activeTakeId: shot?.camera.status === "ready" ? shot.camera.selectedTakeId : undefined,
+    interpolation: shot?.camera.interpolation ?? "linear" as const,
+    lookAtTargetElementId: undefined as string | undefined,
+  };
+  const lens = shot?.camera.lens ?? { focalLengthMm: 35, focusDistanceM: 3, aperture: 2.8 };
   lensRef.current = lens;
   takeRecordingRef.current = takeRecording;
   const cameraPose = useMemo((): StageCameraPose | undefined => {
-    const pose = interpolateCameraPose(cameraParams, frame);
-    return pose ? { position: pose.position, rotation: quaternionToEulerApprox(pose.rotation), focalLength: pose.focalLengthMm || lens.focalLengthMm } : undefined;
-  }, [cameraParams, frame, lens.focalLengthMm]);
+    if (!shot || !take || shot.camera.status !== "ready") return undefined;
+    const pose = sampleCameraPose(take, frame, shot.camera.interpolation);
+    return { position: tuple3(pose.position), rotation: quaternionToEulerApprox(tuple4(pose.rotation)), focalLength: pose.focalLengthMm || lens.focalLengthMm };
+  }, [shot, take, frame, lens.focalLengthMm]);
   const sceneObjects = useMemo(() => objects.map((object) => ({
     ...object,
-    ...(recording && clip ? sampleObjectTrack(readObjectTrack(project.nodes[objectTrackNodeId(clip.id, object.id)]?.parameters), frame) : undefined),
     ...(draft?.id === object.id ? draft.pose : undefined),
-  })), [objects, recording, clip, project.nodes, frame, draft]);
+  })), [objects, draft]);
   const selected = sceneObjects.find((object) => object.id === selectedId);
-  const canEdit = Boolean(clip && !previewOnly);
+  const canEdit = Boolean(shot && clip && !previewOnly);
   const cameraView = recording && !freeView && selectedId === "camera";
   const previewPlan = useMemo(() => resolveViewportRepresentation(world), [world]);
   const fallbackImageUri = useMemo(() => firstViewportImageUri(world, project.assets), [world, project.assets]);
-  const pathSamples = useMemo(() => sampleCameraPath(cameraParams, 64), [cameraParams]);
-  const lightNode = clip ? project.nodes[`node-${clip.id}-light`] : undefined;
-  const lighting = useMemo(() => ({
-    intensity: typeof lightNode?.parameters.intensity === "number" ? lightNode.parameters.intensity : 1.2,
-    color: typeof lightNode?.parameters.color === "string" ? lightNode.parameters.color : "#ffffff",
-  }), [lightNode]);
+  const pathSamples = useMemo(() => (shot ? sampleCameraPathPositions(shot, 64) : []).map(tuple3), [shot]);
+  const lighting = useMemo(() => {
+    const light = subjects.find((subject) => subject.kind === "light");
+    return light && light.kind === "light"
+      ? { intensity: light.intensity, color: light.color }
+      : { intensity: 1.2, color: "#ffffff" };
+  }, [subjects]);
   const tracks = [
     { id: "camera", name: "Camera", frames: cameraParams.keyframes.map((key) => key.frame) },
-    ...objects.map((object) => ({ id: object.id, name: object.name,
-      frames: clip ? readObjectTrack(project.nodes[objectTrackNodeId(clip.id, object.id)]?.parameters)?.keyframes.map((key) => key.frame) ?? [] : [] })),
+    ...subjects.map((subject) => ({ id: subject.id, name: subject.name, frames: [...subjectPoseKeys(subject)] })),
   ];
+  const send = (command: ShotCommand) => { if (shot) dispatch({ type: "shot", command }); };
   const select = (id: string) => {
     setSelectedId(id);
     setDraft(undefined);
@@ -111,28 +148,63 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   };
   const scrub = (value: number) => { setDraft(undefined); dispatch({ type: "scrub-playhead", playhead: start + value }); };
   const patchObject = (object: SceneObject, patch: Record<string, unknown>) => {
-    if (!clip || !canEdit || object.locked && !("locked" in patch)) return;
-    const nodeId = placementNodeIdForElement(clip.id, object.id);
-    if (!project.nodes[nodeId]) dispatch({ type: "add-scene-object", clipId: clip.id, object });
-    Object.entries(patch).forEach(([key, value]) => dispatch({ type: "update-node-parameter", nodeId, key, value }));
+    if (!shot || !canEdit || object.locked && !("locked" in patch)) return;
+    if ("posePrompt" in patch) {
+      send({ type: "SET_TEXT_POSE", shotId: shot.id, subjectId: subjectId(object.id), prompt: String(patch.posePrompt ?? "") });
+    }
+    if ("visible" in patch || "locked" in patch) {
+      send({
+        type: "SET_SUBJECT_FLAGS",
+        shotId: shot.id,
+        subjectId: subjectId(object.id),
+        visible: "visible" in patch ? Boolean(patch.visible) : undefined,
+        locked: "locked" in patch ? Boolean(patch.locked) : undefined,
+      });
+    }
+    if (object.kind === "light" && ("intensity" in patch || "color" in patch)) {
+      send({
+        type: "SET_LIGHT",
+        shotId: shot.id,
+        subjectId: subjectId(object.id),
+        intensity: typeof patch.intensity === "number" ? patch.intensity : undefined,
+        color: typeof patch.color === "string" ? patch.color : undefined,
+      });
+    }
   };
   const commitPose = (object: SceneObject, pose: ObjectPose) => {
-    if (!clip || !canEdit || object.locked) return;
+    if (!shot || !canEdit || object.locked) return;
     if (recording) setDraft({ id: object.id, pose });
-    else dispatch({ type: "commit-object-transform", clipId: clip.id, worldElementId: object.id, kind: object.kind, ...pose });
+    else send({ type: "SET_SUBJECT_PLACEMENT", shotId: shot.id, subjectId: subjectId(object.id), placement: { position: pose.position, rotationEuler: pose.rotation, scale: pose.scale } });
   };
   const captureCamera = useCallback(({ camera }: { camera: StageCameraPose }) => {
-    if (!clip || previewOnly) return;
-    dispatch({ type: "add-camera-keyframe", clipId: clip.id, frame,
-      position: camera.position, rotation: eulerToQuaternionApprox(camera.rotation),
-      focalLengthMm: lens.focalLengthMm, focusDistanceM: lens.focusDistanceM, aperture: lens.aperture });
+    if (!shot || previewOnly) return;
+    dispatch({
+      type: "shot",
+      command: {
+        type: "KEY_CAMERA",
+        shotId: shot.id,
+        key: {
+          frame,
+          position: camera.position,
+          rotation: eulerToQuaternionApprox(camera.rotation),
+          focalLengthMm: lens.focalLengthMm,
+          focusDistanceM: lens.focusDistanceM,
+          aperture: lens.aperture,
+        },
+      },
+    });
     setNotice(`Camera pose saved · ${frame}f`);
-  }, [clip, previewOnly, frame, dispatch, lens.focalLengthMm, lens.focusDistanceM, lens.aperture]);
+  }, [shot, previewOnly, frame, dispatch, lens.focalLengthMm, lens.focusDistanceM, lens.aperture]);
   const stamp = () => {
-    if (!canEdit || !clip || playing || takeRecording) return;
+    if (!canEdit || !shot || playing || takeRecording) return;
     if (selected) {
-      if (selected.locked) return;
-      dispatch({ type: "key-object", clipId: clip.id, elementId: selected.id, pose: selected, frame });
+      if (selected.locked || selected.kind === "light") return;
+      send({
+        type: "KEY_SUBJECT_POSE",
+        shotId: shot.id,
+        subjectId: subjectId(selected.id),
+        key: { frame, position: selected.position, rotationEuler: selected.rotation, scale: selected.scale },
+      });
       setDraft(undefined); setNotice(`${selected.name} pose saved · ${frame}f`);
     } else setCaptureSignal((value) => value + 1);
   };
@@ -164,17 +236,18 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       setNotice(reason === "complete" ? "Record finished with no poses." : "Record cancelled.");
       return;
     }
-    const spanFrames = keyframes[keyframes.length - 1].frame - keyframes[0].frame + 1;
-    dispatch({ type: "commit-camera-take", clipId, keyframes, source: "record" });
+    const first = keyframes[0];
+    const spanFrames = keyframes[keyframes.length - 1].frame - first.frame + 1;
+    dispatch({ type: "shot", command: { type: "COMMIT_CAMERA_TAKE", shotId: shotId(clipId), source: "record", keys: [first, ...keyframes.slice(1)] } });
     setNotice(`Take saved · ${keyframes.length} poses · ${spanFrames}f · selected for Generate`);
   }, [dispatch]);
   finishTakeRecordingRef.current = finishTakeRecording;
   const deletePose = () => {
-    if (!clip || !canEdit || playing) return;
+    if (!shot || !canEdit || playing) return;
     const targets = selectedFrames.length > 0 ? [...selectedFrames].sort((a, b) => a - b) : [frame];
     if (selected) {
       targets.forEach((target) =>
-        dispatch({ type: "delete-object-key", clipId: clip.id, elementId: selected.id, frame: target }),
+        send({ type: "DELETE_SUBJECT_POSE_KEY", shotId: shot.id, subjectId: subjectId(selected.id), frame: target }),
       );
       setNotice(
         targets.length > 1
@@ -182,20 +255,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           : `${selected.name} pose deleted · ${targets[0]}f`,
       );
     } else {
-      const commands: DomainCommand[] = targets.map((t) => ({
-        type: "REMOVE_CAMERA_KEYFRAME",
-        clipId: clip.id,
-        t,
-      }));
-      const logMessage =
-        targets.length > 1
-          ? `Deleted ${targets.length} camera poses.`
-          : `Camera keyframe at ${targets[0]}f deleted.`;
-      dispatch({
-        type: "agent-execute-commands",
-        logMessage,
-        commands: [{ type: "APPLY_COMMANDS", commands, logMessage }],
-      });
+      targets.forEach((target) => send({ type: "DELETE_CAMERA_KEY", shotId: shot.id, frame: target }));
       setNotice(
         targets.length > 1
           ? `Deleted ${targets.length} camera poses`
@@ -322,16 +382,17 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
     return () => window.removeEventListener("keydown", onKey);
   });
   const exportScene = () => {
-    if (!clip || !canEdit) return;
-    const scene = buildSceneConditioning(clip, nodes, world, fps, ui.outputAspect);
-    const url = URL.createObjectURL(new Blob([JSON.stringify(scene, null, 2)], { type: "application/json" }));
-    const link = document.createElement("a"); link.href = url; link.download = `${clip.id}.scene.json`; link.click();
+    if (!shot || !canEdit) return;
+    const prepared = prepareModelInput(shot, environmentFromWorld(world), ui.outputAspect);
+    const body = prepared.ok ? prepared.input : { blocked: prepared.blocker };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(body, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a"); link.href = url; link.download = `${shot.id}.scene.json`; link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setNotice("Editable scene exported. A compatible scene encoder is required for video generation.");
+    setNotice(prepared.ok ? "Shot model input exported." : prepared.blocker.message);
   };
   const toggleDrawer = (value: Drawer) => setDrawer((current) => current === value ? null : value);
   const updateLens = (key: "focalLengthMm" | "focusDistanceM" | "aperture", value: number) => {
-    if (clip && Number.isFinite(value)) dispatch({ type: "update-lens", clipId: clip.id, patch: { [key]: value } });
+    if (shot && Number.isFinite(value)) send({ type: "SET_LENS", shotId: shot.id, lens: { ...shot.camera.lens, [key]: value } });
   };
   const emptyMessage = !world ? "Start with a world, or place your first object."
     : load.state === "loading" ? "Loading world…"
@@ -353,20 +414,23 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           cameraViz={recording ? ui.cameraViz : { frustum: false, path: false, lookAtLine: false, keyframeMarkers: false }}
           cameraPose={takeRecording ? undefined : cameraPose} sceneObjects={sceneObjects} selectedId={selectedId === "camera" ? undefined : selectedId}
           showCameraPreview={showPreview && !cameraView} readOnly={!canEdit || playing || takeRecording} lighting={lighting}
-          keyframes={cameraParams.keyframes} pathSamples={pathSamples} fovDegrees={verticalFovFromLens({ ...lens, focalLengthMm: cameraPose?.focalLength ?? lens.focalLengthMm })}
+          keyframes={cameraParams.keyframes} pathSamples={pathSamples} fovDegrees={verticalFovFromLens({ focalLengthMm: cameraPose?.focalLength ?? lens.focalLengthMm, sensorPreset: lens.sensorPreset === "super35" || lens.sensorPreset === "micro-four-thirds" ? lens.sensorPreset : "full-frame" })}
           playheadFrame={frame} lookAtTargetId={cameraParams.lookAtTargetElementId}
           onSelectionChange={(selection: ViewportSelection | undefined) => { if (selection && selection.kind !== "camera") { setSelectedId(selection.id); setDrawer("layers"); } }}
           onTransformCommit={(payload) => {
-            if (!clip || !canEdit || takeRecording) return;
+            if (!shot || !canEdit || takeRecording) return;
             if (payload.kind === "camera") {
-              dispatch({
-                type: "commit-object-transform",
-                clipId: clip.id,
-                worldElementId: "shot-camera",
-                kind: "camera",
-                position: payload.position,
-                rotation: payload.rotation,
-                scale: payload.scale,
+              send({
+                type: "KEY_CAMERA",
+                shotId: shot.id,
+                key: {
+                  frame,
+                  position: payload.position,
+                  rotation: eulerToQuaternionApprox(payload.rotation),
+                  focalLengthMm: lens.focalLengthMm,
+                  focusDistanceM: lens.focusDistanceM,
+                  aperture: lens.aperture,
+                },
               });
               return;
             }
@@ -405,7 +469,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       </div>}
       {drawer && <aside className="scene-drawer" aria-label={`${drawer} panel`}>
         <div className="scene-drawer-heading"><strong>{{ assets: "Add 3D asset", layers: "Subjects", light: "Lighting", camera: "Camera trajectory", settings: "Scene output" }[drawer]}</strong><button aria-label="Close panel" onClick={() => setDrawer(null)}><SceneIcon name="close" /></button></div>
-        {drawer === "assets" && <SceneAssets disabled={!canEdit} onAdd={(object, source) => { if (clip) { dispatch({ type: "add-scene-object", clipId: clip.id, object, source }); select(object.id); setDrawer("layers"); } }} />}
+        {drawer === "assets" && <SceneAssets disabled={!canEdit} onAdd={(object) => { if (shot) { send({ type: "ADD_SUBJECT", shotId: shot.id, draft: subjectDraftFromObject(object) }); select(object.id); setDrawer("layers"); } }} />}
         {drawer === "layers" && <>
           <p className="scene-note">{world?.name ?? "Local scene"} · changes stay in this shot</p>
           <button className={`scene-layer ${selectedId === "camera" ? "is-selected" : ""}`} onClick={() => select("camera")}><SceneIcon name="camera" /><span>Shot camera</span><small>{cameraParams.keyframes.length} poses</small></button>
@@ -428,9 +492,6 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         </>}
         {drawer === "light" && <>
           <p className="scene-note">Lighting overrides belong to this shot.</p>
-          <div className="scene-button-group">{(["3-point", "sunset", "neon", "interior practical"] as const).map((rig) => <button key={rig} disabled={!canEdit} aria-pressed={lightNode?.parameters.preset === rig} onClick={() => clip && dispatch({ type: "set-lighting-rig", clipId: clip.id, rig })}>{rig}</button>)}</div>
-          {lightNode && <><label>Environment intensity<input type="range" min="0" max="5" step="0.05" value={lighting.intensity} disabled={!canEdit} onChange={(event) => dispatch({ type: "update-node-parameter", nodeId: lightNode.id, key: "intensity", value: Number(event.target.value) })} /></label>
-            <label>Environment color<input type="color" value={lighting.color} disabled={!canEdit} onChange={(event) => dispatch({ type: "update-node-parameter", nodeId: lightNode.id, key: "color", value: event.target.value })} /></label></>}
           {objects.filter((object) => object.kind === "light").map((object) => <div key={object.id} className="scene-light-card"><button onClick={() => { select(object.id); setDrawer("layers"); }}>{object.name}</button>
             <label>Intensity<input type="range" min="0" max="20" step="0.1" value={object.intensity} disabled={!canEdit || object.locked} onChange={(event) => patchObject(object, { intensity: Number(event.target.value) })} /></label>
             <label>Color<input type="color" value={object.color} disabled={!canEdit || object.locked} onChange={(event) => patchObject(object, { color: event.target.value })} /></label>
@@ -443,9 +504,15 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           <label>Aperture<input type="number" min="0.7" max="32" step="0.1" value={lens.aperture ?? 2.8} disabled={!canEdit} onChange={(event) => updateLens("aperture", event.target.valueAsNumber)} /></label>
           <p className="scene-note">Lens & focus are saved with poses. Depth of field requires a render backend.</p>
           <details><summary>Motion presets & interpolation</summary>
-            <label>Camera movement<select defaultValue="" disabled={!canEdit} onChange={(event) => clip && dispatch({ type: "set-camera-rig", clipId: clip.id, rig: event.target.value as CameraRigPreset })}><option value="" disabled>Choose a movement</option>{CAMERA_RIG_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
-            <label>Interpolation<select value={cameraParams.interpolation} disabled={!canEdit || !cameraNode} onChange={(event) => cameraNode && dispatch({ type: "update-node-parameter", nodeId: cameraNode.id, key: "interpolation", value: event.target.value })}><option value="linear">Linear</option><option value="bezier">Ease in / out</option><option value="catmull_rom">Smooth path</option></select></label>
-            <button disabled={!canEdit} onClick={() => clip && dispatch({ type: "trim-camera-keyframes", clipId: clip.id })}>Trim poses outside shot</button>
+            <label>Camera movement<select defaultValue="" disabled={!canEdit} onChange={(event) => {
+              if (!shot || !event.target.value) return;
+              const built = buildRigPreset({ preset: event.target.value as CameraRigPreset, durationFrames: duration, start: { position: cameraPose?.position ?? [0, 1.6, 4], rotation: cameraPose?.rotation ?? [0, 0, 0] }, focalLengthMm: lens.focalLengthMm });
+              const first = built.keyframes[0];
+              if (!first) return;
+              send({ type: "APPLY_CAMERA_PRESET", shotId: shot.id, keys: [first, ...built.keyframes.slice(1)] });
+            }}><option value="" disabled>Choose a movement</option>{CAMERA_RIG_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
+            <label>Interpolation<select value={cameraParams.interpolation} disabled={!canEdit} onChange={(event) => { if (shot && (event.target.value === "linear" || event.target.value === "catmull_rom")) send({ type: "SET_CAMERA_INTERPOLATION", shotId: shot.id, interpolation: event.target.value }); }}><option value="linear">Linear</option><option value="catmull_rom">Smooth path</option></select></label>
+            <button disabled={!canEdit} onClick={() => shot && send({ type: "TRIM_KEYS", shotId: shot.id })}>Trim poses outside shot</button>
           </details>
           <button onClick={() => setResetSignal((value) => value + 1)}>Reset view</button>
         </>}
@@ -458,7 +525,21 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         </>}
       </aside>}
       <button className="scene-help-toggle" aria-label="Navigation help" aria-expanded={showHelp} onClick={() => setShowHelp((value) => !value)}><SceneIcon name="help" /></button>
-      {showHelp && <div className="scene-help"><strong>{cameraView ? "Move the camera" : "Explore the scene"}</strong><p>{cameraView ? "WASD 이동 · Q/E 높이 · 우클릭 드래그 시선 · Shift 빠르게" : "Orbit: 드래그 회전 · 휠 줌 · 우클릭 이동 · W/E/R 변형 · F 선택 보기"}</p><p>Motion: Record로 Take 저장 · Play는 선택 Take 미리보기 · K는 희소 포즈 · Generate는 선택 Take 사용</p></div>}
+      {showHelp && (
+        <div className="scene-help">
+          <strong>{cameraView ? "Move the camera" : "Explore the scene"}</strong>
+          {cameraView ? (
+            <p>WASD 이동 · Q/E 높이 · ←→ yaw · ↑↓ pitch · Z/X roll · Shift 빠르게 · 우클릭 드래그도 시선</p>
+          ) : (
+            <p>Orbit: 드래그 회전 · 휠 줌 · 우클릭 이동 · F 선택 보기</p>
+          )}
+          <p>
+            <strong>Rotate / Scale 툴</strong>은 카메라용이 아닙니다. 하단 W/E/R(이동·회전·크기)은
+            배우·소품을 골랐을 때 기즈모로 바꾸는 도구입니다. 카메라 시선은 Camera view의 화살표·Z/X를 쓰세요.
+          </p>
+          <p>Motion: Record로 Take 저장 · Play는 선택 Take 미리보기 · K는 희소 포즈 · Generate는 선택 Take 사용</p>
+        </div>
+      )}
     </div>
     {recording && <SceneTimeline
       tracks={tracks}
@@ -471,7 +552,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       takes={cameraParams.takes.map((take) => ({
         id: take.id,
         name: take.name,
-        keyCount: take.keyframes.length,
+        keyCount: take.keys.length,
         source: take.source,
       }))}
       activeTakeId={cameraParams.activeTakeId}
@@ -479,8 +560,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       onSelect={select}
       onScrub={scrub}
       onSelectedFramesChange={setSelectedFrames}
-      onSelectTake={(takeId) => clip && dispatch({ type: "select-camera-take", clipId: clip.id, takeId })}
-      onDeleteTake={(takeId) => clip && dispatch({ type: "delete-camera-take", clipId: clip.id, takeId })}
+      onSelectTake={(id) => shot && send({ type: "SELECT_CAMERA_TAKE", shotId: shot.id, takeId: takeId(id) })}
+      onDeleteTake={(id) => shot && send({ type: "DELETE_CAMERA_TAKE", shotId: shot.id, takeId: takeId(id) })}
       onPlay={() => {
         if (takeRecording) return;
         setDraft(undefined);

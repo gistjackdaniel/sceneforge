@@ -3,9 +3,11 @@ import type { NodeBase } from "../graph/types";
 import type { NodeReference } from "../graph/references";
 import type { RenderCacheEntry } from "../rendering/types";
 import type { Sequence, TimelineClip } from "../timeline/types";
+import type { SceneState } from "../worlds/sceneState";
 import type { WorldAsset } from "../worlds/types";
 import type { ModelExecutionRecord } from "../worlds/modelExecution";
 import type { ClipGraph, DependencyMap } from "./clipGraph";
+import type { Shot } from "../shot/types";
 
 export interface ExternalConnector {
   id: string;
@@ -31,11 +33,18 @@ export interface Project {
   activeSequenceId: string;
   sequences: Record<string, Sequence>;
   clips: Record<string, TimelineClip>;
+  /** Persistent shot list. Absent on older fixtures until load migrates them. */
+  shots?: Record<string, Shot>;
   clipGraphs: Record<string, ClipGraph>;
   nodes: Record<string, NodeBase>;
   references: Record<string, NodeReference>;
   dependencyMap: DependencyMap;
   worlds: Record<string, WorldAsset>;
+  /**
+   * Scene description keyed by `WorldAsset.id`.
+   * One scene per world is the current default. A project-wide scene is still open.
+   */
+  sceneStates?: Record<string, SceneState>;
   /** PRD §3 Asset registry */
   assets: Record<string, AssetRecord>;
   caches: Record<string, RenderCacheEntry>;
