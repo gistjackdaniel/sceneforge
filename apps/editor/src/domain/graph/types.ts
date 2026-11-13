@@ -38,6 +38,7 @@ export type NodeKind =
   | "WorldElementRefNode"
   | "PlacementNode"
   | "ActorPlacementNode"
+  | "ActorPoseNode"
   | "CameraRigNode"
   | "LensNode"
   | "LightingRigNode"
