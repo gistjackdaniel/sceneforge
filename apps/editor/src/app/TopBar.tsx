@@ -1,5 +1,4 @@
-import { cameraPathParamsFromNode } from "../domain/graph/cameraPath";
-import { cameraPathNodeIdForClip } from "../application/services/viewportCommit";
+import { hasSelectedTake, selectedTake } from "../domain/shot";
 import { useEditorStore } from "../state/editorStore";
 
 export const TopBar = () => {
@@ -8,16 +7,13 @@ export const TopBar = () => {
     dispatch,
   } = useEditorStore();
 
-  const clip = project.clips[ui.selectedClipId];
-  const cameraPath = clip
-    ? cameraPathParamsFromNode(project.nodes[cameraPathNodeIdForClip(clip)]?.parameters ?? {})
-    : undefined;
-  const cameraKeys = cameraPath?.keyframes.length ?? 0;
-  const activeTake = cameraPath?.takes.find((take) => take.id === cameraPath.activeTakeId);
-  const job = ui.videoRenderJob;
+  const shot = project.shots?.[ui.selectedClipId];
+  const take = shot ? selectedTake(shot) : undefined;
+  const ready = Boolean(shot && hasSelectedTake(shot));
+  const job = ui.shotRenderJob;
   const busy = job?.status === "queued" || job?.status === "running";
   const generate = () => {
-    if (clip) dispatch({ type: "submit-video-render", clipId: clip.id });
+    if (shot) dispatch({ type: "request-shot-render", shotId: shot.id, outputAspect: ui.outputAspect });
   };
 
   return (
@@ -31,11 +27,11 @@ export const TopBar = () => {
           type="button"
           className="btn-primary"
           onClick={generate}
-          disabled={!clip || cameraKeys === 0 || busy}
+          disabled={!ready || busy}
           title={
-            cameraKeys === 0
-              ? "Record a take or press K in Motion, then Generate."
-              : `Send 3D assets, poses, and ${activeTake?.name ?? "the selected take"} to the video model.`
+            ready
+              ? `Send 3D assets, poses, and ${take?.name ?? "the selected take"} to the video model.`
+              : "Record a take or press K in Motion, then Generate."
           }
         >
           {busy ? "Generating…" : "Generate video"}
@@ -49,11 +45,9 @@ export const TopBar = () => {
         <button type="button" onClick={() => dispatch({ type: "redo" })} disabled={ui.commandBus.redoStack.length === 0}>
           Redo
         </button>
-        <span>{clip?.name}</span>
+        <span>{shot?.name}</span>
         <span>
-          {cameraKeys === 0
-            ? "No camera take"
-            : `${activeTake?.name ?? "Take"} · ${cameraKeys} keys`}
+          {take ? `${take.name} · ${take.keys.length} keys` : "No camera take"}
         </span>
       </div>
     </header>

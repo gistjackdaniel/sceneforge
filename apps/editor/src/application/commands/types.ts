@@ -3,6 +3,7 @@ import type { NodeReference, ReferenceType } from "../../domain/graph/references
 import type { GraphEdge } from "../../domain/graph/types";
 import type { CameraRigPreset } from "../../domain/graph/cameraRig";
 import type { JointTarget } from "../../domain/performance/poseTrack";
+import type { ShotCommand } from "../../domain/shot";
 
 /** PRD §13.1 — domain commands. UI-only actions are not commands. */
 export type DomainCommand =
@@ -159,7 +160,8 @@ export type DomainCommand =
   | { type: "REMOVE_DRAFT_REFERENCE"; clipId: string; referenceId: string }
   | { type: "SET_DRAFT_MODEL"; clipId: string; modelId: string }
   | { type: "SET_DRAFT_IMAGE_MODE"; clipId: string; referenceId: string; mode: "reference" | "hard" }
-  | { type: "SET_DRAFT_IMAGE_GUIDANCE"; clipId: string; referenceId: string; guidance: number };
+  | { type: "SET_DRAFT_IMAGE_GUIDANCE"; clipId: string; referenceId: string; guidance: number }
+  | { type: "SHOT"; command: ShotCommand };
 
 export type DomainEventType =
   | "NodeCreated"
@@ -174,7 +176,8 @@ export type DomainEventType =
   | "CacheInvalidated"
   | "RenderQueued"
   | "RenderCompleted"
-  | "RenderFailed";
+  | "RenderFailed"
+  | "ShotChanged";
 
 export interface DomainEvent {
   type: DomainEventType;

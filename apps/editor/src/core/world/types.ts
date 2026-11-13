@@ -2,6 +2,8 @@ export type {
   BoundingBox,
   WorldAsset,
   WorldElement,
+  WorldFrontAxis,
+  WorldHandedness,
   WorldMode,
   WorldRepresentation,
 } from "../../domain/worlds/types";
