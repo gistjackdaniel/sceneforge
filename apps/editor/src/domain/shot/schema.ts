@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { SCENE_COORDINATE_CONTRACT, mat4Schema, quatSchema, sceneCoordinateContractSchema } from "../worlds/coordinates";
+import { legacyRefSchema } from "../worlds/sceneState";
 import { identityCalibration, identityMapping, samplesFromKeyframes } from "./cameraTrack";
 import { migrateZyxEncodedQuaternion, normalizeQuat } from "./cameraRotation";
 import { migrateCameraTakeIds } from "./takeId";
@@ -59,12 +61,21 @@ const subjectBase = {
   locked: z.boolean(),
 };
 
+const assetPinSchema = z.object({
+  assetId: z.string().min(1),
+  revisionId: z.string().min(1),
+});
+
 const subjectSchema = z.discriminatedUnion("kind", [
   z.object({
     ...subjectBase,
     kind: z.enum(["human", "object"]),
     representation: z.enum(["box", "sphere", "mesh", "marker"]),
     motion: motionSchema,
+    instanceId: z.string().min(1).optional(),
+    assetRef: assetPinSchema.optional(),
+    legacyRefs: z.array(legacyRefSchema).optional(),
+    clonedFrom: z.string().min(1).optional(),
   }),
   z.object({
     ...subjectBase,
@@ -150,7 +161,7 @@ const mappingSchema = z.object({
   applyDriftCorrection: z.boolean().optional(),
 });
 
-const legacyRefSchema = z.object({
+const cameraTakeLegacyRefSchema = z.object({
   kind: z.literal("camera_take"),
   shotId: z.string().min(1),
   takeId: z.string().min(1),
@@ -168,7 +179,7 @@ const cameraTakeSchema = z.object({
   calibration: calibrationSchema.optional(),
   trackingEvents: z.array(trackingEventSchema).optional(),
   mapping: mappingSchema.optional(),
-  legacyRefs: z.array(legacyRefSchema).optional(),
+  legacyRefs: z.array(cameraTakeLegacyRefSchema).optional(),
   rotationStorage: z.literal("quaternion_xyzw").optional(),
 });
 
@@ -219,6 +230,7 @@ export const shotSchema = z.object({
     durationFrames: z.number().int().positive(),
     origin: z.literal("clip_local"),
   }),
+  coordinateContract: sceneCoordinateContractSchema.default(SCENE_COORDINATE_CONTRACT),
   subjects: z.array(subjectSchema),
   camera: cameraSchema,
   environment: z.object({ worldId: z.string().min(1) }).optional(),
@@ -231,6 +243,12 @@ export const shotSchema = z.object({
   }
 });
 
+const canonicalPlacementSchema = z.object({
+  translation: vec3,
+  rotation: quatSchema,
+  scale: vec3,
+});
+
 const modelSubjectSchema = z.discriminatedUnion("kind", [
   z.object({
     id: z.string().min(1),
@@ -238,6 +256,7 @@ const modelSubjectSchema = z.discriminatedUnion("kind", [
     kind: z.enum(["human", "object"]),
     uri: z.string().min(1),
     placement: transformSchema,
+    canonicalPlacement: canonicalPlacementSchema,
     motion: motionSchema,
   }),
   z.object({
@@ -246,6 +265,7 @@ const modelSubjectSchema = z.discriminatedUnion("kind", [
     kind: z.literal("light"),
     uri: z.string().min(1),
     placement: transformSchema,
+    canonicalPlacement: canonicalPlacementSchema,
     intensity: z.number().finite().nonnegative(),
     color: z.string(),
   }),
@@ -261,6 +281,7 @@ export const shotModelInputSchema = z.object({
     durationFrames: z.number().int().positive(),
     origin: z.literal("clip_local"),
   }),
+  coordinateContract: sceneCoordinateContractSchema.default(SCENE_COORDINATE_CONTRACT),
   outputAspect: z.string().min(1),
   subjects: z.array(modelSubjectSchema),
   camera: z.object({
@@ -274,6 +295,7 @@ export const shotModelInputSchema = z.object({
     geometryUri: z.string().min(1),
     coordinateSystem: z.enum(["Y_UP", "Z_UP"]),
     unitScaleMeters: z.number().positive(),
+    importTransform: mat4Schema.optional(),
   }).optional(),
   recipe: z.object({ generateHash: z.string().min(1) }),
 });

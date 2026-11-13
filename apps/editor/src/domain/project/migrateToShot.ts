@@ -6,7 +6,9 @@ import { objectKeyframeSchema, readObjectTrack, resolveSceneObjects, type Object
 import { z } from "zod";
 import type { AssetRecord } from "../assets/types";
 import { parseShot, shotSchema } from "../shot/schema";
+import { linkShotSubjects } from "../shot/instanceLink";
 import type { AssetId, Motion, Shot, Subject, SubjectId, TakeId } from "../shot/types";
+import { attachSceneStates } from "./sceneLink";
 import type { Project } from "./types";
 import type { TimelineClip } from "../timeline/types";
 
@@ -207,17 +209,17 @@ export const projectWithShots = <T extends Project>(project: T): T => {
   const assets = { ...project.assets };
   for (const clipId of clipIds) {
     if (shotSchema.safeParse(shots[clipId]).success) {
-      shots[clipId] = parseShot(shots[clipId]);
+      shots[clipId] = linkShotSubjects(parseShot(shots[clipId]));
       continue;
     }
     const clip = project.clips[clipId];
     if (!clip) continue;
     const shot = migrateClipToShot(project, clip);
     if (!shot) continue;
-    shots[shot.id] = shot;
+    shots[shot.id] = linkShotSubjects(shot);
     for (const subject of shot.subjects) {
       if (!assets[subject.assetId]) assets[subject.assetId] = assetRecord(subject, project.updatedAt);
     }
   }
-  return { ...project, shots, assets };
+  return attachSceneStates({ ...project, shots, assets });
 };
