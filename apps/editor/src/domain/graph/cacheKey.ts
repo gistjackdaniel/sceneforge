@@ -1,4 +1,8 @@
+import { hashNormalized, hashString, stableSerialize } from "../../core/dependency/hash";
 import type { NodeBase } from "./types";
+
+export { hashString, stableSerialize };
+export const hashValue = hashNormalized;
 
 /**
  * Inputs that participate in a node content hash (PRD §11.2).
@@ -22,32 +26,6 @@ const UI_PARAM_KEYS = new Set([
   "temporaryTimestamp",
   "cameraViz",
 ]);
-
-export const stableSerialize = (value: unknown): string => {
-  if (value === null || value === undefined) {
-    return String(value);
-  }
-  if (typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(stableSerialize).join(",")}]`;
-  }
-  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
-    a.localeCompare(b),
-  );
-  return `{${entries.map(([key, nested]) => `${JSON.stringify(key)}:${stableSerialize(nested)}`).join(",")}}`;
-};
-
-export const hashString = (value: string): string => {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
-  }
-  return hash.toString(16).padStart(8, "0");
-};
-
-export const hashValue = (value: unknown): string => hashString(stableSerialize(value));
 
 /** Hash node params while stripping presentation-only keys. */
 export const hashNodeParams = (params: Record<string, unknown> | undefined): string => {

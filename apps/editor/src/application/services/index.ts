@@ -37,6 +37,7 @@ export {
   cameraPathNodeIdForClip,
   placementNodeIdForElement,
 } from "./viewportCommit";
+export { bindWorldPhase1Selectors, resolveWorldAssetId } from "./worldPhase1Validation";
 export {
   applyCameraRigToProject,
   validateLookAtElement,
