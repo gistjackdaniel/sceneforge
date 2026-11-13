@@ -7,20 +7,17 @@ import { normalizeWorldAsset } from "../worlds/normalize";
 import { createWorldTargetResolver, type TargetResolver } from "../worlds/query";
 import type { ActorPoseSequence } from "./motionModel";
 import { hashNormalized } from "./normalizedHash";
-import { GENERATED_MOTION_SOURCE, translationOf } from "./objectStream";
+import { MOTION_BAKE_TOLERANCE } from "../shot/motionBake";
 import {
   PHASE0_ACTOR_A_ROOT,
   PHASE0_ACTOR_B_ROOT,
-  PHASE0_CONTACT_TOLERANCE_M,
-  PHASE0_CUP_HALF_HEIGHT_M,
   PHASE0_CUP_IN_HAND_OFFSET,
   PHASE0_LEFT_SHOULDER_IN_ROOT,
   PHASE0_STUB_ARM_LENGTH_M,
   PHASE0_TABLE_POSITION,
-  composeWorldPose,
-  phase0CupOnTable,
   phase0LeftHandWorldPose,
-} from "./phase0Fixture";
+} from "../shot/phase0Sample";
+import { composeWorldPose, GENERATED_MOTION_SOURCE, translationOf } from "./objectStream";
 import { jointIndex, SmplxSkeleton, Vec, type Vec3 } from "./pose";
 import { PreserveVerifier } from "./preserveVerifier";
 import { Speech2MotionPipeline } from "./pipeline";
@@ -294,7 +291,7 @@ describe("speech2motion pipeline", () => {
     expect(cup?.frames.map((frame) => frame.t)).toEqual(Array.from({ length: FRAME_COUNT }, (_, frame) => frame));
     const handAtRelease = wristAt(right.scene.actors, ACTOR_A, 48, "left_wrist")!;
     const expectedHand = phase0LeftHandWorldPose(48).translation;
-    expect(Vec.length(Vec.sub(handAtRelease, expectedHand))).toBeLessThanOrEqual(PHASE0_CONTACT_TOLERANCE_M);
+    expect(Vec.length(Vec.sub(handAtRelease, expectedHand))).toBeLessThanOrEqual(MOTION_BAKE_TOLERANCE.positionMeters);
     const shoulder = [
       PHASE0_ACTOR_A_ROOT[0] + PHASE0_LEFT_SHOULDER_IN_ROOT[0],
       PHASE0_ACTOR_A_ROOT[1] + PHASE0_LEFT_SHOULDER_IN_ROOT[1],
@@ -305,10 +302,9 @@ describe("speech2motion pipeline", () => {
     expect(reach).toBeCloseTo(0.53, 2);
     const placed = translationOf(cup!.frames[48]!.T_world_obj);
     const last = translationOf(cup!.frames[127]!.T_world_obj);
-    const onTable = phase0CupOnTable();
     expect(placed).toEqual(last);
-    expect(Math.abs(placed[1] - (PHASE0_TABLE_POSITION[1] + PHASE0_CUP_HALF_HEIGHT_M))).toBeLessThanOrEqual(PHASE0_CONTACT_TOLERANCE_M);
-    expect(Vec.length(Vec.sub(placed, onTable))).toBeLessThanOrEqual(PHASE0_CONTACT_TOLERANCE_M);
+    expect(Math.abs(placed[1] - PHASE0_TABLE_POSITION[1])).toBeLessThanOrEqual(MOTION_BAKE_TOLERANCE.positionMeters);
+    expect(Vec.length(Vec.sub(placed, PHASE0_TABLE_POSITION))).toBeLessThanOrEqual(MOTION_BAKE_TOLERANCE.positionMeters);
     const heldFrame = cup!.frames[47]!;
     const heldJoint = right.scene.actors
       .find((actor) => actor.actorId === ACTOR_A)
@@ -317,7 +313,7 @@ describe("speech2motion pipeline", () => {
     expect(heldJoint).toBeDefined();
     if (!heldJoint) return;
     const composed = translationOf(composeWorldPose(heldJoint.translation, heldJoint.rotation, PHASE0_CUP_IN_HAND_OFFSET));
-    expect(Vec.length(Vec.sub(composed, translationOf(heldFrame.T_world_obj)))).toBeLessThanOrEqual(PHASE0_CONTACT_TOLERANCE_M);
+    expect(Vec.length(Vec.sub(composed, translationOf(heldFrame.T_world_obj)))).toBeLessThanOrEqual(MOTION_BAKE_TOLERANCE.positionMeters);
     expect(right.scene.attachments[0]).toMatchObject({
       parentId: ACTOR_A,
       rigPart: "left_hand",

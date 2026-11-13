@@ -1,5 +1,6 @@
 import { Euler, Quaternion } from "three";
 import { describe, expect, it } from "vitest";
+import { SMPLX_PART_JOINT } from "../worlds/sceneState";
 import { GENERATED_MOTION_SOURCE } from "./objectStream";
 import { MODEL_FPS, StubMotionModel } from "./motionModel";
 import { hashNormalized, stableSerialize } from "./normalizedHash";
@@ -18,6 +19,16 @@ const SHOT_FPS = 16;
 const FRAME_COUNT = 128;
 
 describe("SMPL-X pose clock", () => {
+  it("names world rig parts with the same SMPL-X joints as SMPLX_PART_JOINT", () => {
+    expect(SMPLX_PART_JOINT.left_hand).toBe("left_wrist");
+    expect(SMPLX_PART_JOINT.right_hand).toBe("right_wrist");
+    for (const joint of Object.values(SMPLX_PART_JOINT)) {
+      expect(SMPLX_JOINT_NAMES).toContain(joint);
+    }
+    expect(jointIndex("left_wrist")).toBe(SmplxSkeleton.limb("left_hand")?.end);
+    expect(jointIndex("right_wrist")).toBe(SmplxSkeleton.limb("right_hand")?.end);
+  });
+
   it("resamples model fps 30 onto an 8 second, 16 fps, 128 frame shot", () => {
     expect(SMPLX_JOINT_NAMES).toHaveLength(SMPLX_JOINT_COUNT);
     expect(SmplxSkeleton.restPose([0, 0, 0])).toHaveLength(55);

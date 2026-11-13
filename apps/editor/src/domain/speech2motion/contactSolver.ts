@@ -1,7 +1,7 @@
 import type { ContactGraph, RigPart } from "./actionGraph";
 import type { ActorPoseSequence } from "./motionModel";
-import { GENERATED_MOTION_SOURCE, worldTransform, type ObjectAttachment, type ObjectPoseStream } from "./objectStream";
-import { PHASE0_CUP_HALF_HEIGHT_M, PHASE0_CUP_IN_HAND_OFFSET, composeWorldPose } from "./phase0Fixture";
+import { PHASE0_CUP_IN_HAND_OFFSET } from "../shot/phase0Sample";
+import { GENERATED_MOTION_SOURCE, composeWorldPose, worldTransform, type ObjectAttachment, type ObjectPoseStream } from "./objectStream";
 import { QuatMath, SmplxSkeleton, TwoBoneIk, Vec, type PoseFrame, type Quat, type Vec3 } from "./pose";
 
 export interface PlacementSource {
@@ -172,9 +172,7 @@ export class ContactSolver {
       const release = hold ? hold.end_frame + 1 : (place?.start_frame ?? 0);
       const approachStart = place?.start_frame ?? release;
       const localOffset = PHASE0_CUP_IN_HAND_OFFSET;
-      const tablePosition: Vec3 = place
-        ? [surface.position[0], surface.position[1] + PHASE0_CUP_HALF_HEIGHT_M, surface.position[2]]
-        : surface.position;
+      const tablePosition: Vec3 = surface.position;
       const graspOnTable = Vec.sub(tablePosition, localOffset);
       const actor = next[actorIndex]!;
       const guided = handWorldPose

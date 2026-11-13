@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { rigPartSchema, type RigPart } from "../worlds/sceneState";
+
+export { rigPartSchema, type RigPart };
 
 /**
  * Speech2motion Action Graph JSON 계약 v0.1.
@@ -6,17 +9,6 @@ import { z } from "zod";
  * Agentic 레인(producer)이 만들고 Video 레인(consumer)이 읽는다.
  * 이 모듈은 스키마 검증만 담당한다. 모션 생성, IK, 렌더, UI 상태는 바꾸지 않는다.
  */
-
-// TODO: World 레인의 rigPartSchema(left_hand, right_hand, left_foot, right_foot, head, pelvis)와 합칠 예정.
-export const rigPartSchema = z.enum([
-  "left_hand",
-  "right_hand",
-  "left_foot",
-  "right_foot",
-  "head",
-  "pelvis",
-]);
-export type RigPart = z.infer<typeof rigPartSchema>;
 
 const idSchema = z.string().min(1);
 

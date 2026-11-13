@@ -3,7 +3,7 @@ import type { ContactGraph } from "./actionGraph";
 import { ContactSolver } from "./contactSolver";
 import type { ActorPoseSequence } from "./motionModel";
 import { GENERATED_MOTION_SOURCE, translationOf } from "./objectStream";
-import { PHASE0_CUP_IN_HAND_OFFSET } from "./phase0Fixture";
+import { PHASE0_CUP_IN_HAND_OFFSET } from "../shot/phase0Sample";
 import { jointIndex, SmplxSkeleton, Vec } from "./pose";
 
 const ACTOR_A = "inst_fixture_actor_a";

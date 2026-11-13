@@ -4,7 +4,7 @@ import type { ResolveContext, TargetResolver } from "../worlds/query";
 import { ActionGraphValidator, type ActionGraphIssue, type Event } from "./actionGraph";
 import { ContactSolver } from "./contactSolver";
 import { StubMotionModel, type MotionEventInput, type MotionModelAdapter } from "./motionModel";
-import { phase0LeftHandWorldPose } from "./phase0Fixture";
+import { phase0LeftHandWorldPose } from "../shot/phase0Sample";
 import type { Speech2MotionScene } from "./preserveVerifier";
 import { ShotPoseAdapter } from "./shotPoseAdapter";
 
