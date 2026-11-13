@@ -4,16 +4,34 @@ import type { WorldAsset, WorldFrontAxis, WorldHandedness } from "./types";
 
 /**
  * Integer frame on the shot-local clock. Seconds are `frame / Shot.time.fps`.
- * This lane does not store fps and does not fill a default.
- *
- * Canonical fps is `Shot.time.fps` (`origin: "clip_local"`) on `domain/shot`.
- * `ShotFpsRef` names that shot. World does not copy the number.
+ * This module does not store fps and does not fill a default.
+ * The single source is `Shot.time.fps` in `domain/shot`.
  */
 export type ShotLocalFrame = number;
 
-/** Points at the shot whose `time.fps` is the clock. World does not read or store the number. */
+/**
+ * Structural clock. Matches `Shot.time`. Callers read `fps` from the shot;
+ * world documents do not copy it.
+ */
+export type ShotTimeSource = {
+  fps: number;
+  durationFrames: number;
+};
+
+/**
+ * Names the shot whose clock is `Shot.time.fps`.
+ * This ref does not copy fps.
+ */
 export type ShotFpsRef = {
   shotId: string;
+};
+
+/** Read the single fps. The number stays on the shot. */
+export const shotFps = (shot: { time: ShotTimeSource }): number => {
+  if (!(shot.time.fps > 0) || !Number.isFinite(shot.time.fps)) {
+    throw new WorldDomainError("invalid_fps", "Shot.time.fps must be positive.");
+  }
+  return shot.time.fps;
 };
 
 /**

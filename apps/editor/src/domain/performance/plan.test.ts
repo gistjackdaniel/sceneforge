@@ -93,4 +93,37 @@ describe("performance direction plan", () => {
     expect(result.errors.join(" ")).toContain("dependency cycle");
     expect(result.warnings.join(" ")).toContain("foot sliding");
   });
+
+  it("keeps a generated source instead of rewriting it as text", () => {
+    const saved = {
+      sources: [{
+        id: "speech-motion-01",
+        type: "generated",
+        label: "speech-to-motion",
+        uri: "backbone://pose/shot-handshake-cup",
+        enabled: true,
+        notes: "컵은 여기 둘게.",
+      }],
+      cues: [{
+        id: "handshake",
+        kind: "action",
+        label: "Handshake",
+        direction: "Shake.",
+        startFrame: 72,
+        endFrame: 112,
+        actorId: "actor-a",
+        targetActorId: "actor-b",
+        rigPart: "right_hand",
+        targetRigPart: "left_hand",
+      }],
+    };
+    const once = performancePlanFromNode(saved);
+    const twice = performancePlanFromNode(JSON.parse(JSON.stringify(once)) as Record<string, unknown>);
+    expect(twice.sources[0]?.type).toBe("generated");
+    expect(twice.cues[0]?.rigPart).toBe("right_hand");
+    expect(twice.cues[0]?.targetRigPart).toBe("left_hand");
+    expect(performancePlanFromNode({
+      sources: [{ id: "legacy", type: "motion_capture", label: "Take", uri: "take.fbx" }],
+    }).sources[0]?.type).toBe("motion_capture");
+  });
 });

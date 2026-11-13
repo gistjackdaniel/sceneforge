@@ -40,6 +40,22 @@ export { shotId, subjectId, takeId } from "./types";
 export { parseShot, parseShotModelInput, shotModelInputSchema, shotSchema } from "./schema";
 export { applyShotCommand, type ShotEdit } from "./evolve";
 export { resolveShotContacts, subjectForActorRef } from "./editorial";
+export { SHOT_EULER_ORDER, eulerToQuaternion, quaternionToEuler } from "./eulerAdapter";
+export {
+  clonePosedSubject,
+  legacyShotInstanceId,
+  linkShotSubjects,
+  persistentAssetIdForLegacy,
+  renamePosedSubject,
+  revisionIdForAssetVersion,
+} from "./instanceLink";
+export {
+  MOTION_BAKE_TOLERANCE,
+  bakeDenseObjectMotion,
+  shotPoseFromWorldMatrix,
+  worldMatrixFromShotPose,
+} from "./motionBake";
+export { environmentImportTransform, prepareModelInput, type PreparedInput } from "./modelInput";
 export {
   clipLocalFrame,
   generateHash,
@@ -51,4 +67,3 @@ export {
   shotFps,
   subjectPoseKeys,
 } from "./queries";
-export { prepareModelInput, type PreparedInput } from "./modelInput";
