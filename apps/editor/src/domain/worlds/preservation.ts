@@ -8,6 +8,7 @@ import type { SceneState } from "./sceneState";
  * exists, call sites should depend on {@link PreservationCheck} and pass
  * `temporaryPreservationCheck`. Delete `temporaryCanonicalize` and
  * `temporaryPreservationHasher` in that change. Do not copy them into another lane.
+ * #32 머지 후 `core/dependency`로 교체.
  */
 export type StateSelector =
   | { kind: "camera_track"; cameraTrackId: string }
