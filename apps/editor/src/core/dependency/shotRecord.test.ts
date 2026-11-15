@@ -372,4 +372,20 @@ describe("shot record dependency cache", () => {
     expect(nextContact.hash).not.toBe(contactB.hash);
     expect(nextContact.value).not.toEqual(contactB.value);
   });
+
+  it("fails the dependency pass when Shot.time.fps is missing", () => {
+    const { world, shot, environment } = stage();
+    const time = { ...shot.time };
+    Reflect.deleteProperty(time, "fps");
+    const missing = { ...shot, time };
+    expect(() =>
+      projectShotDependencies({
+        shot: missing,
+        worlds: { [world.id]: world },
+        environment,
+        modelVersion: "video-0.1",
+        seed: 3,
+      }),
+    ).toThrow("Shot time.fps is required.");
+  });
 });

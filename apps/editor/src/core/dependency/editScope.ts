@@ -1,3 +1,4 @@
+import type { Edit, EditSelector, EditSource } from "../../domain/speech2motion/actionGraph";
 import {
   DEPENDENT_RENDER_PASSES,
   normalizeProductionSelector,
@@ -8,28 +9,23 @@ import {
 } from "./selector";
 
 /**
- * Narrow input for an edit. Field names follow `actionGraph.ts` (`edit_id`,
- * `base_graph_version`, `source`, `preserve`, `recompute`). That module is not
- * on this branch, so this is a structural type and not a second schema.
+ * Graph envelope around one action-graph edit.
+ * `source`, `preserve`, and `recompute` are the types `actionGraph.ts` exports.
+ * `shotId` and `instanceIds` are the dependency scope.
  * A single `instanceId` is stored here as a one-element `instanceIds`.
  * `instanceIds` applies only to edits that do not name a `contact_id`.
  * A contact edit derives its actors from `contact_graph[].a/b`.
  */
-export interface EditSourceInput {
-  type: "voice" | "text" | "manual";
-  transcript?: string;
-}
-
 export interface EditScopeInput {
   shotId: string;
-  operation: string;
+  operation: Edit["operation"];
   /** Non-contact edits only. A contact edit derives actors from `contact_graph`. */
   instanceIds: readonly string[];
-  edit_id?: string;
-  base_graph_version?: string;
-  source?: EditSourceInput;
-  preserve: readonly unknown[];
-  recompute: readonly unknown[];
+  edit_id?: Edit["edit_id"];
+  base_graph_version?: Edit["base_graph_version"];
+  source?: EditSource;
+  preserve: readonly EditSelector[];
+  recompute: readonly EditSelector[];
 }
 
 /** Shot-record units a list item may name. Not the producer schema. */
