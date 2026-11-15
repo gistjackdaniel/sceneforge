@@ -388,6 +388,14 @@ describe("speech2motion pipeline", () => {
     expect(wristAt(missed.scene.actors, ACTOR_A, 40, "left_wrist")).toEqual(wristAt(missed.scene.actors, ACTOR_A, 0, "left_wrist"));
   });
 
+  it("fails when Shot.time.fps is missing", () => {
+    const shot = shotOf(CAMERA_A);
+    const missing = { ...shot, time: { ...shot.time, fps: undefined } } as unknown as Shot;
+    expect(() =>
+      Speech2MotionPipeline.run({ graph: handshakeGraph("right_hand"), shot: missing, targetResolver: room() }),
+    ).toThrow("Shot time.fps is required.");
+  });
+
   it("rejects an action graph whose fps is not Shot.time.fps", () => {
     const shot = shotOf(CAMERA_A);
     const result = Speech2MotionPipeline.run({ graph: handshakeGraph("right_hand", 30), shot, targetResolver: room() });

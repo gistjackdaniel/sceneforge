@@ -1,5 +1,5 @@
 import type { Shot, ShotCommand } from "../shot";
-import { selectedTake, shotFps } from "../shot";
+import { readShotTimeFps, selectedTake } from "../shot";
 import type { ResolveContext, TargetResolver } from "../worlds/query";
 import { ActionGraphValidator, type ActionGraphIssue, type Event } from "./actionGraph";
 import { ContactSolver } from "./contactSolver";
@@ -35,7 +35,7 @@ export class Speech2MotionPipeline {
         errors: [{ path: ["shot_id"], message: "Action Graph의 shot_id가 샷 기록과 다릅니다.", code: "shot_mismatch" }],
       };
     }
-    const fps = shotFps(request.shot);
+    const fps = readShotTimeFps(request.shot);
     if (graph.fps !== fps) {
       return {
         ok: false,
