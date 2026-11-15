@@ -24,7 +24,8 @@ import { shotId, subjectId, takeId, type Quat, type Shot, type Vec3 } from "./ty
  *
  * Clock is `Shot.time` only: 16 fps, 128 frames, 8.0 seconds.
  * Camera export of this take is Backbone `convention: "opencv_c2w"` (`frames[].c2w`).
- * The take id `cam-take-01` is an opaque string. This module does not mint `cam_<ULID>`.
+ * The stored take id `cam-take-01` is migrated by `parseShot` to `cam_legacy_…`.
+ * This module does not mint `cam_<ULID>`. The yaw is already XYZ.
  */
 export const PHASE0_STAMP = "2026-11-12T00:00:00.000Z";
 export const PHASE0_SHOT_ID = "shot-handshake-cup";
@@ -361,6 +362,7 @@ export const phase0Shot = (): Shot => {
         name: "Phone",
         source: "record",
         createdAt: PHASE0_STAMP,
+        rotationStorage: "quaternion_xyzw" as const,
         keys: [
           { frame: 0, position: [0.2, 1.5, 3.2], rotation: [0, 0, 0, 1], focalLengthMm: 35 },
           { frame: 96, position: [0.4, 1.45, 2.8], rotation: yaw, focalLengthMm: 35 },
