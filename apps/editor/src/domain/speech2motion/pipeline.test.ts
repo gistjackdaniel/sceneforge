@@ -6,7 +6,7 @@ import { parseShot, selectedTake, type Shot, type ShotCommand } from "../shot";
 import { normalizeWorldAsset } from "../worlds/normalize";
 import { createWorldTargetResolver, type TargetResolver } from "../worlds/query";
 import type { ActorPoseSequence } from "./motionModel";
-import { hashNormalized } from "./normalizedHash";
+import { computePassHash } from "./normalizedHash";
 import { MOTION_BAKE_TOLERANCE } from "../shot/motionBake";
 import {
   PHASE0_ACTOR_A_ROOT,
@@ -256,14 +256,14 @@ describe("speech2motion pipeline", () => {
     expect(preserved.ok).toBe(true);
     const motionB = { kind: "motion" as const, actor_id: ACTOR_B };
     const contact = { kind: "contact" as const, contact_id: "handshake_01" };
-    expect(hashNormalized(PreserveVerifier.project(right.scene, motionB))).not.toBe(
-      hashNormalized(PreserveVerifier.project(left.scene, motionB)),
+    expect(computePassHash(PreserveVerifier.project(right.scene, motionB))).not.toBe(
+      computePassHash(PreserveVerifier.project(left.scene, motionB)),
     );
-    expect(hashNormalized(PreserveVerifier.project(right.scene, contact))).not.toBe(
-      hashNormalized(PreserveVerifier.project(left.scene, contact)),
+    expect(computePassHash(PreserveVerifier.project(right.scene, contact))).not.toBe(
+      computePassHash(PreserveVerifier.project(left.scene, contact)),
     );
-    expect(hashNormalized(right.scene.objects)).toBe(hashNormalized(left.scene.objects));
-    expect(hashNormalized(right.scene.attachments)).toBe(hashNormalized(left.scene.attachments));
+    expect(computePassHash(right.scene.objects)).toBe(computePassHash(left.scene.objects));
+    expect(computePassHash(right.scene.attachments)).toBe(computePassHash(left.scene.attachments));
 
     const otherCamera = shotOf(CAMERA_B);
     const moved = Speech2MotionPipeline.run({ graph: handshakeGraph("right_hand"), shot: otherCamera, targetResolver: room() });
@@ -271,8 +271,8 @@ describe("speech2motion pipeline", () => {
     if (!moved.ok) return;
     expect((moved.scene.camera as { cameraTrackId: string }).cameraTrackId).toBe(CAMERA_B);
     const cameraSelector = { kind: "camera_track" as const };
-    expect(hashNormalized(PreserveVerifier.project(right.scene, cameraSelector))).not.toBe(
-      hashNormalized(PreserveVerifier.project(moved.scene, cameraSelector)),
+    expect(computePassHash(PreserveVerifier.project(right.scene, cameraSelector))).not.toBe(
+      computePassHash(PreserveVerifier.project(moved.scene, cameraSelector)),
     );
 
     const anchor = wristAt(right.scene.actors, ACTOR_A, 90, "right_wrist");
@@ -334,8 +334,8 @@ describe("speech2motion pipeline", () => {
       .toEqual([...PHASE0_ACTOR_A_ROOT]);
     const scoped = { kind: "motion" as const, actor_id: ACTOR_A, instanceIds: [ACTOR_A] };
     const other = { kind: "motion" as const, actor_id: ACTOR_A, instanceIds: [ACTOR_B] };
-    expect(hashNormalized(PreserveVerifier.project(right.scene, scoped))).toBe(
-      hashNormalized(PreserveVerifier.project(right.scene, { kind: "motion", actor_id: ACTOR_A })),
+    expect(computePassHash(PreserveVerifier.project(right.scene, scoped))).toBe(
+      computePassHash(PreserveVerifier.project(right.scene, { kind: "motion", actor_id: ACTOR_A })),
     );
     expect(PreserveVerifier.project(right.scene, other)).toBeNull();
 

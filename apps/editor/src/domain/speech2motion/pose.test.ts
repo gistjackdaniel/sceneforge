@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { SMPLX_PART_JOINT } from "../worlds/sceneState";
 import { GENERATED_MOTION_SOURCE } from "./objectStream";
 import { MODEL_FPS, StubMotionModel } from "./motionModel";
-import { hashNormalized, stableSerialize } from "./normalizedHash";
+import { computePassHash, hashNormalized, stableSerialize } from "./normalizedHash";
 import {
   PoseResample,
   QuatMath,
@@ -133,6 +133,7 @@ describe("stub motion model", () => {
 describe("normalized hash", () => {
   it("matches the graph lane signature and keeps object key order out of the digest", () => {
     expect(stableSerialize({ b: 1, a: [0.1, { d: 1, c: 2 }] })).toBe(stableSerialize({ a: [0.1, { c: 2, d: 1 }], b: 1 }));
+    expect(computePassHash({ b: 1, a: 2 })).toBe(hashNormalized({ a: 2, b: 1 }));
     expect(hashNormalized({ b: 1, a: 2 })).toBe(hashNormalized({ a: 2, b: 1 }));
     expect(hashNormalized({ a: 1 })).not.toBe(hashNormalized({ a: 2 }));
     expect(hashNormalized([1, 2])).not.toBe(hashNormalized([2, 1]));

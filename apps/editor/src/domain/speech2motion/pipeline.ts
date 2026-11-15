@@ -35,6 +35,7 @@ export class Speech2MotionPipeline {
         errors: [{ path: ["shot_id"], message: "Action Graph의 shot_id가 샷 기록과 다릅니다.", code: "shot_mismatch" }],
       };
     }
+    // TODO(#31): keep reading `Shot.time.fps` until the shotFps lane is on this base.
     const shotFps = request.shot.time.fps;
     if (graph.fps !== shotFps) {
       return {

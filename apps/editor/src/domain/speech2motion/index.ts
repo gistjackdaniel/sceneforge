@@ -39,7 +39,7 @@ export type {
 } from "./actionGraph";
 export { ContactSolver, type ContactSolveResult, type PlacementSource, type SolvedContact } from "./contactSolver";
 export { MODEL_FPS, StubMotionModel, type ActorPoseSequence, type MotionEventInput, type MotionModelAdapter, type MotionModelRequest, type MotionTrajectoryPoint } from "./motionModel";
-export { hashNormalized, hashString, stableSerialize } from "./normalizedHash";
+export { computePassHash, hashNormalized, hashString, stableSerialize } from "./normalizedHash";
 export { bakeDenseObjectMotion, MOTION_BAKE_TOLERANCE } from "../shot/motionBake";
 export {
   GENERATED_MOTION_SOURCE,
