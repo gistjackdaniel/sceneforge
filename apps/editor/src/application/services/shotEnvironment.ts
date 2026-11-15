@@ -14,5 +14,7 @@ export const environmentFromWorld = (world: WorldAsset | undefined): Environment
     geometryUri: proxy ? undefined : geometryUri,
     coordinateSystem: world.coordinateSystem,
     unitScaleMeters: world.unitScaleMeters > 0 ? world.unitScaleMeters : 1,
+    ...(world.handedness ? { handedness: world.handedness } : {}),
+    ...(world.frontAxis ? { frontAxis: world.frontAxis } : {}),
   };
 };

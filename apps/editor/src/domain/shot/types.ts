@@ -1,6 +1,13 @@
+import type { Mat4, SceneCoordinateContract } from "../worlds/coordinates";
+import type { LegacyRef } from "../worlds/sceneState";
+
 export type ShotId = string & { readonly __brand: "ShotId" };
 export type SubjectId = string & { readonly __brand: "SubjectId" };
 export type AssetId = string & { readonly __brand: "AssetId" };
+/**
+ * Opaque take id. New takes are still minted as `take-${shotId}-${index}`.
+ * A later Scene-lane migration may rewrite those to `cam_<ULID>`. Do not parse the string.
+ */
 export type TakeId = string & { readonly __brand: "TakeId" };
 
 export const shotId = (value: string): ShotId => value as ShotId;
@@ -56,10 +63,27 @@ type SubjectBase = {
   locked: boolean;
 };
 
+/** Pinned asset revision. Instances do not follow the asset head. */
+export type AssetPin = {
+  assetId: string;
+  revisionId: string;
+};
+
 export type PosedSubject = SubjectBase & {
   kind: "human" | "object";
   representation: "box" | "sphere" | "mesh" | "marker";
   motion: Motion;
+  /**
+   * Persistent instance id. Human maps to an actor, object to an object.
+   * Absent on shots saved before the world-lane link; load fills it.
+   */
+  instanceId?: string;
+  /** `{assetId, revisionId}` pin. `assetVersion` is the integer ordinal of `revisionId`. */
+  assetRef?: AssetPin;
+  /** Earlier `subject-*`, `primitive:*`, and `file:*` ids. The live subject id is copied here too. */
+  legacyRefs?: LegacyRef[];
+  /** Set only by clone. The source instance id. */
+  clonedFrom?: string;
 };
 
 export type LightSubject = SubjectBase & {
@@ -128,6 +152,11 @@ export type Shot = {
   id: ShotId;
   name: string;
   time: ShotTime;
+  /**
+   * Canonical scene frame (`SCENE_COORDINATE_CONTRACT`).
+   * Placements stay in this frame. Object rotation stays `rotationEuler`.
+   */
+  coordinateContract?: SceneCoordinateContract;
   subjects: readonly Subject[];
   camera: ShotCamera;
   environment?: { worldId: string };
@@ -140,6 +169,17 @@ export type EnvironmentView = {
   geometryUri?: string;
   coordinateSystem: "Y_UP" | "Z_UP";
   unitScaleMeters: number;
+  /** Source-file handedness. Omitted values use the world default (`right`). */
+  handedness?: "right" | "left";
+  /** Source-file forward axis. Omitted values use `+Z` for Y-up and `-Y` for Z-up. */
+  frontAxis?: "+X" | "-X" | "+Y" | "-Y" | "+Z" | "-Z";
+};
+
+/** Contract-boundary pose. Rotation is a quaternion. The shot document still stores euler. */
+export type CanonicalPlacement = {
+  translation: Vec3;
+  rotation: Quat;
+  scale: Vec3;
 };
 
 export type ModelSubject =
@@ -149,6 +189,7 @@ export type ModelSubject =
       kind: "human" | "object";
       uri: string;
       placement: Transform;
+      canonicalPlacement: CanonicalPlacement;
       motion: Motion;
     }
   | {
@@ -157,6 +198,7 @@ export type ModelSubject =
       kind: "light";
       uri: string;
       placement: Transform;
+      canonicalPlacement: CanonicalPlacement;
       intensity: number;
       color: string;
     };
@@ -168,6 +210,8 @@ export type ShotModelInput = {
   rasterKeyframes: "forbidden";
   shotId: ShotId;
   time: ShotTime;
+  /** Same canonical frame as the shot. Camera export samples this take as OpenCV `c2w`. */
+  coordinateContract: SceneCoordinateContract;
   outputAspect: string;
   subjects: readonly ModelSubject[];
   camera: {
@@ -179,8 +223,11 @@ export type ShotModelInput = {
   environment?: {
     worldId: string;
     geometryUri: string;
+    /** Source-file up axis. Not the canonical frame. */
     coordinateSystem: "Y_UP" | "Z_UP";
     unitScaleMeters: number;
+    /** Present when the source file is not already the canonical scene, including `Z_UP`. */
+    importTransform?: Mat4;
   };
   recipe: { generateHash: string };
 };

@@ -109,6 +109,14 @@ const projectSchema = z
     references: z.record(z.string(), z.unknown()),
     dependencyMap: z.unknown(),
     worlds: z.record(z.string(), worldSchema),
+    /**
+     * One scene per world id. Declared here so a tighter project schema still
+     * keeps `Project.sceneStates` on save and load.
+     */
+    sceneStates: z.record(z.string(), z.object({
+      schemaVersion: z.literal(1),
+      worldId: z.string(),
+    }).passthrough()).optional(),
     assets: z.record(z.string(), assetSchema).optional().default({}),
     caches: z.record(z.string(), z.unknown()),
     connectors: z.record(z.string(), z.unknown()),

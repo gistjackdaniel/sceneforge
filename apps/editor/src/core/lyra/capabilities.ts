@@ -12,7 +12,7 @@ export const LYRA_DIRECTION_CAPABILITIES: ModelDirectionCapabilities = {
     performance_face: { mode: "reference", supportsLock: true, supportsStrength: true, supportsMask: true },
     audio: { mode: "exact", supportsLock: true, supportsStrength: false, supportsMask: false },
   },
-  performanceSourceTypes: ["text_prompt", "live_action", "motion_capture", "key_animation_2d"],
+  performanceSourceTypes: ["text_prompt", "live_action", "motion_capture", "key_animation_2d", "generated"],
   supportsFrameAccurateCues: true,
   supportsEditedAudio: true,
 };

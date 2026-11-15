@@ -68,6 +68,7 @@ export {
   quatSchema,
   sceneCoordinateContractSchema,
   sourceAxesFromWorldAsset,
+  shotFps,
   sourceAxesSchema,
   transformSchema,
   vec3Schema,
@@ -75,6 +76,7 @@ export {
   type SceneCoordinateContract,
   type ShotFpsRef,
   type ShotLocalFrame,
+  type ShotTimeSource,
   type SourceAxes,
   type Transform,
 } from "./coordinates";
@@ -118,6 +120,20 @@ export {
   instanceIdsForLegacyProp,
   migrateWorldToSceneState,
 } from "./migrateInstances";
+export {
+  collectImportedBones,
+  convertSourceRotation,
+  importRiggedActor,
+  invertImportTransform,
+  mapImportedRigParts,
+  riggedActorImportTransform,
+  riggedActorSourceKey,
+  type ImportedSkeletonNode,
+  type RiggedActorImportResult,
+  type RiggedActorImportSource,
+  type RiggedActorSourceAxes,
+  type RigPartDiagnostic,
+} from "./riggedActorImport";
 export {
   createPreservationCheck,
   projectSceneSelector,
