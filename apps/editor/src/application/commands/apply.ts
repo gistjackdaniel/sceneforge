@@ -15,6 +15,7 @@ import { performancePlanNodeIdForClip, performancePlanFromNode } from "../../dom
 import { cameraPathParamsFromNode, deleteCameraKeyframe, keyframeAtExactFrame, upsertCameraKeyframe } from "../../domain/graph/cameraPath";
 import { lensNodeIdForClip, lensParamsFromNode } from "../../domain/graph/lens";
 import { applyShotCommand } from "../../domain/shot";
+import { applyImportRiggedActor, applyRestoreSceneState } from "./importRiggedActor";
 
 const event = (type: DomainEvent["type"], payload: Record<string, unknown>, timestamp: string): DomainEvent => ({
   type,
@@ -942,6 +943,10 @@ export const applyCommand = (
         },
       };
     }
+    case "IMPORT_RIGGED_ACTOR":
+      return applyImportRiggedActor(project, command, timestamp);
+    case "RESTORE_SCENE_STATE":
+      return applyRestoreSceneState(project, command);
     case "SHOT": {
       const current = project.shots?.[command.command.shotId];
       if (!current) return fail("Shot not found.");

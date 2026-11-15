@@ -23,6 +23,7 @@ import { quaternionToAxisAngle } from "../../domain/utils/quaternion";
 import type { JointTarget } from "../../domain/performance/poseTrack";
 import { smplxJointForRigPart } from "../../domain/performance/rigJoints";
 import { JointPickPriority } from "../../presentation/pose/pickPriority";
+import { readGlbRig, type GlbRigRead } from "./readSkinnedMesh";
 
 export interface StageObjectTransform {
   id: string;
@@ -119,6 +120,10 @@ interface StageViewportProps {
   }) => void;
   onSelectionChange?: (selection: ViewportSelection | undefined) => void;
   onLoadStateChange?: (state: ViewportLoadState, message?: string) => void;
+  /** Rigged glTF actor. Empty when the file has no SkinnedMesh. */
+  onRiggedModelLoaded?: (payload: GlbRigRead & { objectId: string }) => void;
+  /** Unmapped bones. Shown as warnings, not load errors. */
+  rigWarnings?: readonly string[];
   onCapturePose?: (payload: { camera: StageCameraPose; objects: StageObjectTransform[] }) => void;
   onLiveCameraPose?: (camera: StageCameraPose) => void;
   captureSignal?: number;
@@ -283,6 +288,8 @@ export const StageViewport = ({
   onJointRotateCommit,
   onSelectionChange,
   onLoadStateChange,
+  onRiggedModelLoaded,
+  rigWarnings = [],
   onCapturePose,
   onLiveCameraPose,
   captureSignal = 0,
@@ -298,12 +305,14 @@ export const StageViewport = ({
   const onTransformCommitRef = useRef(onTransformCommit);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onLoadStateChangeRef = useRef(onLoadStateChange);
+  const onRiggedModelLoadedRef = useRef(onRiggedModelLoaded);
   const onCapturePoseRef = useRef(onCapturePose);
   const onJointRotateCommitRef = useRef(onJointRotateCommit);
   const onLiveCameraPoseRef = useRef(onLiveCameraPose);
   onTransformCommitRef.current = onTransformCommit;
   onSelectionChangeRef.current = onSelectionChange;
   onLoadStateChangeRef.current = onLoadStateChange;
+  onRiggedModelLoadedRef.current = onRiggedModelLoaded;
   onCapturePoseRef.current = onCapturePose;
   onJointRotateCommitRef.current = onJointRotateCommit;
   onLiveCameraPoseRef.current = onLiveCameraPose;
@@ -1061,6 +1070,10 @@ export const StageViewport = ({
           mesh.geometry.dispose();
           (mesh.material as THREE.Material).dispose();
           group.add(gltf.scene);
+          if (item.kind !== "actor") return;
+          const rig = readGlbRig(gltf.scene);
+          if (rig.bones.length === 0) return;
+          onRiggedModelLoadedRef.current?.({ objectId: item.id, ...rig });
         }, undefined, () => {
           if (!disposed) onLoadStateChangeRef.current?.("missing_artifact", `${item.name}: 3D 에셋을 불러올 수 없습니다.`);
         });
@@ -1338,6 +1351,11 @@ export const StageViewport = ({
         <span>{hud}</span>
         <span>{viewportPreviewBadge(previewPlan, showingImageProxy)}</span>
       </div>
+      {rigWarnings.length > 0 && (
+        <div className="viewport-rig-warnings" role="status" aria-live="polite">
+          {rigWarnings.map((warning, index) => <p key={`${warning}:${index}`}>{warning}</p>)}
+        </div>
+      )}
       {showCameraPreview && workspace === "build" && (
         <div className="scene-camera-preview-label">Camera preview · {outputAspectLabel}</div>
       )}
