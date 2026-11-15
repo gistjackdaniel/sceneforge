@@ -9,21 +9,26 @@ import { verticalFovFromLens } from "../../domain/graph/lens";
 import { buildRigPreset, CAMERA_RIG_PRESETS, type CameraRigPreset } from "../../domain/graph/cameraRig";
 import { clipStartFrame } from "../../domain/timeline/timing";
 import { firstViewportImageUri, resolveViewportRepresentation, type ViewportLoadState } from "../../domain/worlds/viewportRepresentation";
+import { commitFieldsFromCapture, viewportCaptureFromPoses } from "../../application/services/cameraCapture";
 import { eulerToQuaternionApprox, quaternionToEulerApprox } from "../../application/services/viewportCommit";
 import { environmentFromWorld } from "../../application/services/shotEnvironment";
 import { type ObjectPose } from "../../domain/worlds/sceneObjects";
 import { OUTPUT_ASPECT_PRESETS, outputAspectRatio, type OutputAspectPreset } from "../../domain/rendering";
 import {
   clipLocalFrame,
+  detectTrackingLoss,
   prepareModelInput,
+  readShotTimeFps,
+  resolveCameraTakeFrames,
   sampleCameraPathPositions,
-  sampleCameraPose,
+  sampleCameraPathStates,
   sampleSubjectPose,
   selectedTake,
   shotId,
   subjectId,
   takeId,
   subjectPoseKeys,
+  TRACKING_PATH_COLOR,
   type Lens,
   type ShotCommand,
 } from "../../domain/shot";
@@ -41,7 +46,7 @@ const tuple4 = (value: readonly [number, number, number, number]): [number, numb
 import { createLoopClock } from "../../application/ports/LoopClock";
 import { validateOutputAspect } from "./recordingPreflight";
 
-type LivePose = { position: [number, number, number]; rotation: [number, number, number] };
+type LivePose = { position: [number, number, number]; quaternion: [number, number, number, number] };
 
 type Drawer = "assets" | "layers" | "light" | "camera" | "settings" | null;
 const tools: Array<{ id: ViewportTool; icon: SceneIconName; label: string }> = [
@@ -87,8 +92,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const duration = shot?.time.durationFrames ?? 1;
   const start = clip ? clipStartFrame(clip) : 0;
   const frame = shot ? clipLocalFrame((sequence?.playhead ?? start) - start, shot) : 0;
-  const fps = shot?.time.fps ?? 24;
-  playbackRef.current = { duration, start, fps, clipId: clip?.id ?? "" };
+  const fps = shot ? readShotTimeFps(shot) : undefined;
+  playbackRef.current = { duration, start, fps: fps ?? 0, clipId: clip?.id ?? "" };
   const subjects = shot && !previewOnly ? shot.subjects : [];
   const objects = useMemo(() => subjects.map((subject) => {
     const pose = recording ? sampleSubjectPose(subject, frame) : subject.placement;
@@ -121,8 +126,15 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   takeRecordingRef.current = takeRecording;
   const cameraPose = useMemo((): StageCameraPose | undefined => {
     if (!shot || !take || shot.camera.status !== "ready") return undefined;
-    const pose = sampleCameraPose(take, frame, shot.camera.interpolation);
-    return { position: tuple3(pose.position), rotation: quaternionToEulerApprox(tuple4(pose.rotation)), focalLength: pose.focalLengthMm || lens.focalLengthMm };
+    const resolved = resolveCameraTakeFrames(take, shot, { frames: [frame] })[0];
+    if (!resolved) return undefined;
+    const rotation = tuple4(resolved.rotation);
+    return {
+      position: tuple3(resolved.position),
+      quaternion: rotation,
+      rotation: quaternionToEulerApprox(rotation),
+      focalLength: resolved.focalLengthMm || lens.focalLengthMm,
+    };
   }, [shot, take, frame, lens.focalLengthMm]);
   const sceneObjects = useMemo(() => objects.map((object) => ({
     ...object,
@@ -163,6 +175,14 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   }, [world, shot, subjects, project.sceneStates, dispatch]);
   const fallbackImageUri = useMemo(() => firstViewportImageUri(world, project.assets), [world, project.assets]);
   const pathSamples = useMemo(() => (shot ? sampleCameraPathPositions(shot, 64) : []).map(tuple3), [shot]);
+  const pathColors = useMemo(
+    () => (shot ? sampleCameraPathStates(shot, 64) : []).map((state) => {
+      const color = TRACKING_PATH_COLOR[state];
+      return [color[0], color[1], color[2]] as [number, number, number];
+    }),
+    [shot],
+  );
+  const lossIntervals = useMemo(() => (take ? detectTrackingLoss(take.samples) : []), [take]);
   const lighting = useMemo(() => {
     const light = subjects.find((subject) => subject.kind === "light");
     return light && light.kind === "light"
@@ -220,7 +240,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         key: {
           frame,
           position: camera.position,
-          rotation: eulerToQuaternionApprox(camera.rotation),
+          rotation: camera.quaternion ?? eulerToQuaternionApprox(camera.rotation),
           focalLengthMm: lens.focalLengthMm,
           focusDistanceM: lens.focusDistanceM,
           aperture: lens.aperture,
@@ -253,27 +273,22 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       const last = Math.max(...takeRef.current.keys());
       takeRef.current.set(last, live);
     }
-    const keyframes: CameraKeyframe[] = Array.from(takeRef.current.entries())
+    const fpsSafe = playbackRef.current.fps;
+    const poses = Array.from(takeRef.current.entries())
       .sort((a, b) => a[0] - b[0])
-      .map(([t, pose]) => ({
-        frame: t,
-        position: pose.position,
-        rotation: eulerToQuaternionApprox(pose.rotation),
-        focalLengthMm: lensParams.focalLengthMm,
-        focusDistanceM: lensParams.focusDistanceM,
-        aperture: lensParams.aperture,
-      }));
+      .map(([frame, pose]) => ({ frame, position: pose.position, quaternion: pose.quaternion }));
     takeRef.current.clear();
     setTakeRecording(false);
     setPlaying(false);
-    if (keyframes.length === 0) {
+    if (poses.length === 0 || !(fpsSafe > 0)) {
       setNotice(reason === "complete" ? "Record finished with no poses." : "Record cancelled.");
       return;
     }
-    const first = keyframes[0];
-    const spanFrames = keyframes[keyframes.length - 1].frame - first.frame + 1;
-    dispatch({ type: "shot", command: { type: "COMMIT_CAMERA_TAKE", shotId: shotId(clipId), source: "record", keys: [first, ...keyframes.slice(1)] } });
-    setNotice(`Take saved · ${keyframes.length} poses · ${spanFrames}f · selected for Generate`);
+    const captured = viewportCaptureFromPoses({ poses, fps: fpsSafe, lens: lensParams });
+    const fields = commitFieldsFromCapture(captured);
+    const spanFrames = poses[poses.length - 1].frame - poses[0].frame + 1;
+    dispatch({ type: "shot", command: { type: "COMMIT_CAMERA_TAKE", shotId: shotId(clipId), source: "record", ...fields } });
+    setNotice(`Take saved · ${poses.length} poses · ${spanFrames}f · selected for Generate`);
   }, [dispatch]);
   finishTakeRecordingRef.current = finishTakeRecording;
   const deletePose = () => {
@@ -356,7 +371,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
     }
     const { duration: totalFramesRaw, start: clipStart, fps: clipFps } = playbackRef.current;
     const totalFrames = Math.max(1, totalFramesRaw);
-    const fpsSafe = Math.max(1, clipFps);
+    if (!(clipFps > 0)) return;
+    const fpsSafe = clipFps;
     const loop = createLoopClock({
       duration: Math.max(0.001, totalFrames / fpsSafe),
       fps: fpsSafe,
@@ -371,7 +387,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       if (!takeRecordingRef.current || takeFinishingRef.current) return;
       const pose = livePoseRef.current;
       if (!pose) return;
-      const sample = { position: [...pose.position] as LivePose["position"], rotation: [...pose.rotation] as LivePose["rotation"] };
+      const sample = { position: [...pose.position] as LivePose["position"], quaternion: [...pose.quaternion] as LivePose["quaternion"] };
       if (lastStamped >= 0 && localFrame > lastStamped + 1) {
         const hold = takeRef.current.get(lastStamped) ?? sample;
         for (let frameIndex = lastStamped + 1; frameIndex < localFrame; frameIndex += 1) {
@@ -477,7 +493,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           cameraViz={recording ? ui.cameraViz : { frustum: false, path: false, lookAtLine: false, keyframeMarkers: false }}
           cameraPose={takeRecording ? undefined : cameraPose} sceneObjects={sceneObjects} selectedId={selectedId === "camera" ? undefined : selectedId}
           showCameraPreview={showPreview && !cameraView} readOnly={!canEdit || playing || takeRecording} lighting={lighting}
-          keyframes={cameraParams.keyframes} pathSamples={pathSamples} fovDegrees={verticalFovFromLens({ focalLengthMm: cameraPose?.focalLength ?? lens.focalLengthMm, sensorPreset: lens.sensorPreset === "super35" || lens.sensorPreset === "micro-four-thirds" ? lens.sensorPreset : "full-frame" })}
+          keyframes={cameraParams.keyframes} pathSamples={pathSamples} pathColors={pathColors} fovDegrees={verticalFovFromLens({ focalLengthMm: cameraPose?.focalLength ?? lens.focalLengthMm, sensorPreset: lens.sensorPreset === "super35" || lens.sensorPreset === "micro-four-thirds" ? lens.sensorPreset : "full-frame" })}
           playheadFrame={frame} lookAtTargetId={cameraParams.lookAtTargetElementId}
           onSelectionChange={(selection: ViewportSelection | undefined) => { if (selection && selection.kind !== "camera") { setSelectedId(selection.id); setDrawer("layers"); } }}
           onTransformCommit={(payload) => {
@@ -505,7 +521,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           rigWarnings={rigWarnings}
           onCapturePose={captureCamera}
           onLiveCameraPose={(camera) => {
-            livePoseRef.current = { position: camera.position, rotation: camera.rotation };
+            const quaternion = camera.quaternion ?? eulerToQuaternionApprox(camera.rotation);
+            livePoseRef.current = { position: camera.position, quaternion };
           }}
           captureSignal={captureSignal} focusSignal={focusSignal} resetSignal={resetSignal} />
       </div>
@@ -596,7 +613,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         </div>
       )}
     </div>
-    {recording && <SceneTimeline
+    {recording && fps !== undefined && <SceneTimeline
       tracks={tracks}
       activeId={selectedId}
       frame={frame}
@@ -610,6 +627,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         keyCount: take.keys.length,
         source: take.source,
       }))}
+      lossIntervals={lossIntervals}
       activeTakeId={cameraParams.activeTakeId}
       selectedFrames={selectedFrames}
       onSelect={select}
@@ -637,7 +655,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         setPlaying((value) => !value);
       }}
       onRecord={() => {
-        if (!clip || !canEdit) return;
+        if (!clip || !canEdit || fps === undefined) return;
         if (takeRecording) {
           finishTakeRecording("stop");
           return;
@@ -649,7 +667,10 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         takeRef.current.clear();
         takeFinishingRef.current = false;
         if (!livePoseRef.current && cameraPose) {
-          livePoseRef.current = { position: cameraPose.position, rotation: cameraPose.rotation };
+          livePoseRef.current = {
+            position: cameraPose.position,
+            quaternion: cameraPose.quaternion ?? eulerToQuaternionApprox(cameraPose.rotation),
+          };
         }
         setSelectedFrames([]);
         setDraft(undefined);
@@ -665,6 +686,6 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       onDelete={deletePose}
       disabled={!canEdit || Boolean(selected?.locked)}
     />}
-    <footer className="scene-status"><span>{previewOnly ? "Preview only · editing disabled" : notice || (draft ? "Unsaved object pose · K to save" : world ? `${world.name} · shared world / local shot` : "Persistent world · editable shot")}</span><span>{cameraParams.activeTakeId ? `${cameraParams.takes.find((take) => take.id === cameraParams.activeTakeId)?.name ?? "Take"} · ${cameraParams.keyframes.length} keys` : "No take"} · {fps} fps · {ui.outputAspect}</span></footer>
+    <footer className="scene-status"><span>{previewOnly ? "Preview only · editing disabled" : notice || (draft ? "Unsaved object pose · K to save" : world ? `${world.name} · shared world / local shot` : "Persistent world · editable shot")}</span><span>{cameraParams.activeTakeId ? `${cameraParams.takes.find((take) => take.id === cameraParams.activeTakeId)?.name ?? "Take"} · ${cameraParams.keyframes.length} keys` : "No take"}{fps !== undefined ? ` · ${fps} fps` : ""} · {ui.outputAspect}</span></footer>
   </section>;
 };
