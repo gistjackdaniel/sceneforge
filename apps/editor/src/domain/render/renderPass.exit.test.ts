@@ -4,7 +4,7 @@ import { parseShot } from "../shot/schema";
 import { selectedTake } from "../shot/queries";
 import { shotId, subjectId, type Shot } from "../shot/types";
 import { sanitizeLegacyToken } from "../worlds/ids";
-import { hashNormalized, hashString } from "./hashNormalized";
+import { hashNormalized, hashString } from "../../core/dependency";
 import { deriveInstanceTable } from "./instanceTable";
 import { renderPassHashInput, upstreamPassRecord } from "./passHash";
 import {

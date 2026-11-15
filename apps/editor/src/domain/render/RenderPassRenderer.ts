@@ -72,7 +72,7 @@ const parseContext = (shot: Shot, context: HashContext): { ok: true; spec: Rende
 
 /**
  * Protected AOV renderer.
- * Pass hashes use only `hashNormalized`. The reference backend is the
+ * Pass hashes use only `computePassHash` from `core/dependency`. The reference backend is the
  * bit-stable path; `gpu` needs a WebGL context and is not the exit contract.
  */
 export class RenderPassRenderer {

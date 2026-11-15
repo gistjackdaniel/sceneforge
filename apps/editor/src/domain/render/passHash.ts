@@ -1,20 +1,18 @@
+import { computePassHash } from "../../core/dependency";
 import type { Lens, Shot, Subject } from "../shot/types";
 import { selectedTake } from "../shot/queries";
-import { hashNormalized } from "./hashNormalized";
 import type { InstanceIdEntry, RenderPassKind, RenderPassSpec } from "./types";
 import { RENDER_PASS_KINDS, RENDERER_VERSION } from "./types";
 
 /**
  * Dependency keys for one protected AOV.
  *
- * The digest is a single `hashNormalized` call over this object.
- * TODO(#32): import `hashNormalized` from `core/dependency` once
- * `feat/graph-dependency-cache` is on `feat/shot-record`. Do not add another hash.
+ * The digest is one `computePassHash` call (`core/dependency`, which is
+ * `hashNormalized`). Identity strings stay out of this object. Only the
+ * instance-id pass adds `instanceMapHash`.
  *
  * `passHash` is the upstream digest, not this AOV's own digest.
- * `modelVersion` is the renderer version. Actor, object, camera-take, and
- * legacy id strings are absent; the instance-id pass carries them only as
- * `instanceMapHash`.
+ * `modelVersion` is the renderer version.
  */
 export type RenderPassHashInput = {
   assetRevision: { assetId: string; revisionId: string };
@@ -98,9 +96,9 @@ export const upstreamPassRecord = (shot: Shot, spec: RenderPassSpec): Record<str
   };
 };
 
-/** Parent pass hash. The same `hashNormalized` the AOV digest uses. */
+/** Parent pass hash. The same `computePassHash` the AOV digest uses. */
 export const upstreamPassHash = (shot: Shot, spec: RenderPassSpec): string =>
-  hashNormalized(upstreamPassRecord(shot, spec));
+  computePassHash(upstreamPassRecord(shot, spec));
 
 /** ID → pixel value rows. Array order is persistent-id order, which the hash keeps. */
 export const instanceMapRecord = (
@@ -111,7 +109,7 @@ export const instanceMapRecord = (
     .map((entry) => ({ persistentId: entry.persistentId, index: entry.index, role: entry.role }));
 
 export const instanceMapHash = (table: readonly InstanceIdEntry[]): string =>
-  hashNormalized(instanceMapRecord(table));
+  computePassHash(instanceMapRecord(table));
 
 export const renderPassHashInput = (
   shot: Shot,
@@ -134,13 +132,13 @@ export const renderPassHashInput = (
   return input;
 };
 
-/** AOV cache key. One `hashNormalized` call over `renderPassHashInput`. */
+/** AOV cache key. One `computePassHash` call over `renderPassHashInput`. */
 export const renderPassHash = (
   shot: Shot,
   kind: RenderPassKind,
   context: HashContext,
   table: readonly InstanceIdEntry[],
-): string => hashNormalized(renderPassHashInput(shot, kind, context, table));
+): string => computePassHash(renderPassHashInput(shot, kind, context, table));
 
 export const renderPassHashes = (
   shot: Shot,

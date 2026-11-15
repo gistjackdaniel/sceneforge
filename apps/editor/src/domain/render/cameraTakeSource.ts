@@ -47,11 +47,12 @@ const sensorPreset = (value: string | undefined): SensorPreset =>
 /**
  * Sole reader of shot-record camera takes for the protected render path.
  *
- * TODO(#34): `feat/scene-camera-track-shot-record` is still settling samples,
- * calibration, mapping, stored intrinsics, quaternion storage, `cam_<ULID>`,
- * and OpenCV c2w export. When that document lands, resolve pose and intrinsics
- * here and keep `CameraFrame` stable. Do not read the take anywhere else in
- * `domain/render`. fps comes from `Shot.time.fps` only.
+ * TODO(#34, #41): After `feat/scene-camera-track-shot-record` (#34) and
+ * `resolveCameraTakeFrames` (#41) land on `feat/shot-record`, this class
+ * should call `resolveCameraTakeFrames` and attach `cameraId` from
+ * `CameraTake.id` outside that return value. Until then, pose and intrinsics
+ * are sampled from the stored take keys. Do not read the take anywhere else
+ * in `domain/render`. fps comes from `Shot.time.fps` only.
  */
 export class CameraTakeSource {
   static trajectory(shot: Shot, spec: RenderPassSpec, frames: readonly number[]): CameraTrajectory | { ok: false; reason: string } {
