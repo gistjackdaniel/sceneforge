@@ -1,5 +1,5 @@
 import type { Shot, ShotCommand } from "../shot";
-import { selectedTake } from "../shot";
+import { selectedTake, shotFps } from "../shot";
 import type { ResolveContext, TargetResolver } from "../worlds/query";
 import { ActionGraphValidator, type ActionGraphIssue, type Event } from "./actionGraph";
 import { ContactSolver } from "./contactSolver";
@@ -35,9 +35,8 @@ export class Speech2MotionPipeline {
         errors: [{ path: ["shot_id"], message: "Action Graph의 shot_id가 샷 기록과 다릅니다.", code: "shot_mismatch" }],
       };
     }
-    // TODO(#31): keep reading `Shot.time.fps` until the shotFps lane is on this base.
-    const shotFps = request.shot.time.fps;
-    if (graph.fps !== shotFps) {
+    const fps = shotFps(request.shot);
+    if (graph.fps !== fps) {
       return {
         ok: false,
         errors: [{
@@ -50,7 +49,7 @@ export class Speech2MotionPipeline {
     const frameCount = request.shot.time.durationFrames;
     const model = request.model ?? new StubMotionModel();
     const inferred = model.infer({
-      shotFps,
+      shotFps: fps,
       frameCount,
       actors: graph.actors.map((actor) => ({
         actorId: actor.actor_id,
@@ -68,7 +67,7 @@ export class Speech2MotionPipeline {
     });
     const scene: Speech2MotionScene = {
       shotId: request.shot.id,
-      fps: shotFps,
+      fps,
       frameCount,
       camera: Speech2MotionPipeline.cameraSlice(request.shot),
       background: Speech2MotionPipeline.backgroundSlice(request.shot),

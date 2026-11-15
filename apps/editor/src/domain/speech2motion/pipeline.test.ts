@@ -155,7 +155,10 @@ const busCommand = (commands: readonly ShotCommand[]): DomainCommand => ({
   logMessage: "speech2motion",
 });
 
-const emptyResolver: TargetResolver = { resolve: () => [] };
+const emptyResolver: TargetResolver = {
+  resolve: () => [],
+  resolveMention: () => ({ status: "missing" }),
+};
 
 const room = () =>
   createWorldTargetResolver({
