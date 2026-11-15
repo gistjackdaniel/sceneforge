@@ -1,11 +1,12 @@
 import { z } from "zod";
+import { secondsToFrame } from "../timeline/timecode";
 import { frameToTimecode } from "./timecode";
 import { normalizeQuat } from "./cameraRotation";
 import { CameraTrackInputError, type CameraTrackCapture, type CameraTrackInputAdapter } from "./cameraTrack";
 import { devicePoseToScenePose, devicePointToScene, poseFromColumnMajor, type DeviceFramework } from "./deviceFrame";
-import { deviceTimestampToFrame, type DeviceTimestampToFrame } from "./deviceTimestamp";
+import { readShotTimeFps } from "./queries";
 import { trackingEventsForLoss } from "./trackingContinuity";
-import type { TrackingState, Vec3 } from "./types";
+import type { Shot, TrackingState, Vec3 } from "./types";
 
 const vec3 = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
 const quat = z.tuple([z.number().finite(), z.number().finite(), z.number().finite(), z.number().finite()]);
@@ -124,14 +125,14 @@ const poseOf = (framework: DeviceFramework, pose: MobileCameraSession["frames"][
 /**
  * Read a recorded ARKit, ARCore, or WebXR session as a `CameraTrackCapture`.
  * Axis conversion happens here. World calibration, loss fill, and drift stay layers.
- * `fps` is the caller's `Shot.time.fps`. `timestampToFrame` defaults to the
- * stand-in that the Timeline lane will replace.
+ * The clock is `readShotTimeFps(shot)`. A missing rate fails the ingest.
+ * Elapsed device seconds go through `secondsToFrame` (nearest frame, half up).
+ * Samples before the origin are dropped.
  */
 export const createMobileSessionAdapter = (
   session: unknown,
   options: {
-    fps: number;
-    timestampToFrame?: DeviceTimestampToFrame;
+    shot: Pick<Shot, "time">;
     originTimestampNs?: number;
   },
 ): CameraTrackInputAdapter => ({
@@ -140,23 +141,26 @@ export const createMobileSessionAdapter = (
     if (signal?.aborted) return Promise.reject(new CameraTrackInputError("Camera track capture was cancelled."));
     const parsed = mobileCameraSessionSchema.safeParse(session);
     if (!parsed.success) return Promise.reject(new CameraTrackInputError("Mobile session did not match the scene contract."));
-    if (!(typeof options.fps === "number" && Number.isFinite(options.fps) && options.fps > 0)) {
+    let fps: number;
+    try {
+      fps = readShotTimeFps(options.shot);
+    } catch {
       return Promise.reject(new CameraTrackInputError("Mobile session needs Shot.time.fps."));
     }
-    const toFrame = options.timestampToFrame ?? deviceTimestampToFrame;
     const cameraLocal = parsed.data.cameraLocal ?? "gl";
     const ordered = [...parsed.data.frames].sort((left, right) => left.timestampNs - right.timestampNs);
     const origin = options.originTimestampNs ?? ordered[0]?.timestampNs ?? 0;
     type SessionSample = CameraTrackCapture["samples"][number] & { trackingState: TrackingState };
     const byFrame = new Map<number, SessionSample>();
     for (const frame of ordered) {
+      const elapsedNs = frame.timestampNs - origin;
+      if (elapsedNs < 0) continue;
       let index: number;
       try {
-        index = toFrame({ deviceTimestampNs: frame.timestampNs, originTimestampNs: origin, fps: options.fps });
+        index = secondsToFrame(elapsedNs / 1e9, fps);
       } catch {
         return Promise.reject(new CameraTrackInputError("Mobile session needs Shot.time.fps."));
       }
-      if (index < 0) continue;
       const scene = poseOf(parsed.data.framework, frame.pose, cameraLocal);
       const point = devicePointToScene(parsed.data.framework, scene.position);
       byFrame.set(index, {
@@ -164,7 +168,7 @@ export const createMobileSessionAdapter = (
         position: [point[0], point[1], point[2]],
         rotation: normalizeQuat(scene.rotation),
         deviceTimestampNs: frame.timestampNs,
-        timecode: frameToTimecode(index, options.fps),
+        timecode: frameToTimecode(index, fps),
         trackingState: TRACKING_STATE[frame.trackingState],
         focalLengthMm: frame.intrinsics?.focalLengthMm ?? parsed.data.intrinsics?.focalLengthMm,
       });

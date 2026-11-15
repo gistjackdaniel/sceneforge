@@ -2,7 +2,8 @@ import { frameToTimecode } from "../../domain/shot/timecode";
 import { identityCalibration, identityMapping, type CameraTrackCapture } from "../../domain/shot/cameraTrack";
 import { SENSOR_SIZE_MM, type SensorPreset } from "../../domain/graph/lens";
 import { normalizeQuat } from "../../domain/shot/cameraRotation";
-import type { CameraKey, CameraSample, DeviceCalibration, Lens, ShotCommand } from "../../domain/shot";
+import { readShotTimeFps } from "../../domain/shot/queries";
+import type { CameraKey, CameraSample, DeviceCalibration, Lens, Shot, ShotCommand } from "../../domain/shot";
 
 export interface ViewportPoseSample {
   frame: number;
@@ -16,13 +17,14 @@ const sensorPreset = (value: string | undefined): SensorPreset =>
 /**
  * Turn viewport samples into a scene-space capture.
  * The viewport is already in the scene frame, so calibration stays identity.
- * `fps` is `Shot.time.fps`.
+ * The clock is `readShotTimeFps(shot)`. A missing rate throws before a take is written.
  */
 export const viewportCaptureFromPoses = (input: {
   poses: readonly ViewportPoseSample[];
-  fps: number;
+  shot: Pick<Shot, "time">;
   lens: Lens;
 }): CameraTrackCapture => {
+  const fps = readShotTimeFps(input.shot);
   const sensor = SENSOR_SIZE_MM[sensorPreset(input.lens.sensorPreset)];
   const samples = [...input.poses]
     .sort((left, right) => left.frame - right.frame)
@@ -32,8 +34,8 @@ export const viewportCaptureFromPoses = (input: {
         frame,
         position: [pose.position[0], pose.position[1], pose.position[2]] as [number, number, number],
         rotation: normalizeQuat(pose.quaternion),
-        deviceTimestampNs: Math.round((frame / input.fps) * 1e9),
-        timecode: frameToTimecode(frame, input.fps),
+        deviceTimestampNs: Math.round((frame / fps) * 1e9),
+        timecode: frameToTimecode(frame, fps),
         trackingState: "normal" as const,
         focalLengthMm: input.lens.focalLengthMm,
         focusDistanceM: input.lens.focusDistanceM,

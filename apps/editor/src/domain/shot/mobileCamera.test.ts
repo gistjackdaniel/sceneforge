@@ -2,9 +2,8 @@ import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import { BackboneCameraBuilder } from "../rendering/backboneV01";
 import { buildBackboneCameraForClip } from "../../application/services/backboneExport";
-import { commitFieldsFromCapture } from "../../application/services/cameraCapture";
+import { commitFieldsFromCapture, viewportCaptureFromPoses } from "../../application/services/cameraCapture";
 import { rotateVec3, quaternionAngleRadians } from "./cameraRotation";
-import { deviceTimestampToFrame } from "./deviceTimestamp";
 import { devicePointToScene, devicePoseToScenePose, glCameraLook, opencvCameraToGl, poseFromColumnMajor } from "./deviceFrame";
 import {
   CameraTrackInputError,
@@ -15,7 +14,7 @@ import {
 } from "./cameraTrack";
 import { createMobileSessionAdapter } from "./mobileSession";
 import { applyShotCommand } from "./evolve";
-import { recordedTakePlaybackPoses, resolveCameraTakeFrames, selectedTake, viewportPlaybackPoses } from "./queries";
+import { readShotTimeFps, recordedTakePlaybackPoses, resolveCameraTakeFrames, selectedTake, shotFps, viewportPlaybackPoses } from "./queries";
 import { parseShot } from "./schema";
 import { cameraLayersFromSamples, detectTrackingLoss, estimateReferenceDrift } from "./trackingContinuity";
 import { solveWorldCalibration } from "./worldCalibration";
@@ -26,6 +25,10 @@ import type { Project } from "../project/types";
 const now = "2026-11-12T00:00:00.000Z";
 const FPS = 16;
 const FRAMES = 128;
+
+const shotClock = (fps: number): Pick<Shot, "time"> => ({
+  time: { fps, durationFrames: FRAMES, origin: "clip_local" },
+});
 
 const emptyShot = (): Shot => parseShot({
   schemaVersion: 1,
@@ -161,24 +164,57 @@ describe("mobile session frame", () => {
     expect(glCameraLook(gl)[2]).toBeCloseTo(1, 6);
   });
 
-  it("uses the injected timestamp function and Shot.time.fps", async () => {
-    expect(deviceTimestampToFrame({ deviceTimestampNs: 1_000_000_000, originTimestampNs: 0, fps: FPS })).toBe(FPS);
-    const seen: number[] = [];
+  it("maps a recorded session onto Shot.time.fps", async () => {
     const capture = await readCameraTrackCapture(createMobileSessionAdapter(session(), {
-      fps: FPS,
+      shot: emptyShot(),
       originTimestampNs: 5_000_000_000,
-      timestampToFrame: ({ fps, deviceTimestampNs, originTimestampNs }) => {
-        seen.push(fps);
-        return Math.round(((deviceTimestampNs - originTimestampNs) / 1e9) * fps);
-      },
     }));
-    expect(seen.every((fps) => fps === FPS)).toBe(true);
     expect(capture.samples).toHaveLength(FRAMES);
     expect(capture.samples[0]?.frame).toBe(0);
     expect(capture.samples[FRAMES - 1]?.frame).toBe(FRAMES - 1);
     expect(capture.samples[0]?.position).toEqual([0, 1.5, 0]);
-    await expect(readCameraTrackCapture(createMobileSessionAdapter({ frames: [] }, { fps: FPS }))).rejects.toBeInstanceOf(CameraTrackInputError);
+    await expect(readCameraTrackCapture(createMobileSessionAdapter({ frames: [] }, { shot: emptyShot() }))).rejects.toBeInstanceOf(CameraTrackInputError);
     await expect(readCameraTrackCapture(createFixtureCameraTrackAdapter(capture), AbortSignal.abort())).rejects.toBeInstanceOf(CameraTrackInputError);
+  });
+
+  it("rounds device time to the nearest shot frame and drops samples before the origin", async () => {
+    const poseAt = (x: number) => ({
+      kind: "quaternion" as const,
+      position: [x, 0, 0] as [number, number, number],
+      rotation: [0, 0, 0, 1] as [number, number, number, number],
+    });
+    const oneSecond = await readCameraTrackCapture(createMobileSessionAdapter({
+      framework: "arkit",
+      frames: [{ timestampNs: 1_000_000_000, pose: poseAt(0), trackingState: "normal" }],
+    }, { shot: emptyShot(), originTimestampNs: 0 }));
+    expect(oneSecond.samples[0]?.frame).toBe(FPS);
+
+    const tie = await readCameraTrackCapture(createMobileSessionAdapter({
+      framework: "arcore",
+      frames: [
+        { timestampNs: 249_999_999, pose: poseAt(0), trackingState: "TRACKING" },
+        { timestampNs: 250_000_000, pose: poseAt(1), trackingState: "TRACKING" },
+      ],
+    }, { shot: shotClock(2), originTimestampNs: 0 }));
+    expect(tie.samples.map((sample) => sample.frame)).toEqual([0, 1]);
+
+    const dropped = await readCameraTrackCapture(createMobileSessionAdapter({
+      framework: "webxr",
+      frames: [
+        { timestampNs: 500_000_000, pose: poseAt(1), trackingState: "tracked" },
+        { timestampNs: 1_000_000_000, pose: poseAt(2), trackingState: "tracked" },
+        { timestampNs: 1_250_000_000, pose: poseAt(3), trackingState: "tracked" },
+      ],
+    }, { shot: shotClock(2), originTimestampNs: 1_000_000_000 }));
+    expect(dropped.samples.map((sample) => [sample.frame, sample.position[0]])).toEqual([[0, 2], [1, 3]]);
+
+    await expect(readCameraTrackCapture(createMobileSessionAdapter({
+      framework: "webxr",
+      frames: [{ timestampNs: 0, pose: poseAt(0), trackingState: "normal" }],
+    }, { shot: shotClock(29.97) }))).rejects.toMatchObject({
+      name: "CameraTrackInputError",
+      message: "Mobile session needs Shot.time.fps.",
+    });
   });
 });
 
@@ -254,7 +290,7 @@ describe("world calibration", () => {
 
 describe("resolveCameraTakeFrames", () => {
   const commitMobile = async () => {
-    const capture = await readCameraTrackCapture(createMobileSessionAdapter(session(), { fps: FPS }));
+    const capture = await readCameraTrackCapture(createMobileSessionAdapter(session(), { shot: emptyShot() }));
     const calibration = {
       ...identityCalibration(),
       calibrationId: "cal_room",
@@ -423,6 +459,47 @@ describe("resolveCameraTakeFrames", () => {
     expect(event?.estimatedDriftM).toBeCloseTo(0.05, 6);
     expect(event?.correction?.translation[2]).toBeCloseTo(-0.05, 6);
     expect(event?.frame).toBe(10);
+  });
+
+  it("fails when Shot.time.fps is missing instead of using the display rate", async () => {
+    const broken: Shot = { ...emptyShot(), time: { fps: Number.NaN, durationFrames: FRAMES, origin: "clip_local" } };
+    expect(shotFps(broken)).toBe(24);
+    expect(() => readShotTimeFps(broken)).toThrow("Shot time.fps is required.");
+
+    await expect(readCameraTrackCapture(createMobileSessionAdapter({
+      framework: "arkit",
+      frames: [{
+        timestampNs: 1_000_000_000,
+        pose: { kind: "quaternion", position: [0, 0, 0], rotation: [0, 0, 0, 1] },
+        trackingState: "normal",
+      }],
+    }, { shot: broken, originTimestampNs: 0 }))).rejects.toMatchObject({
+      name: "CameraTrackInputError",
+      message: "Mobile session needs Shot.time.fps.",
+    });
+
+    expect(() => viewportCaptureFromPoses({
+      poses: [{ frame: 24, position: [0, 0, 0], quaternion: [0, 0, 0, 1] }],
+      shot: broken,
+      lens: broken.camera.lens,
+    })).toThrow("Shot time.fps is required.");
+
+    expect(() => step(broken, {
+      type: "COMMIT_CAMERA_TAKE",
+      shotId: broken.id,
+      source: "manual",
+      keys: [{ frame: 0, position: [0, 0, 0], rotation: [0, 0, 0, 1], focalLengthMm: 35 }],
+    })).toThrow("Shot time.fps is required.");
+    expect(broken.camera.status).toBe("empty");
+
+    const ready = step(emptyShot(), {
+      type: "KEY_CAMERA",
+      shotId: shotId("clip-mobile"),
+      key: { frame: 0, position: [0, 0, 0], rotation: [0, 0, 0, 1], focalLengthMm: 35 },
+    });
+    const take = selectedTake(ready);
+    if (!take) throw new Error("missing take");
+    expect(() => resolveCameraTakeFrames(take, broken)).toThrow("Shot time.fps is required.");
   });
 });
 
