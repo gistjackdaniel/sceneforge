@@ -1,32 +1,28 @@
 import type { DomainCommand } from "../commands/types";
 import { executeCommand, type CommandBusState, type ExecuteResult } from "../commands/bus";
+import { readShotTimeFps, type Shot } from "../../domain/shot";
 import type { ActionGraph } from "../../domain/speech2motion/actionGraph";
 import { produceSpeech2Motion, type Speech2MotionInput } from "../../domain/speech2motion/produce";
 import { toFrame } from "./toFrame";
 
-/** Shot clock. Frame rate lives only on `Shot.time.fps`. */
-export type ShotClockSource = {
-  time: { fps: number; durationFrames?: number };
-};
+/** Shot clock. Frame rate lives only on `Shot.time`. */
+export type ShotClockSource = Pick<Shot, "time">;
 
 /**
  * Frame rate for a speech2motion graph.
- * Reads `Shot.time.fps` and does not consult `Sequence.fps` or `DEFAULT_CLIP_FPS`.
+ * `readShotTimeFps` fails when `Shot.time.fps` is missing. Timeline's `shotFps` fallback is not used.
  */
-export const speech2MotionFps = (shot: ShotClockSource): number => shot.time.fps;
+export const speech2MotionFps = (shot: ShotClockSource): number => readShotTimeFps(shot);
 
 /**
  * Clock whose seconds convert with `toFrame(t, shot.time.fps)`.
- * A rate passed into `toFrame` cannot replace the shot rate.
+ * A rate passed into `toFrame` cannot replace the shot rate. Frames stay integers.
  */
 export const speech2MotionClock = (shot: ShotClockSource): Speech2MotionInput["clock"] => {
-  const fps = speech2MotionFps(shot);
-  if (!(typeof fps === "number" && Number.isFinite(fps) && fps > 0)) {
-    throw new Error("Shot.time.fps must be a positive number.");
-  }
+  const fps = readShotTimeFps(shot);
   return {
     fps,
-    toFrame: (tSeconds: number, _rate: number) => toFrame(tSeconds, speech2MotionFps(shot)),
+    toFrame: (tSeconds: number, _rate: number) => toFrame(tSeconds, readShotTimeFps(shot)),
   };
 };
 
