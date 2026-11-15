@@ -231,12 +231,14 @@ const layeredKeys = (take: CameraTake): CameraTake["keys"] | undefined => {
  * motion mapping, in that order. Each requested frame is the OpenCV c2w and
  * the intrinsics of that pose. The returned objects contain no id strings.
  * Viewport playback and recorded-take playback both call this.
+ * A missing `Shot.time.fps` throws. This path does not use the display fallback.
  */
 export const resolveCameraTakeFrames = (
   take: CameraTake,
   shot: Pick<Shot, "time" | "camera">,
   options?: ResolveCameraTakeOptions,
 ): ResolvedCameraFrame[] => {
+  readShotTimeFps(shot);
   const keys = layeredKeys(take);
   if (!keys) return [];
   const virtual: CameraTake = { ...take, keys };

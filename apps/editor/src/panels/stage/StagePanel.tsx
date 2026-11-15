@@ -90,6 +90,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [notice, setNotice] = useState("");
   const [selectedFrames, setSelectedFrames] = useState<number[]>([]);
   const shot = clip ? project.shots?.[clip.id] : undefined;
+  const shotRef = useRef(shot);
+  shotRef.current = shot;
   const duration = shot?.time.durationFrames ?? 1;
   const start = clip ? clipStartFrame(clip) : 0;
   const frame = shot
@@ -280,18 +282,18 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       const last = Math.max(...takeRef.current.keys());
       takeRef.current.set(last, live);
     }
-    const fpsSafe = playbackRef.current.fps;
     const poses = Array.from(takeRef.current.entries())
       .sort((a, b) => a[0] - b[0])
       .map(([frame, pose]) => ({ frame, position: pose.position, quaternion: pose.quaternion }));
     takeRef.current.clear();
     setTakeRecording(false);
     setPlaying(false);
-    if (poses.length === 0 || !(fpsSafe > 0)) {
+    const recordedShot = shotRef.current;
+    if (poses.length === 0 || !recordedShot) {
       setNotice(reason === "complete" ? "Record finished with no poses." : "Record cancelled.");
       return;
     }
-    const captured = viewportCaptureFromPoses({ poses, fps: fpsSafe, lens: lensParams });
+    const captured = viewportCaptureFromPoses({ poses, shot: recordedShot, lens: lensParams });
     const fields = commitFieldsFromCapture(captured);
     const spanFrames = poses[poses.length - 1].frame - poses[0].frame + 1;
     dispatch({ type: "shot", command: { type: "COMMIT_CAMERA_TAKE", shotId: shotId(clipId), source: "record", ...fields } });

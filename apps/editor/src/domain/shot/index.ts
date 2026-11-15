@@ -88,7 +88,6 @@ export type {
 } from "./queries";
 export { detectTrackingLoss, TRACKING_PATH_COLOR } from "./trackingContinuity";
 export type { TrackingLossInterval } from "./trackingContinuity";
-export { deviceTimestampToFrame, type DeviceTimestampToFrame } from "./deviceTimestamp";
 export { devicePointToScene, devicePoseToScenePose } from "./deviceFrame";
 export { createMobileSessionAdapter, mobileCameraSessionSchema } from "./mobileSession";
 export type { MobileCameraSession } from "./mobileSession";
