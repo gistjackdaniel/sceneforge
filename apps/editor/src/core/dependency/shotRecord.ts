@@ -2,8 +2,10 @@ import type { RenderCacheEntry } from "../../domain/rendering/types";
 import type { EnvironmentView, Motion, Shot, ShotModelInput } from "../../domain/shot";
 import { prepareModelInput } from "../../domain/shot";
 import type { WorldAsset } from "../../domain/worlds/types";
+import { ZodError } from "zod";
+import { cameraPassFrames } from "./cameraFrames";
 import { contactHandDownstreamId, contactHandId } from "./editScope";
-import { computePassHash, dependencyFingerprintSchema, productionOutputSchema, type ProductionOutput } from "./fingerprint";
+import { buildDependencyFingerprint, computePassHash, productionOutputSchema, type ProductionOutput } from "./fingerprint";
 import { shotRecordFps, type ShotFpsSource } from "./shotFps";
 import type { ProductionSelector } from "./selector";
 import { bindWorldPhase1Selectors, resolveWorldAssetId } from "./worldPhase1";
@@ -17,9 +19,11 @@ import { bindWorldPhase1Selectors, resolveWorldAssetId } from "./worldPhase1";
  * Frames are integers. fps comes from `ShotFpsSource` (`shot.time.fps`).
  * Pose rotation is intrinsic Euler `XYZ`. Subject and take ids are the invalidation
  * unit on the selector and are omitted from the pass hash, so a rename keeps the hash.
+ * Camera-dependent passes hash `CameraTakeSource` frames (`resolveCameraTakeFrames`)
+ * through `hashNormalized`. Calibration and drift change that digest. Take ids do not.
  */
 
-export type ShotDependencyEntity = "actor" | "prop" | "room" | "pose" | "camera_take";
+export type ShotDependencyEntity = "actor" | "prop" | "room" | "pose" | "camera_take" | "render_pass";
 
 export interface PoseFrame {
   frame: number;
@@ -33,7 +37,7 @@ export interface ShotDependencyNode {
   entity: ShotDependencyEntity;
   /** Subject id, camera take id, or `WorldAsset.id`. */
   unitId: string;
-  channel?: "root_motion" | "contact_hand" | "contact_hand_downstream";
+  channel?: "root_motion" | "contact_hand" | "contact_hand_downstream" | "camera_downstream";
   /** Pass slice stored in the cache. Its normalized hash is `hash`. */
   value: unknown;
   hash: string;
@@ -177,13 +181,19 @@ export const projectShotDependencies = (input: {
     downstreamNodeIds: string[],
     channel?: ShotDependencyNode["channel"],
   ): { ok: true } | { ok: false; message: string } => {
-    const fingerprint = dependencyFingerprintSchema.safeParse({
-      assetRevision: { assetId, revisionId },
-      modelVersion: input.modelVersion,
-      seed: input.seed,
-      passHash: computePassHash(value),
-    });
-    if (!fingerprint.success) {
+    let fingerprint;
+    try {
+      fingerprint = buildDependencyFingerprint({
+        assetId,
+        revisionId,
+        modelVersion: input.modelVersion,
+        seed: input.seed,
+        pass: value,
+      });
+    } catch (error) {
+      if (!(error instanceof ZodError)) {
+        throw error;
+      }
       return { ok: false, message: "의존성 키가 올바르지 않습니다." };
     }
     const parsed = productionOutputSchema.safeParse({
@@ -191,7 +201,7 @@ export const projectShotDependencies = (input: {
       nodeId,
       cacheId: `cache:${nodeId}`,
       selector,
-      fingerprint: fingerprint.data,
+      fingerprint,
       constraint: "generative",
       computedAt,
     });
@@ -204,7 +214,7 @@ export const projectShotDependencies = (input: {
       unitId,
       channel,
       value,
-      hash: fingerprint.data.passHash,
+      hash: fingerprint.passHash,
       downstreamNodeIds,
     });
     downstreamByNodeId[nodeId] = downstreamNodeIds;
@@ -307,22 +317,58 @@ export const projectShotDependencies = (input: {
     return { ok: false, error: "invalid_shot", message: roomResult.message };
   }
 
+  const sampled = cameraPassFrames(shot);
+  if (!sampled.ok) {
+    return { ok: false, error: "invalid_shot", message: sampled.message };
+  }
+  if (sampled.fps !== fps) {
+    return { ok: false, error: "invalid_shot", message: "fps는 Shot.time.fps 에서만 읽습니다." };
+  }
+
+  const takeId = model.camera.takeId;
+  const cameraNodeId = `camera:${takeId}`;
+  const downstreamId = `${cameraNodeId}:downstream`;
+  const cameraValue = {
+    entity: "camera_take" as const,
+    fps,
+    eulerOrder: "XYZ" as const,
+    interpolation: model.camera.interpolation,
+    lens: model.camera.lens,
+    keys: model.camera.keys,
+    framesHash: sampled.framesHash,
+  };
   const cameraResult = push(
     "camera_take",
-    model.camera.takeId,
-    `camera:${model.camera.takeId}`,
-    { kind: "camera_track", cameraTrackId: model.camera.takeId, assetId },
-    {
-      entity: "camera_take",
-      fps,
-      interpolation: model.camera.interpolation,
-      lens: model.camera.lens,
-      keys: model.camera.keys,
-    },
-    [],
+    takeId,
+    cameraNodeId,
+    { kind: "camera_track", cameraTrackId: takeId, assetId },
+    cameraValue,
+    [downstreamId],
   );
   if (!cameraResult.ok) {
     return { ok: false, error: "invalid_shot", message: cameraResult.message };
+  }
+  const cameraHash = nodes[nodes.length - 1]?.hash;
+  if (!cameraHash) {
+    return { ok: false, error: "invalid_shot", message: "카메라 패스 해시를 만들지 못했습니다." };
+  }
+  const downstreamResult = push(
+    "render_pass",
+    takeId,
+    downstreamId,
+    { kind: "render_pass", renderPassId: "camera_frames", assetId },
+    {
+      entity: "render_pass",
+      upstreamPassHash: cameraHash,
+      framesHash: sampled.framesHash,
+      eulerOrder: "XYZ" as const,
+      fps,
+    },
+    [],
+    "camera_downstream",
+  );
+  if (!downstreamResult.ok) {
+    return { ok: false, error: "invalid_shot", message: downstreamResult.message };
   }
 
   const bound = bindWorldPhase1Selectors({

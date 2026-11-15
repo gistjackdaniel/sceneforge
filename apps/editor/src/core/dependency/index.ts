@@ -56,6 +56,7 @@ export {
   type EditScopeInput,
   type ShotEntityScope,
 } from "./editScope";
+export { cameraPassFrames, cameraPassRenderSpec, type CameraPassFrame, type CameraPassFrames } from "./cameraFrames";
 export { shotRecordFps, type ShotFpsSource } from "./shotFps";
 export { projectShotDependencies, type ShotDependencyGraph, type ShotDependencyNode } from "./shotRecord";
 export {
