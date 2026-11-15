@@ -3,6 +3,7 @@ import { emptyCommandBusState, executeCommand } from "./bus";
 import type { Project } from "../../domain/project/types";
 import { defaultPorts, type NodeBase } from "../../domain/graph/types";
 import { buildBackboneCameraForClip } from "../services/backboneExport";
+import { parseShot } from "../../domain/shot/schema";
 
 const now = "2026-01-01T00:00:00.000Z";
 const ports = defaultPorts();
@@ -128,6 +129,22 @@ const projectFixture = (): Project => ({
   libraryNodeIds: [],
 });
 
+const withShotClock = (project: Project): Project => ({
+  ...project,
+  shots: {
+    ...project.shots,
+    "clip-a": parseShot({
+      schemaVersion: 1,
+      id: "clip-a",
+      name: "Shot",
+      time: { fps: 24, durationFrames: 48, origin: "clip_local" },
+      subjects: [],
+      camera: { status: "empty", lens: { focalLengthMm: 35, focusDistanceM: 3, aperture: 2.8 }, interpolation: "linear" },
+      renders: [],
+    }),
+  },
+});
+
 describe("recorded camera take to Backbone v0.1", () => {
   it("applies a batch of ADD_CAMERA_KEYFRAME as one undo unit and exports valid c2w", () => {
     const project = projectFixture();
@@ -143,7 +160,7 @@ describe("recorded camera take to Backbone v0.1", () => {
     const applied = executeCommand(project, bus, { type: "APPLY_COMMANDS", commands: cmds }, now);
     expect(applied.result.ok).toBe(true);
     expect(applied.bus.undoStack.length).toBe(1); // single inverse for batch
-    const cam = buildBackboneCameraForClip(applied.project, "clip-a", [1280, 720], { fps: 16, numFrames: 48 });
+    const cam = buildBackboneCameraForClip(withShotClock(applied.project), "clip-a", [1280, 720], { numFrames: 48 });
     expect(cam.frames.length).toBe(48);
     const c2w = cam.frames[0].c2w;
     expect(c2w.length).toBe(4);

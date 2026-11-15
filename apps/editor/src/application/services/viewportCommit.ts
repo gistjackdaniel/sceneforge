@@ -1,3 +1,7 @@
+export {
+  eulerToQuaternion as eulerToQuaternionApprox,
+  quaternionToEuler as quaternionToEulerApprox,
+} from "../../domain/shot/euler";
 import type { NodeKind } from "../../domain/graph/types";
 import type { CameraInterpolation, CameraKeyframe, CameraPathParams } from "../../domain/graph/cameraPath";
 import { cameraPathParamsFromNode, upsertCameraKeyframe } from "../../domain/graph/cameraPath";
@@ -90,35 +94,3 @@ export const buildCameraKeyframePatch = (
   return interpolation ? { ...next, interpolation } : next;
 };
 
-export const eulerToQuaternionApprox = (
-  euler: [number, number, number],
-): [number, number, number, number] => {
-  const [x, y, z] = euler;
-  const cx = Math.cos(x / 2);
-  const sx = Math.sin(x / 2);
-  const cy = Math.cos(y / 2);
-  const sy = Math.sin(y / 2);
-  const cz = Math.cos(z / 2);
-  const sz = Math.sin(z / 2);
-  return [
-    sx * cy * cz - cx * sy * sz,
-    cx * sy * cz + sx * cy * sz,
-    cx * cy * sz - sx * sy * cz,
-    cx * cy * cz + sx * sy * sz,
-  ];
-};
-
-export const quaternionToEulerApprox = (
-  quat: [number, number, number, number],
-): [number, number, number] => {
-  const [x, y, z, w] = quat;
-  const sinrCosp = 2 * (w * x + y * z);
-  const cosrCosp = 1 - 2 * (x * x + y * y);
-  const roll = Math.atan2(sinrCosp, cosrCosp);
-  const sinp = 2 * (w * y - z * x);
-  const pitch = Math.abs(sinp) >= 1 ? (Math.sign(sinp) * Math.PI) / 2 : Math.asin(sinp);
-  const sinyCosp = 2 * (w * z + x * y);
-  const cosyCosp = 1 - 2 * (y * y + z * z);
-  const yaw = Math.atan2(sinyCosp, cosyCosp);
-  return [roll, pitch, yaw];
-};

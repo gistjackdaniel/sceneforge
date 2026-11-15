@@ -18,6 +18,7 @@ import {
 import type { WorldAsset } from "../../domain/worlds/types";
 import type { ViewportTool, ViewportWorkspace, CameraVizState } from "../../state/editorStore";
 import type { CameraKeyframe } from "../../domain/graph/cameraPath";
+import { EULER_ORDER } from "../../domain/shot/euler";
 import type { SceneObject } from "../../domain/worlds/sceneObjects";
 import { quaternionToAxisAngle } from "../../domain/utils/quaternion";
 import type { JointTarget } from "../../domain/performance/poseTrack";
@@ -36,6 +37,8 @@ export interface StageObjectTransform {
 export interface StageCameraPose {
   position: [number, number, number];
   rotation: [number, number, number];
+  /** Stored camera orientation. Wins over `rotation` so the Euler order cannot change the shot. */
+  quaternion?: [number, number, number, number];
   focalLength: number;
 }
 
@@ -102,6 +105,8 @@ interface StageViewportProps {
   objectTransforms?: StageObjectTransform[];
   keyframes?: CameraKeyframe[];
   pathSamples?: Array<[number, number, number]>;
+  /** RGB 0..1, one color per path sample. Loss intervals use a different tint. */
+  pathColors?: Array<[number, number, number]>;
   lookAtTargetId?: string;
   fovDegrees?: number;
   playheadFrame?: number;
@@ -281,6 +286,7 @@ export const StageViewport = ({
   objectTransforms = [],
   keyframes = [],
   pathSamples = [],
+  pathColors,
   lookAtTargetId,
   fovDegrees = 50,
   playheadFrame = 0,
@@ -378,6 +384,7 @@ export const StageViewport = ({
 
     const shotCamera = new THREE.Group();
     shotCamera.name = "shot-camera";
+    shotCamera.rotation.order = EULER_ORDER;
     shotCamera.position.set(2.5, 1.8, 3.2);
     const shotBody = new THREE.Mesh(
       new THREE.ConeGeometry(0.12, 0.28, 12),
@@ -520,7 +527,7 @@ export const StageViewport = ({
           startX: event.clientX,
           startY: event.clientY,
           startPosition: api.shotCamera.position.clone(),
-          startRotation: new THREE.Euler().setFromQuaternion(api.shotCamera.quaternion),
+          startRotation: new THREE.Euler().setFromQuaternion(api.shotCamera.quaternion, EULER_ORDER),
         };
         return;
       }
@@ -734,12 +741,14 @@ export const StageViewport = ({
         }
         api.shotCamera.position.copy(camera.position);
         api.shotCamera.quaternion.copy(camera.quaternion);
-        api.shotCamera.rotation.setFromQuaternion(camera.quaternion);
+        api.shotCamera.rotation.order = EULER_ORDER;
+        api.shotCamera.rotation.setFromQuaternion(camera.quaternion, EULER_ORDER);
         api.shotCamera.updateMatrixWorld(true);
         if (onLiveCameraPoseRef.current) {
           onLiveCameraPoseRef.current({
             position: [api.shotCamera.position.x, api.shotCamera.position.y, api.shotCamera.position.z],
             rotation: [api.shotCamera.rotation.x, api.shotCamera.rotation.y, api.shotCamera.rotation.z],
+            quaternion: [api.shotCamera.quaternion.x, api.shotCamera.quaternion.y, api.shotCamera.quaternion.z, api.shotCamera.quaternion.w],
             focalLength: 35,
           });
         }
@@ -939,6 +948,7 @@ export const StageViewport = ({
         return;
       }
       object.position.set(...item.position);
+      object.rotation.order = EULER_ORDER;
       object.rotation.set(...item.rotation);
       if (item.scale) object.scale.set(...item.scale);
     });
@@ -963,7 +973,9 @@ export const StageViewport = ({
       return;
     }
     api.shotCamera.position.set(...cameraPose.position);
-    api.shotCamera.rotation.set(...cameraPose.rotation);
+    api.shotCamera.rotation.order = EULER_ORDER;
+    if (cameraPose.quaternion) api.shotCamera.quaternion.set(...cameraPose.quaternion);
+    else api.shotCamera.rotation.set(...cameraPose.rotation);
     const lookTarget = lookAtTargetId ? api.objects.get(lookAtTargetId) : undefined;
     if (lookTarget) {
       api.shotCamera.lookAt(lookTarget.position);
@@ -1019,10 +1031,27 @@ export const StageViewport = ({
     }
 
     if (pathSamples.length > 0) {
-      api.pathLine.geometry.dispose();
-      api.pathLine.geometry = new THREE.BufferGeometry().setFromPoints(
+      const geometry = new THREE.BufferGeometry().setFromPoints(
         pathSamples.map((point) => new THREE.Vector3(...point)),
       );
+      const material = api.pathLine.material as THREE.LineBasicMaterial;
+      if (pathColors && pathColors.length === pathSamples.length) {
+        const colors = new Float32Array(pathColors.length * 3);
+        pathColors.forEach((color, index) => {
+          colors[index * 3] = color[0];
+          colors[index * 3 + 1] = color[1];
+          colors[index * 3 + 2] = color[2];
+        });
+        geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+        material.vertexColors = true;
+        material.color.setHex(0xffffff);
+      } else {
+        material.vertexColors = false;
+        material.color.setHex(0x79c0ff);
+      }
+      material.needsUpdate = true;
+      api.pathLine.geometry.dispose();
+      api.pathLine.geometry = geometry;
       const current = cameraPose?.position ?? pathSamples[0];
       api.playheadMarker.position.set(...current);
     }
@@ -1035,7 +1064,7 @@ export const StageViewport = ({
         lookTarget.position.clone(),
       ]);
     }
-  }, [keyframes, playheadFrame, cameraViz, pathSamples, lookAtTargetId, workspace, cameraPose]);
+  }, [keyframes, playheadFrame, cameraViz, pathSamples, pathColors, lookAtTargetId, workspace, cameraPose]);
 
   useEffect(() => {
     const api = sceneApiRef.current;
@@ -1079,6 +1108,7 @@ export const StageViewport = ({
         });
       }
       group.position.set(...item.position);
+      group.rotation.order = EULER_ORDER;
       group.rotation.set(...item.rotation);
       group.scale.set(...item.scale);
       group.visible = item.visible;
@@ -1107,6 +1137,7 @@ export const StageViewport = ({
       object.userData.locked = item.locked;
       if (!api.dragging) {
         object.position.set(...item.position);
+        object.rotation.order = EULER_ORDER;
         object.rotation.set(...item.rotation);
         object.scale.set(...item.scale);
       }
@@ -1284,11 +1315,13 @@ export const StageViewport = ({
     const shot = sceneApiRef.current.shotCamera;
     const source = workspaceRef.current === "record" ? sceneApiRef.current.camera : shot;
     source.updateMatrixWorld(true);
-    source.rotation.setFromQuaternion(source.quaternion);
+    source.rotation.order = EULER_ORDER;
+    source.rotation.setFromQuaternion(source.quaternion, EULER_ORDER);
     onCapturePose({
       camera: {
         position: [source.position.x, source.position.y, source.position.z],
         rotation: [source.rotation.x, source.rotation.y, source.rotation.z],
+        quaternion: [source.quaternion.x, source.quaternion.y, source.quaternion.z, source.quaternion.w],
         focalLength: cameraPose?.focalLength ?? 35,
       },
       objects: objectTransformsCaptured,
@@ -1321,7 +1354,9 @@ export const StageViewport = ({
       liveOverrideRef.current = false;
       if (cameraPose) {
         api.camera.position.set(...cameraPose.position);
-        api.camera.rotation.set(...cameraPose.rotation);
+        api.camera.rotation.order = EULER_ORDER;
+        if (cameraPose.quaternion) api.camera.quaternion.set(...cameraPose.quaternion);
+        else api.camera.rotation.set(...cameraPose.rotation);
         api.shotCamera.position.copy(api.camera.position);
         api.shotCamera.quaternion.copy(api.camera.quaternion);
       }

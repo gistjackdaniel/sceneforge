@@ -4,6 +4,7 @@ import type { GraphEdge } from "../../domain/graph/types";
 import type { CameraRigPreset } from "../../domain/graph/cameraRig";
 import type { JointTarget } from "../../domain/performance/poseTrack";
 import type { ShotCommand } from "../../domain/shot";
+import type { ActionGraph } from "../../domain/speech2motion/actionGraph";
 import type { RiggedActorImportSource } from "../../domain/worlds/riggedActorImport";
 import type { SceneState } from "../../domain/worlds/sceneState";
 
@@ -175,6 +176,15 @@ export type DomainCommand =
       type: "RESTORE_SCENE_STATE";
       worldId: string;
       scene: SceneState;
+    }
+  | {
+      /**
+       * Store a ready speech2motion graph for one shot.
+       * `graph: null` drops a graph recorded earlier. This is the only write path for that document.
+       */
+      type: "RECORD_SPEECH2MOTION";
+      shotId: string;
+      graph: ActionGraph | null;
     };
 
 export type DomainEventType =
@@ -192,7 +202,8 @@ export type DomainEventType =
   | "RenderCompleted"
   | "RenderFailed"
   | "ShotChanged"
-  | "RiggedActorImported";
+  | "RiggedActorImported"
+  | "Speech2MotionRecorded";
 
 export interface DomainEvent {
   type: DomainEventType;

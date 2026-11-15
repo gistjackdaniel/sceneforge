@@ -35,6 +35,12 @@ const framesNearClientX = (
     return Math.abs(x - (clientX - bounds.left)) <= hitPx;
   });
 
+export interface SceneLossInterval {
+  state: "limited" | "not_available";
+  startFrame: number;
+  endFrame: number;
+}
+
 export const SceneTimeline = ({
   tracks,
   activeId,
@@ -46,6 +52,7 @@ export const SceneTimeline = ({
   takes,
   activeTakeId,
   selectedFrames,
+  lossIntervals = [],
   onSelect,
   onScrub,
   onPlay,
@@ -67,6 +74,7 @@ export const SceneTimeline = ({
   takes: SceneTakeOption[];
   activeTakeId?: string;
   selectedFrames: number[];
+  lossIntervals?: SceneLossInterval[];
   onSelect: (id: string) => void;
   onScrub: (frame: number) => void;
   onPlay: () => void;
@@ -207,6 +215,9 @@ export const SceneTimeline = ({
         {!takeRecording && selectedFrames.length > 0 && (
           <span className="scene-selection-count">{selectedFrames.length} selected</span>
         )}
+        {lossIntervals.length > 0 && (
+          <span className="scene-loss-note" title="Tracking loss on the original take">Tracking loss</span>
+        )}
         <span className="scene-spacer" />
         <button className="scene-primary" onClick={onKey} disabled={disabled || playing || takeRecording}>
           <SceneIcon name="key" />
@@ -297,6 +308,17 @@ export const SceneTimeline = ({
               onPointerCancel={endLaneDrag}
             >
               <span className="scene-playhead" style={{ left: `${Math.min(frame / end, 1) * 100}%` }} />
+              {track.id === "camera" && lossIntervals.map((interval) => (
+                <span
+                  key={`${interval.state}-${interval.startFrame}-${interval.endFrame}`}
+                  className={`scene-loss-span is-${interval.state}`}
+                  style={{
+                    left: `${(interval.startFrame / end) * 100}%`,
+                    width: `${Math.max(((interval.endFrame - interval.startFrame) / end) * 100, 0.4)}%`,
+                  }}
+                  title={interval.state === "not_available" ? "Tracking lost" : "Tracking limited"}
+                />
+              ))}
               {marquee?.trackId === track.id && (
                 <span
                   className="scene-marquee"

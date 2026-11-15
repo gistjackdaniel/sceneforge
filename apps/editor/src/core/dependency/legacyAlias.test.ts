@@ -17,10 +17,8 @@ import { applyRevisionPlan } from "../cache/invalidation";
 
 const ACT_A = "act_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const SHOT = "shot-contact";
-const PREVIOUS_TAKE = `take-${SHOT}-1`;
-/** Same shape as Scene PR #34 `legacyCameraTakeId`, without importing that module. */
-const sanitizeLegacyToken = (value: string): string => value.replace(/[^A-Za-z0-9_]/g, "_");
-const CAM = `cam_legacy_${sanitizeLegacyToken(SHOT)}__${sanitizeLegacyToken(PREVIOUS_TAKE)}`;
+/** Id stored before #34. `parseShot` rewrites it and keeps the original on `legacyRefs`. */
+const LEGACY_TAKE_ID = `take-${SHOT}-1`;
 const now = "2026-11-12T00:00:00.000Z";
 
 const step = (shot: Shot, command: ShotCommand): Shot => {
@@ -57,10 +55,11 @@ const stage = () => {
     throw new Error("camera");
   }
   shot = parseShot({ ...shot, environment: { worldId: world.id } });
-  if (shot.camera.status !== "ready" || shot.camera.takes[0].id !== PREVIOUS_TAKE) {
-    throw new Error(shot.camera.status === "ready" ? shot.camera.takes[0].id : "camera");
+  const mintedTakeId = shot.camera.status === "ready" ? shot.camera.takes[0].id : undefined;
+  if (!mintedTakeId) {
+    throw new Error("camera");
   }
-  return { world, shot, environment: environmentFromWorld(world) };
+  return { world, shot, environment: environmentFromWorld(world), mintedTakeId };
 };
 
 const project = (shot: Shot, worldId: string, world: ReturnType<typeof createMeshExampleWorld>, environment: ReturnType<typeof environmentFromWorld>) => {
@@ -87,75 +86,76 @@ const find = (nodes: ShotDependencyNode[], channel: ShotDependencyNode["channel"
 
 describe("legacy id cache alias", () => {
   it("hits the renamed root, background, and camera without changing the pass hash, then still limits B's contact recompute", () => {
-    const { world, shot, environment } = stage();
+    const { world, shot, environment, mintedTakeId } = stage();
     const before = project(shot, world.id, world, environment);
     const rootBefore = find(before.nodes, "root_motion", "subject-A");
     const roomBefore = before.nodes.find((node) => node.entity === "room");
-    const cameraBefore = before.nodes.find((node) => node.entity === "camera_take");
-    if (!roomBefore || !cameraBefore) {
+    const cameraBefore = before.nodes.find((node) => node.entity === "camera_take" && node.unitId === mintedTakeId);
+    if (!roomBefore || !cameraBefore || shot.camera.status !== "ready") {
       throw new Error("room or camera missing");
+    }
+
+    const legacyParsed = parseShot({
+      ...shot,
+      camera: {
+        ...shot.camera,
+        selectedTakeId: LEGACY_TAKE_ID,
+        takes: shot.camera.takes.map((take) =>
+          take.id === mintedTakeId ? { ...take, id: LEGACY_TAKE_ID, legacyRefs: [] } : take,
+        ),
+      },
+    });
+    if (legacyParsed.camera.status !== "ready") {
+      throw new Error("camera");
+    }
+    const legacyTake = legacyParsed.camera.takes[0];
+    const legacyRef = legacyTake.legacyRefs.find((ref) => ref.kind === "camera_take");
+    expect(legacyRef).toEqual({ kind: "camera_take", shotId: shot.id, takeId: LEGACY_TAKE_ID });
+    expect(legacyTake.id).toBe("cam_legacy_shot_contact__take_shot_contact_1");
+    if (!legacyRef) {
+      return;
     }
 
     const migrated = parseShot({
       ...shot,
       subjects: shot.subjects.map((subject) => subject.id === "subject-A" ? { ...subject, id: ACT_A } : subject),
-      camera: shot.camera.status === "ready"
-        ? {
-            ...shot.camera,
-            selectedTakeId: CAM,
-            takes: shot.camera.takes.map((take) => take.id === PREVIOUS_TAKE ? { ...take, id: CAM } : take),
-          }
-        : shot.camera,
+      camera: {
+        ...shot.camera,
+        selectedTakeId: legacyTake.id,
+        takes: shot.camera.takes.map((take) =>
+          take.id === mintedTakeId
+            ? {
+                ...take,
+                id: legacyTake.id,
+                legacyRefs: [{ kind: "camera_take" as const, shotId: shot.id, takeId: mintedTakeId }],
+              }
+            : take,
+        ),
+      },
     });
     const after = project(migrated, world.id, world, environment);
     const rootAfter = find(after.nodes, "root_motion", ACT_A);
     const roomAfter = after.nodes.find((node) => node.entity === "room");
-    const cameraAfter = after.nodes.find((node) => node.entity === "camera_take" && node.unitId === CAM);
-    if (!roomAfter || !cameraAfter) {
+    const cameraAfter = after.nodes.find((node) => node.entity === "camera_take" && node.unitId === legacyTake.id);
+    if (!roomAfter || !cameraAfter || migrated.camera.status !== "ready") {
       throw new Error("migrated room or camera missing");
     }
-
-    const previousTake = shot.camera.status === "ready" ? shot.camera.takes[0] : undefined;
-    if (!previousTake) {
-      throw new Error("camera");
+    const renamedTake = migrated.camera.takes[0];
+    const renamedRef = renamedTake.legacyRefs.find((ref) => ref.kind === "camera_take");
+    expect(renamedRef).toEqual({ kind: "camera_take", shotId: shot.id, takeId: mintedTakeId });
+    if (!renamedRef) {
+      return;
     }
-    const migratedTake = {
-      schemaVersion: 1 as const,
-      id: CAM,
-      name: previousTake.name,
-      source: previousTake.source,
-      keys: previousTake.keys,
-      createdAt: previousTake.createdAt,
-      samples: [] as const,
-      calibration: {
-        calibrationId: "cal-legacy",
-        arFramework: "viewport" as const,
-        scale: 1,
-        rotation: [0, 0, 0, 1] as const,
-        translation: [0, 0, 0] as const,
-        method: "identity" as const,
-        createdAt: now,
-      },
-      trackingEvents: [] as const,
-      mapping: {
-        mode: "one_to_one" as const,
-        translationGain: [1, 1, 1] as const,
-        rotationGain: 1,
-        smoothing: 0,
-        timeScale: 1,
-        timeOffsetFrames: 0,
-      },
-      legacyRefs: [{ kind: "camera_take" as const, shotId: shot.id, takeId: PREVIOUS_TAKE }],
-      rotationStorage: "quaternion_xyzw" as const,
-    };
+
     const carriers = [
       { id: ACT_A, legacyRefs: [{ kind: "shot_subject", shotId: shot.id, subjectId: "subject-A" }] },
-      migratedTake,
+      renamedTake,
+      legacyTake,
     ];
     const resolver = createLegacyIdResolver(carriers);
-    expect(CAM).toBe("cam_legacy_shot_contact__take_shot_contact_1");
     expect(resolver.resolveLegacyId("subject-A")).toBe(ACT_A);
-    expect(resolver.resolveLegacyId(PREVIOUS_TAKE)).toBe(CAM);
+    expect(resolver.resolveLegacyId(renamedRef.takeId)).toBe(renamedTake.id);
+    expect(resolver.resolveLegacyId(legacyRef.takeId)).toBe(legacyTake.id);
     expect(resolver.resolveLegacyId(shot.id)).toBeUndefined();
 
     for (const [previous, next] of [
@@ -171,8 +171,9 @@ describe("legacy id cache alias", () => {
       expect(next.hash).toBe(previous.hash);
       expect(JSON.stringify(next.value)).not.toContain(ACT_A);
       expect(JSON.stringify(next.value)).not.toContain("subject-A");
-      expect(JSON.stringify(next.value)).not.toContain(CAM);
-      expect(JSON.stringify(next.value)).not.toContain(PREVIOUS_TAKE);
+      expect(JSON.stringify(next.value)).not.toContain(legacyTake.id);
+      expect(JSON.stringify(next.value)).not.toContain(LEGACY_TAKE_ID);
+      expect(JSON.stringify(next.value)).not.toContain(mintedTakeId);
     }
 
     const actorB = migrated.subjects.find((subject) => subject.name === "B");
