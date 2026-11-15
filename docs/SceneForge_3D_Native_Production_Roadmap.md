@@ -311,7 +311,8 @@ flowchart TD
 ### Phase 1 — Editable 3D Core + Voice-directed Motion
 
 - 임포트한 rigged actor에 persistent ID 할당.
-- 음성 명령을 구조화된 action/event와 pose sequence로 변환.
+- 음성 명령을 구조화된 action/event와 pose sequence로 변환. 이때 pose란 표정도 포함한다.
+- 웹캠의 표정을 리얼타임으로 지정한 rigged actor에 적용.
 - IK/contact graph를 통해 악수와 컵 내려놓기를 프리뷰에서 수행.
 - shot/asset versioning + undo/revert + 타임라인 오버라이드 구현.
 
