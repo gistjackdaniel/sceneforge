@@ -16,16 +16,19 @@ import { type ObjectPose } from "../../domain/worlds/sceneObjects";
 import { OUTPUT_ASPECT_PRESETS, outputAspectRatio, type OutputAspectPreset } from "../../domain/rendering";
 import {
   clipLocalFrame,
+  detectTrackingLoss,
   prepareModelInput,
   readShotTimeFps,
+  resolveCameraTakeFrames,
   sampleCameraPathPositions,
-  sampleCameraPose,
+  sampleCameraPathStates,
   sampleSubjectPose,
   selectedTake,
   shotId,
   subjectId,
   takeId,
   subjectPoseKeys,
+  TRACKING_PATH_COLOR,
   type Lens,
   type ShotCommand,
 } from "../../domain/shot";
@@ -120,13 +123,14 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   takeRecordingRef.current = takeRecording;
   const cameraPose = useMemo((): StageCameraPose | undefined => {
     if (!shot || !take || shot.camera.status !== "ready") return undefined;
-    const pose = sampleCameraPose(take, frame, shot.camera.interpolation);
-    const rotation = tuple4(pose.rotation);
+    const resolved = resolveCameraTakeFrames(take, shot, { frames: [frame] })[0];
+    if (!resolved) return undefined;
+    const rotation = tuple4(resolved.rotation);
     return {
-      position: tuple3(pose.position),
+      position: tuple3(resolved.position),
       quaternion: rotation,
       rotation: quaternionToEulerApprox(rotation),
-      focalLength: pose.focalLengthMm || lens.focalLengthMm,
+      focalLength: resolved.focalLengthMm || lens.focalLengthMm,
     };
   }, [shot, take, frame, lens.focalLengthMm]);
   const sceneObjects = useMemo(() => objects.map((object) => ({
@@ -168,6 +172,14 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   }, [world, shot, subjects, project.sceneStates, dispatch]);
   const fallbackImageUri = useMemo(() => firstViewportImageUri(world, project.assets), [world, project.assets]);
   const pathSamples = useMemo(() => (shot ? sampleCameraPathPositions(shot, 64) : []).map(tuple3), [shot]);
+  const pathColors = useMemo(
+    () => (shot ? sampleCameraPathStates(shot, 64) : []).map((state) => {
+      const color = TRACKING_PATH_COLOR[state];
+      return [color[0], color[1], color[2]] as [number, number, number];
+    }),
+    [shot],
+  );
+  const lossIntervals = useMemo(() => (take ? detectTrackingLoss(take.samples) : []), [take]);
   const lighting = useMemo(() => {
     const light = subjects.find((subject) => subject.kind === "light");
     return light && light.kind === "light"
@@ -449,7 +461,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           cameraViz={recording ? ui.cameraViz : { frustum: false, path: false, lookAtLine: false, keyframeMarkers: false }}
           cameraPose={takeRecording ? undefined : cameraPose} sceneObjects={sceneObjects} selectedId={selectedId === "camera" ? undefined : selectedId}
           showCameraPreview={showPreview && !cameraView} readOnly={!canEdit || playing || takeRecording} lighting={lighting}
-          keyframes={cameraParams.keyframes} pathSamples={pathSamples} fovDegrees={verticalFovFromLens({ focalLengthMm: cameraPose?.focalLength ?? lens.focalLengthMm, sensorPreset: lens.sensorPreset === "super35" || lens.sensorPreset === "micro-four-thirds" ? lens.sensorPreset : "full-frame" })}
+          keyframes={cameraParams.keyframes} pathSamples={pathSamples} pathColors={pathColors} fovDegrees={verticalFovFromLens({ focalLengthMm: cameraPose?.focalLength ?? lens.focalLengthMm, sensorPreset: lens.sensorPreset === "super35" || lens.sensorPreset === "micro-four-thirds" ? lens.sensorPreset : "full-frame" })}
           playheadFrame={frame} lookAtTargetId={cameraParams.lookAtTargetElementId}
           onSelectionChange={(selection: ViewportSelection | undefined) => { if (selection && selection.kind !== "camera") { setSelectedId(selection.id); setDrawer("layers"); } }}
           onTransformCommit={(payload) => {
@@ -583,6 +595,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         keyCount: take.keys.length,
         source: take.source,
       }))}
+      lossIntervals={lossIntervals}
       activeTakeId={cameraParams.activeTakeId}
       selectedFrames={selectedFrames}
       onSelect={select}
