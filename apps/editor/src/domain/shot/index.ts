@@ -1,8 +1,13 @@
 export type {
   AssetId,
   CameraInterpolation,
+  CameraIntrinsics,
   CameraKey,
+  CameraMotionMapping,
+  CameraSample,
   CameraTake,
+  CameraTakeLegacyRef,
+  DeviceCalibration,
   EmptyCamera,
   EnvironmentView,
   GenerateBlocker,
@@ -33,9 +38,13 @@ export type {
   SubjectDraft,
   SubjectId,
   TakeId,
+  TrackingEvent,
+  TrackingState,
   Transform,
   Vec3,
 } from "./types";
+export { EULER_ORDER } from "./euler";
+export { legacyCameraTakeId, mintCameraTakeId } from "./takeId";
 export { shotId, subjectId, takeId } from "./types";
 export { parseShot, parseShotModelInput, shotModelInputSchema, shotSchema } from "./schema";
 export { applyShotCommand, type ShotEdit } from "./evolve";
@@ -60,10 +69,28 @@ export {
   clipLocalFrame,
   generateHash,
   hasSelectedTake,
+  readShotTimeFps,
+  recordedTakePlaybackPoses,
+  resolveCameraTakeFrames,
   sampleCameraPathPositions,
+  sampleCameraPathStates,
   sampleCameraPose,
   sampleSubjectPose,
   selectedTake,
   shotFps,
   subjectPoseKeys,
+  viewportPlaybackPoses,
 } from "./queries";
+export type {
+  ResolvedCameraFrame,
+  ResolvedCameraIntrinsics,
+  ResolveCameraTakeOptions,
+} from "./queries";
+export { detectTrackingLoss, TRACKING_PATH_COLOR } from "./trackingContinuity";
+export type { TrackingLossInterval } from "./trackingContinuity";
+export { deviceTimestampToFrame, type DeviceTimestampToFrame } from "./deviceTimestamp";
+export { devicePointToScene, devicePoseToScenePose } from "./deviceFrame";
+export { createMobileSessionAdapter, mobileCameraSessionSchema } from "./mobileSession";
+export type { MobileCameraSession } from "./mobileSession";
+export { CalibrationError, solveWorldCalibration } from "./worldCalibration";
+export type { FloorCalibrationInput, PointCalibrationInput, WorldCalibrationInput } from "./worldCalibration";

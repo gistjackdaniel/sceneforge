@@ -3,6 +3,7 @@ import { emptyCommandBusState, executeCommand } from "./bus";
 import type { Project } from "../../domain/project/types";
 import { defaultPorts, type NodeBase } from "../../domain/graph/types";
 import { buildBackboneCameraForClip } from "../services/backboneExport";
+import { parseShot } from "../../domain/shot/schema";
 
 const now = "2026-01-01T00:00:00.000Z";
 const ports = defaultPorts();
@@ -135,6 +136,22 @@ const projectFixture = (): Project => ({
   libraryNodeIds: [],
 });
 
+const withShotClock = (project: Project): Project => ({
+  ...project,
+  shots: {
+    ...project.shots,
+    "clip-a": parseShot({
+      schemaVersion: 1,
+      id: "clip-a",
+      name: "Shot",
+      time: { fps: 24, durationFrames: 48, origin: "clip_local" },
+      subjects: [],
+      camera: { status: "empty", lens: { focalLengthMm: 35, focusDistanceM: 3, aperture: 2.8 }, interpolation: "linear" },
+      renders: [],
+    }),
+  },
+});
+
 describe("camera keyframe domain commands", () => {
   it("records combined translate+rotate as a single command (UPDATE_CAMERA_KEYFRAME)", () => {
     let project = projectFixture();
@@ -200,7 +217,7 @@ describe("camera keyframe domain commands", () => {
       },
       now,
     );
-    const cam = buildBackboneCameraForClip(r2.project, "clip-a", [1280, 720], { fps: 16, numFrames: 48 });
+    const cam = buildBackboneCameraForClip(withShotClock(r2.project), "clip-a", [1280, 720], { numFrames: 48 });
     expect(cam.version).toBe("0.1");
     expect(cam.convention).toBe("opencv_c2w");
     expect(cam.frames.length).toBe(48);

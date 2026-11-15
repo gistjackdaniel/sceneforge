@@ -116,6 +116,11 @@ const instanceFields = {
 export const actorInstanceSchema = z.object({
   ...instanceFields,
   type: z.literal("actor"),
+  /**
+   * Stable reimport identity: asset revision, source path, and node name.
+   * Absent when the actor did not come through `importRiggedActor`. A clone does not keep it.
+   */
+  importKey: z.string().min(1).optional(),
   skeleton: z.object({
     model: z.literal("smplx"),
     gender: z.enum(["neutral", "male", "female"]).default("neutral"),
@@ -156,17 +161,35 @@ const RIG_PART_ALIASES: Record<RigPart, readonly string[]> = {
   pelvis: ["pelvis", "골반"],
 };
 
+const rigPartQuery = (refText: string): string => refText.toLowerCase().normalize("NFKC").trim();
+
+/** Every rig part named in the text. "손" matches none. "오른손과 왼손" matches both. */
+export const matchRigParts = (refText: string): RigPart[] => {
+  const query = rigPartQuery(refText);
+  if (!query) return [];
+  return rigPartSchema.options.filter((part) =>
+    RIG_PART_ALIASES[part].some((alias) => query.includes(alias.toLowerCase())),
+  );
+};
+
+/** Drop rig-part words so the remainder can be resolved as an actor or object. */
+export const stripRigPartWords = (refText: string): string => {
+  let text = refText.normalize("NFKC");
+  const aliases = rigPartSchema.options.flatMap((part) => [...RIG_PART_ALIASES[part]]);
+  aliases.sort((a, b) => b.length - a.length);
+  for (const alias of aliases) {
+    text = text.replace(new RegExp(alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ");
+  }
+  return text.replace(/\s+/g, " ").trim();
+};
+
 /**
  * Map a spoken or written part name to a rig part and its default SMPL-X joint.
  * Returns undefined when the text names zero parts or more than one.
- * This is not on `TargetResolver`; that port only gained optional instance and element ids.
+ * `createWorldTargetResolver().resolveMention` is the speech path that pairs this part with an instance id.
  */
 export const resolveRigPart = (refText: string): { rigPart: RigPart; joint: string } | undefined => {
-  const query = refText.toLowerCase().normalize("NFKC").trim();
-  if (!query) return undefined;
-  const hits = rigPartSchema.options.filter((part) =>
-    RIG_PART_ALIASES[part].some((alias) => query.includes(alias.toLowerCase())),
-  );
+  const hits = matchRigParts(refText);
   if (hits.length !== 1) return undefined;
   const rigPart = hits[0]!;
   return { rigPart, joint: SMPLX_PART_JOINT[rigPart] };
@@ -276,6 +299,14 @@ export const sceneStateSchema = z
 
     const overlap = Object.keys(scene.actors).filter((id) => Object.prototype.hasOwnProperty.call(scene.objects, id));
     if (overlap.length > 0) issue(ctx, "actor and object ids overlap", ["actors"]);
+
+    const importKeys = new Map<string, string>();
+    for (const actor of Object.values(scene.actors)) {
+      if (!actor.importKey) continue;
+      const previous = importKeys.get(actor.importKey);
+      if (previous) issue(ctx, "rigged actor import key is duplicated", ["actors", actor.id, "importKey"]);
+      importKeys.set(actor.importKey, actor.id);
+    }
 
     const instances: Record<string, SceneInstance> = { ...scene.actors, ...scene.objects };
     for (const instance of Object.values(instances)) {
@@ -421,7 +452,8 @@ const idInScene = (scene: SceneState, id: string): boolean =>
  * Clone an instance onto a newly minted id.
  * Copies the asset pin, rest transform, and skeleton or role. Does not copy attachments.
  * Motion clips and shot overrides are not in this scene, so they are not copied.
- * The source id stays. `clonedFrom` records it.
+ * The source id stays. `clonedFrom` records it. A rigged-actor `importKey` is not copied,
+ * so the clone is not a second import of the same source.
  */
 export const cloneInstance = (scene: SceneState, instanceId: string, newId: string, label: string): SceneState => {
   const instance = findInstance(scene, instanceId);
@@ -433,7 +465,8 @@ export const cloneInstance = (scene: SceneState, instanceId: string, newId: stri
   }
   if (idInScene(scene, newId)) throw new WorldDomainError("id_reused", "Persistent ids are never reused.");
   if (instance.type === "actor") {
-    const copy: ActorInstance = { ...instance, id: newId, label, clonedFrom: instance.id, deletedAt: undefined };
+    const { importKey: _importKey, ...rest } = instance;
+    const copy: ActorInstance = { ...rest, id: newId, label, clonedFrom: instance.id, deletedAt: undefined };
     return writeInstance(scene, copy);
   }
   const copy: ObjectInstance = {
