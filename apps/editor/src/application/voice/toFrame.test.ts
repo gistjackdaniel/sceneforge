@@ -35,13 +35,13 @@ describe("toFrame", () => {
 });
 
 describe("shotFps", () => {
-  it("reads Shot.fps when present", () => {
-    expect(shotFps({ fps: 30 })).toBe(30);
+  it("reads Shot.time.fps when present", () => {
+    expect(shotFps({ time: { fps: 30 } })).toBe(30);
   });
 
-  it("uses the existing default when Shot.fps is missing or invalid", () => {
+  it("uses the existing default when Shot.time.fps is missing or invalid", () => {
     expect(shotFps(undefined)).toBe(24);
     expect(shotFps({})).toBe(24);
-    expect(shotFps({ fps: Number.NaN })).toBe(24);
+    expect(shotFps({ time: { fps: Number.NaN } })).toBe(24);
   });
 });

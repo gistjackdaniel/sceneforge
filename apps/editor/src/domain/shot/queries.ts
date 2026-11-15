@@ -1,5 +1,6 @@
 import { BackboneCameraBuilder } from "../rendering/backboneV01";
 import type { SensorPreset } from "../graph/lens";
+import { DEFAULT_CLIP_FPS } from "../timeline/timing";
 import { resolveVirtualKeyframes } from "./cameraTrack";
 import { detectTrackingLoss } from "./trackingContinuity";
 import type { CameraInterpolation, CameraTake, Quat, Shot, ShotCamera, TrackingState, Transform, Vec3 } from "./types";
@@ -11,6 +12,16 @@ export const readShotTimeFps = (shot: Pick<Shot, "time">): number => {
     throw new Error("Shot time.fps is required.");
   }
   return fps;
+};
+
+/**
+ * Frame rate for a shot. Reads `Shot.time.fps` only.
+ * A missing or non-positive rate uses {@link DEFAULT_CLIP_FPS}.
+ */
+export const shotFps = (shot: { time?: { fps?: number } } | undefined): number => {
+  const fps = shot?.time?.fps;
+  if (typeof fps === "number" && Number.isFinite(fps) && fps > 0) return fps;
+  return DEFAULT_CLIP_FPS;
 };
 
 export const selectedTake = (shot: Shot): CameraTake | undefined => {

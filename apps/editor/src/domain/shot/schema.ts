@@ -3,6 +3,7 @@ import { SCENE_COORDINATE_CONTRACT, mat4Schema, quatSchema, sceneCoordinateContr
 import { legacyRefSchema } from "../worlds/sceneState";
 import { identityCalibration, identityMapping, samplesFromKeyframes } from "./cameraTrack";
 import { migrateZyxEncodedQuaternion, normalizeQuat } from "./cameraRotation";
+import { shotApprovalSchema, shotContactSchema, shotOverrideEventSchema, shotRevisionSchema } from "./editorial";
 import { migrateCameraTakeIds } from "./takeId";
 import type {
   AssetId,
@@ -235,11 +236,25 @@ export const shotSchema = z.object({
   camera: cameraSchema,
   environment: z.object({ worldId: z.string().min(1) }).optional(),
   renders: z.array(renderSchema),
+  contacts: z.array(shotContactSchema).optional(),
+  overrides: z.array(shotOverrideEventSchema).optional(),
+  revisions: z.array(shotRevisionSchema).optional(),
+  headRevisionId: z.string().min(1).optional(),
+  approvals: z.array(shotApprovalSchema).optional(),
 }).superRefine((shot, ctx) => {
   const ids = new Set<string>();
   for (const subject of shot.subjects) {
     if (ids.has(subject.id)) ctx.addIssue({ code: "custom", message: "Duplicate subject id." });
     ids.add(subject.id);
+  }
+  if (!shot.headRevisionId) return;
+  const head = shot.revisions?.find((revision) => revision.id === shot.headRevisionId);
+  if (!head) {
+    ctx.addIssue({ code: "custom", message: "Head revision is not in the shot." });
+    return;
+  }
+  if (JSON.stringify(head.overrides) !== JSON.stringify(shot.overrides ?? [])) {
+    ctx.addIssue({ code: "custom", message: "Head revision does not match the override stack." });
   }
 });
 
@@ -298,6 +313,13 @@ export const shotModelInputSchema = z.object({
     importTransform: mat4Schema.optional(),
   }).optional(),
   recipe: z.object({ generateHash: z.string().min(1) }),
+});
+
+const brandSubjectId = (value: string) => brand<SubjectId>(value);
+
+const brandEvent = <T extends { actorId: string }>(event: T): T & { actorId: SubjectId } => ({
+  ...event,
+  actorId: brandSubjectId(event.actorId),
 });
 
 type ParsedTake = z.infer<typeof cameraTakeSchema>;
@@ -427,6 +449,16 @@ const brandShot = (shot: z.infer<typeof shotSchema>): Shot => ({
     assetId: brand<AssetId>(subject.assetId),
   })) as Subject[],
   camera: normalizeCamera(shot.id, shot.time.fps, shot.camera),
+  contacts: shot.contacts?.map((contact) => ({
+    ...contact,
+    actorId: brandSubjectId(contact.actorId),
+    targetActorId: contact.targetActorId ? brandSubjectId(contact.targetActorId) : undefined,
+  })),
+  overrides: shot.overrides?.map(brandEvent),
+  revisions: shot.revisions?.map((revision) => ({
+    ...revision,
+    overrides: revision.overrides.map(brandEvent),
+  })),
 });
 
 export const parseShot = (input: unknown): Shot => brandShot(shotSchema.parse(input));
