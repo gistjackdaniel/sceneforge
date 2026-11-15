@@ -4,6 +4,8 @@ import type { GraphEdge } from "../../domain/graph/types";
 import type { CameraRigPreset } from "../../domain/graph/cameraRig";
 import type { ShotCommand } from "../../domain/shot";
 import type { ActionGraph } from "../../domain/speech2motion/actionGraph";
+import type { RiggedActorImportSource } from "../../domain/worlds/riggedActorImport";
+import type { SceneState } from "../../domain/worlds/sceneState";
 
 /** PRD §13.1 — domain commands. UI-only actions are not commands. */
 export type DomainCommand =
@@ -106,6 +108,18 @@ export type DomainCommand =
     }
   | { type: "SHOT"; command: ShotCommand }
   | {
+      /** Import one rigged actor. Undo restores the previous world scene. */
+      type: "IMPORT_RIGGED_ACTOR";
+      worldId: string;
+      source: RiggedActorImportSource;
+    }
+  | {
+      /** Replace one world scene with a snapshot. Inverse of rig import. */
+      type: "RESTORE_SCENE_STATE";
+      worldId: string;
+      scene: SceneState;
+    }
+  | {
       /**
        * Store a ready speech2motion graph for one shot.
        * `graph: null` drops a graph recorded earlier. This is the only write path for that document.
@@ -130,6 +144,7 @@ export type DomainEventType =
   | "RenderCompleted"
   | "RenderFailed"
   | "ShotChanged"
+  | "RiggedActorImported"
   | "Speech2MotionRecorded";
 
 export interface DomainEvent {
