@@ -4,6 +4,8 @@ import type { GraphEdge } from "../../domain/graph/types";
 import type { CameraRigPreset } from "../../domain/graph/cameraRig";
 import type { JointTarget } from "../../domain/performance/poseTrack";
 import type { ShotCommand } from "../../domain/shot";
+import type { RiggedActorImportSource } from "../../domain/worlds/riggedActorImport";
+import type { SceneState } from "../../domain/worlds/sceneState";
 
 /** PRD §13.1 — domain commands. UI-only actions are not commands. */
 export type DomainCommand =
@@ -161,7 +163,19 @@ export type DomainCommand =
   | { type: "SET_DRAFT_MODEL"; clipId: string; modelId: string }
   | { type: "SET_DRAFT_IMAGE_MODE"; clipId: string; referenceId: string; mode: "reference" | "hard" }
   | { type: "SET_DRAFT_IMAGE_GUIDANCE"; clipId: string; referenceId: string; guidance: number }
-  | { type: "SHOT"; command: ShotCommand };
+  | { type: "SHOT"; command: ShotCommand }
+  | {
+      /** Import one rigged actor. Undo restores the previous world scene. */
+      type: "IMPORT_RIGGED_ACTOR";
+      worldId: string;
+      source: RiggedActorImportSource;
+    }
+  | {
+      /** Replace one world scene with a snapshot. Inverse of rig import. */
+      type: "RESTORE_SCENE_STATE";
+      worldId: string;
+      scene: SceneState;
+    };
 
 export type DomainEventType =
   | "NodeCreated"
@@ -177,7 +191,8 @@ export type DomainEventType =
   | "RenderQueued"
   | "RenderCompleted"
   | "RenderFailed"
-  | "ShotChanged";
+  | "ShotChanged"
+  | "RiggedActorImported";
 
 export interface DomainEvent {
   type: DomainEventType;
