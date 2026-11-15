@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { emptyCommandBusState, undoCommand } from "../../application/commands/bus";
 import { commitSpeech2Motion, planSpeech2Motion, speech2MotionClock } from "../../application/voice/speech2motion";
 import { toFrame } from "../../application/voice/toFrame";
+import {
+  buildDependencyFingerprint,
+  normalizeProductionSelector,
+  planRevisionScope,
+  revisionEditEventSchema,
+  type ProductionOutput,
+} from "../../core/dependency";
 import { parseShot } from "../../domain/shot";
 import type { Project } from "../../domain/project/types";
 import { migrateWorldToSceneState } from "../../domain/worlds/migrateInstances";
@@ -299,10 +306,69 @@ describe("speech2motion producer", () => {
     expect(scope?.edit_id).toBe(graph.edit?.edit_id);
     expect(scope?.base_graph_version).toBe(graph.edit?.base_graph_version);
     expect(scope?.base_graph_version).not.toBe(graph.graph_version);
-    const contact = scope?.recompute.find((selector) => selector.kind === "contact");
+    const contact = graph.edit?.recompute.find((selector) => selector.kind === "contact");
     expect(contact).toEqual({ kind: "contact", contact_id: "handshake_01" });
-    expect(scope?.recompute.some((selector) => selector.kind === "motion" && "actor_id" in selector)).toBe(true);
+    expect(graph.edit?.recompute.some((selector) => selector.kind === "motion" && "actor_id" in selector)).toBe(true);
     expect(contact && "contactId" in contact).toBe(false);
+  });
+
+  it("passes handshake, cup place, and the contact-hand edit through revisionEditEventSchema", () => {
+    const built = stage(["컵", "테이블"]);
+    const handshake = produce("A와 B가 오른손으로 악수", built, { fps: 24 }).graph;
+    const edited = produce("B 접촉 손만 수정", built, { fps: 24, baseGraph: handshake }).graph;
+    const placed = produce("A가 그 컵을 테이블에 내려놓는다", built, { fps: 24 }).graph;
+    const fingerprint = buildDependencyFingerprint({
+      assetId: built.world.id,
+      revisionId: "rev-1",
+      modelVersion: "video-0.1",
+      seed: 1,
+      pass: { pose: "rest" },
+    });
+
+    for (const graph of [handshake, edited, placed]) {
+      const scope = toEditScopeInput(graph);
+      expect(scope).toBeDefined();
+      if (!scope) return;
+      const parsed = revisionEditEventSchema.safeParse(scope);
+      expect(parsed.success).toBe(true);
+      if (!parsed.success) return;
+      expect(parsed.data.shotId).toBe(graph.shot_id);
+      expect(parsed.data.operation).toBe(graph.edit?.operation);
+      expect(parsed.data.instanceIds).toEqual([...scope.instanceIds]);
+      expect(parsed.data.edit_id).toBe(graph.edit?.edit_id);
+      expect(parsed.data.base_graph_version).toBe(graph.edit?.base_graph_version);
+      expect(parsed.data.source).toEqual(graph.edit?.source);
+      expect(parsed.data.preserve).toEqual(graph.edit?.preserve);
+      expect(parsed.data.recompute).toEqual(graph.edit?.recompute);
+
+      const selectors = [...scope.preserve, ...scope.recompute];
+      const outputs: ProductionOutput[] = selectors.map((selector, index) => {
+        const normalized = normalizeProductionSelector(selector);
+        if (!normalized || normalized === "dependent") {
+          throw new Error("selector did not normalize");
+        }
+        return {
+          outputId: `out-${index}`,
+          nodeId: `node-${index}`,
+          cacheId: `cache-${index}`,
+          selector: normalized,
+          fingerprint,
+          constraint: "generative",
+          computedAt: "2026-11-15T00:00:00.000Z",
+        };
+      });
+      const downstreamByNodeId = Object.fromEntries(outputs.map((output) => [output.nodeId, []]));
+      const plan = planRevisionScope(scope, {
+        outputs,
+        downstreamByNodeId,
+        graphVersion: scope.base_graph_version,
+        contact_graph: graph.contact_graph,
+      });
+      expect(plan.ok).toBe(true);
+      if (!plan.ok) return;
+      expect(plan.edit_id).toBe(graph.edit?.edit_id);
+      expect(plan.shotId).toBe(graph.shot_id);
+    }
   });
 
   it("sends instance ids that match contact_graph endpoints, including both handshake actors", () => {

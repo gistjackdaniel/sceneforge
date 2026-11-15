@@ -1,28 +1,18 @@
-import type { ActionGraph, EditSelector, EditSource } from "./actionGraph";
+import type { EditScopeInput } from "../../core/dependency";
+import type { ActionGraph, EditSelector } from "./actionGraph";
 
 /**
- * Envelope that Graph lane PR #32 accepts as `EditScopeInput`.
- * This branch does not import that code.
- *
- * `preserve` and `recompute` stay the raw action-graph selectors, same objects
- * and same order. `core/dependency` normalizes `contact_id` and `kind: "motion"`.
+ * Map a ready action-graph edit onto `EditScopeInput` from `core/dependency`.
+ * `preserve` and `recompute` stay the raw selectors, same objects and same order.
+ * `core/dependency` normalizes `contact_id` and `kind: "motion"`.
  * A contact selector is `{ kind: "contact", contact_id }` only. Actors come from
  * `contact_graph`, so the selector does not carry `actor_id`.
  *
  * `instanceIds` is every `actor_id` and `object_id` on the a/b endpoints of the
  * contacts named by those selectors. One `instanceId` would be a one-element
  * list, which conflicts when a contact has more than one endpoint.
+ * `edit_id`, `base_graph_version`, and `source` are always filled.
  */
-export type EditScopeInput = {
-  shotId: string;
-  operation: string;
-  instanceIds: readonly string[];
-  edit_id: string;
-  base_graph_version: string;
-  source: EditSource;
-  preserve: readonly EditSelector[];
-  recompute: readonly EditSelector[];
-};
 
 const pushUnique = (ids: string[], seen: Set<string>, id: string | undefined): void => {
   if (!id || seen.has(id)) return;
