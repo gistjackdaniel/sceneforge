@@ -18,7 +18,12 @@ import {
 import type { WorldAsset } from "../../domain/worlds/types";
 import type { ViewportTool, ViewportWorkspace, CameraVizState } from "../../state/editorStore";
 import type { CameraKeyframe } from "../../domain/graph/cameraPath";
+import { EULER_ORDER } from "../../domain/shot/euler";
 import type { SceneObject } from "../../domain/worlds/sceneObjects";
+import { quaternionToAxisAngle } from "../../domain/utils/quaternion";
+import type { JointTarget } from "../../domain/performance/poseTrack";
+import { smplxJointForRigPart } from "../../domain/performance/rigJoints";
+import { JointPickPriority } from "../../presentation/pose/pickPriority";
 import { readGlbRig, type GlbRigRead } from "./readSkinnedMesh";
 
 export interface StageObjectTransform {
@@ -32,6 +37,8 @@ export interface StageObjectTransform {
 export interface StageCameraPose {
   position: [number, number, number];
   rotation: [number, number, number];
+  /** Stored camera orientation. Wins over `rotation` so the Euler order cannot change the shot. */
+  quaternion?: [number, number, number, number];
   focalLength: number;
 }
 
@@ -50,6 +57,32 @@ interface CameraDrag {
   startY: number;
   startPosition: THREE.Vector3;
   startRotation: THREE.Euler;
+}
+
+interface StageSceneApi {
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  orbit: OrbitControls;
+  transform: TransformControls;
+  renderer: THREE.WebGLRenderer;
+  objects: Map<string, THREE.Object3D>;
+  objectKinds: Map<string, "actor" | "prop" | "light" | "camera">;
+  worldRoot: THREE.Object3D | null;
+  shotCamera: THREE.Object3D;
+  shotBody: THREE.Object3D;
+  helperCam: THREE.PerspectiveCamera;
+  frustumHelper: THREE.CameraHelper;
+  pathLine: THREE.Line;
+  lookAtLine: THREE.Line;
+  playheadMarker: THREE.Mesh;
+  keyframeGroup: THREE.Group;
+  stageFloor: THREE.Object3D;
+  grid: THREE.Object3D;
+  dragging: boolean;
+  keyLight: THREE.DirectionalLight;
+  jointGroup: THREE.Group | null;
+  cameraGizmo: THREE.Group;
+  cameraDrag: CameraDrag | null;
 }
 
 interface StageViewportProps {
@@ -72,6 +105,8 @@ interface StageViewportProps {
   objectTransforms?: StageObjectTransform[];
   keyframes?: CameraKeyframe[];
   pathSamples?: Array<[number, number, number]>;
+  /** RGB 0..1, one color per path sample. Loss intervals use a different tint. */
+  pathColors?: Array<[number, number, number]>;
   lookAtTargetId?: string;
   fovDegrees?: number;
   playheadFrame?: number;
@@ -81,6 +116,12 @@ interface StageViewportProps {
     position: [number, number, number];
     rotation: [number, number, number];
     scale?: [number, number, number];
+  }) => void;
+  onJointRotateCommit?: (payload: {
+    actorElementId: string;
+    target: JointTarget;
+    axisAngle: [number, number, number];
+    frame: number;
   }) => void;
   onSelectionChange?: (selection: ViewportSelection | undefined) => void;
   onLoadStateChange?: (state: ViewportLoadState, message?: string) => void;
@@ -198,6 +239,23 @@ const applyRecordFly = (camera: THREE.PerspectiveCamera, keys: FlyKeys, delta: n
   return true;
 };
 
+const cameraGizmoHandle = (object: THREE.Object3D | undefined): CameraDrag["handle"] | undefined => {
+  let current = object;
+  while (current) {
+    const name = current.name;
+    if (name.includes("ring-x")) return "ring-x";
+    if (name.includes("ring-y")) return "ring-y";
+    if (name.includes("ring-z")) return "ring-z";
+    if (name.includes("axis-x")) return "axis-x";
+    if (name.includes("axis-y")) return "axis-y";
+    if (name.includes("axis-z")) return "axis-z";
+    if (name === "center" || name.endsWith("center")) return "center";
+    if (name === "camera-gizmo") return undefined;
+    current = current.parent ?? undefined;
+  }
+  return undefined;
+};
+
 const applyRecordLook = (camera: THREE.PerspectiveCamera, dx: number, dy: number): void => {
   const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, "YXZ");
   euler.y -= dx * 0.0022;
@@ -228,10 +286,12 @@ export const StageViewport = ({
   objectTransforms = [],
   keyframes = [],
   pathSamples = [],
+  pathColors,
   lookAtTargetId,
   fovDegrees = 50,
   playheadFrame = 0,
   onTransformCommit,
+  onJointRotateCommit,
   onSelectionChange,
   onLoadStateChange,
   onRiggedModelLoaded,
@@ -253,12 +313,14 @@ export const StageViewport = ({
   const onLoadStateChangeRef = useRef(onLoadStateChange);
   const onRiggedModelLoadedRef = useRef(onRiggedModelLoaded);
   const onCapturePoseRef = useRef(onCapturePose);
+  const onJointRotateCommitRef = useRef(onJointRotateCommit);
   const onLiveCameraPoseRef = useRef(onLiveCameraPose);
   onTransformCommitRef.current = onTransformCommit;
   onSelectionChangeRef.current = onSelectionChange;
   onLoadStateChangeRef.current = onLoadStateChange;
   onRiggedModelLoadedRef.current = onRiggedModelLoaded;
   onCapturePoseRef.current = onCapturePose;
+  onJointRotateCommitRef.current = onJointRotateCommit;
   onLiveCameraPoseRef.current = onLiveCameraPose;
   const workspaceRef = useRef(workspace);
   const toolRef = useRef(tool);
@@ -274,30 +336,7 @@ export const StageViewport = ({
   outputAspectRef.current = outputAspect;
 
   const recording = workspace === "record";
-  const sceneApiRef = useRef<{
-    scene: THREE.Scene;
-    camera: THREE.PerspectiveCamera;
-    orbit: OrbitControls;
-    transform: TransformControls;
-    renderer: THREE.WebGLRenderer;
-    objects: Map<string, THREE.Object3D>;
-    objectKinds: Map<string, "actor" | "prop" | "light" | "camera">;
-    worldRoot: THREE.Object3D | null;
-    shotCamera: THREE.Object3D;
-    shotBody: THREE.Object3D;
-    helperCam: THREE.PerspectiveCamera;
-    frustumHelper: THREE.CameraHelper;
-    pathLine: THREE.Line;
-    lookAtLine: THREE.Line;
-    playheadMarker: THREE.Mesh;
-    keyframeGroup: THREE.Group;
-    stageFloor: THREE.Object3D;
-    grid: THREE.Object3D;
-    dragging: boolean;
-    keyLight: THREE.DirectionalLight;
-    cameraGizmo: THREE.Group;
-    cameraDrag: CameraDrag | null;
-  } | null>(null);
+  const sceneApiRef = useRef<StageSceneApi | null>(null);
   const loadTokenRef = useRef(0);
   const [hud, setHud] = useState(worldName ?? "No world");
 
@@ -345,6 +384,7 @@ export const StageViewport = ({
 
     const shotCamera = new THREE.Group();
     shotCamera.name = "shot-camera";
+    shotCamera.rotation.order = EULER_ORDER;
     shotCamera.position.set(2.5, 1.8, 3.2);
     const shotBody = new THREE.Mesh(
       new THREE.ConeGeometry(0.12, 0.28, 12),
@@ -424,7 +464,7 @@ export const StageViewport = ({
     cameraGizmo.add(center);
     shotCamera.add(cameraGizmo);
 
-    const api = {
+    const api: StageSceneApi = {
       scene,
       camera,
       orbit,
@@ -432,7 +472,7 @@ export const StageViewport = ({
       renderer,
       objects,
       objectKinds,
-      worldRoot: null as THREE.Object3D | null,
+      worldRoot: null,
       shotCamera,
       shotBody,
       helperCam,
@@ -445,8 +485,9 @@ export const StageViewport = ({
       grid,
       dragging: false,
       keyLight,
+      jointGroup: null,
       cameraGizmo,
-      cameraDrag: null as CameraDrag | null,
+      cameraDrag: null,
     };
     sceneApiRef.current = api;
 
@@ -457,52 +498,71 @@ export const StageViewport = ({
       if (readOnlyRef.current || api.dragging || workspaceRef.current === "record" || toolRef.current === "navigate" || event.button !== 0) {
         return;
       }
-      // Camera gizmo picking first
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
       const gizmoHits = raycaster.intersectObjects(api.cameraGizmo.children, true);
-      const gizmo = gizmoHits[0]?.object;
-      if (gizmo && workspaceRef.current === "build") {
-        const handleName =
-          gizmo.name.includes("ring-x") ? "ring-x" :
-          gizmo.name.includes("ring-y") ? "ring-y" :
-          gizmo.name.includes("ring-z") ? "ring-z" :
-          gizmo.name.includes("axis-x") ? "axis-x" :
-          gizmo.name.includes("axis-y") ? "axis-y" :
-          gizmo.name.includes("axis-z") ? "axis-z" :
-          gizmo.name.includes("center") ? "center" : undefined;
-        if (handleName) {
-          api.dragging = true;
-          api.orbit.enabled = false;
-          const mode: "rotate" | "translate" | "both" =
-            event.shiftKey ? "both" : handleName.startsWith("ring-") ? "rotate" : "translate";
-          api.cameraDrag = {
-            mode,
-            handle: handleName as any,
-            startX: event.clientX,
-            startY: event.clientY,
-            startPosition: api.shotCamera.position.clone(),
-            startRotation: new THREE.Euler().setFromQuaternion(api.shotCamera.quaternion),
-          };
+      const gizmoHit = gizmoHits.find((hit) => cameraGizmoHandle(hit.object));
+      const handleName = cameraGizmoHandle(gizmoHit?.object);
+      const jointChildren = api.jointGroup?.children ?? [];
+      const jointHits = jointChildren.length > 0 ? raycaster.intersectObjects(jointChildren, true) : [];
+      const objectPickables = Array.from(objects.values()).filter((object) => object.visible && !object.userData.locked);
+      const objectHits = raycaster.intersectObjects(objectPickables, true);
+      const winner = JointPickPriority.winner({
+        cameraGizmoDistance: handleName ? gizmoHit?.distance : undefined,
+        jointDistance: jointHits[0]?.distance,
+        objectDistance: objectHits[0]?.distance,
+        workspace: workspaceRef.current,
+        tool: toolRef.current,
+      });
+      if (winner === "camera-gizmo" && handleName) {
+        api.dragging = true;
+        api.orbit.enabled = false;
+        const mode: CameraDrag["mode"] =
+          event.shiftKey ? "both" : handleName.startsWith("ring-") ? "rotate" : "translate";
+        api.cameraDrag = {
+          mode,
+          handle: handleName,
+          startX: event.clientX,
+          startY: event.clientY,
+          startPosition: api.shotCamera.position.clone(),
+          startRotation: new THREE.Euler().setFromQuaternion(api.shotCamera.quaternion, EULER_ORDER),
+        };
+        return;
+      }
+      if (winner === "joint") {
+        let picked: THREE.Object3D | undefined = jointHits[0]?.object;
+        while (picked && !picked.userData?.joint && picked.parent) {
+          picked = picked.parent;
+        }
+        if (!picked?.userData?.joint) {
           return;
         }
+        transform.attach(picked);
+        const actorId = String(picked.userData.actorElementId ?? "");
+        if (actorId) {
+          onSelectionChangeRef.current?.({
+            id: actorId,
+            kind: "actor",
+            layer: "clip",
+            position: [0, 0, 0],
+            rotation: [0, 0, 0],
+          });
+        }
+        return;
       }
-      const pickables = Array.from(objects.values()).filter((object) => object.visible && !object.userData.locked);
-      const hits = raycaster.intersectObjects(pickables, true);
-      const raw = hits[0]?.object;
-      if (!raw) {
+      const raw = objectHits[0]?.object;
+      if (!raw || winner !== "object") {
         return;
       }
       let picked: THREE.Object3D | undefined = raw;
       while (picked && !objects.has(picked.name) && picked.parent) {
         picked = picked.parent;
       }
-      if (!picked || !objects.has(picked.name)) {
+      if (!picked || !objects.has(picked.name) || picked.userData.locked) {
         return;
       }
-      if (picked.userData.locked) return;
       transform.attach(picked);
       const id = picked.name;
       const kind = objectKinds.get(id);
@@ -523,24 +583,39 @@ export const StageViewport = ({
         !api.dragging && workspaceRef.current === "build" && toolRef.current === "navigate";
       if (!api.dragging) {
         const attached = transform.object;
-        if (!attached || !onTransformCommitRef.current) {
+        if (!attached) {
           return;
         }
-        const id = attached.name;
-        const kind = objectKinds.get(id);
-        if (!kind) {
-          return;
+        if (attached.userData?.joint && onJointRotateCommitRef.current) {
+          const q = attached.quaternion;
+          const axisAngle = quaternionToAxisAngle([q.x, q.y, q.z, q.w]);
+          const actorElementId = String(attached.userData.actorElementId ?? "");
+          const target = JointPickPriority.readJointTarget(attached.userData.target);
+          if (actorElementId && target) {
+            onJointRotateCommitRef.current({
+              actorElementId,
+              target,
+              axisAngle,
+              frame: lastPlayheadRef.current ?? 0,
+            });
+          }
+        } else if (onTransformCommitRef.current) {
+          const id = attached.name;
+          const kind = objectKinds.get(id);
+          if (!kind) {
+            return;
+          }
+          if (kind === "camera" && workspaceRef.current !== "build") {
+            return;
+          }
+          onTransformCommitRef.current({
+            worldElementId: id,
+            kind,
+            position: [attached.position.x, attached.position.y, attached.position.z],
+            rotation: [attached.rotation.x, attached.rotation.y, attached.rotation.z],
+            scale: [attached.scale.x, attached.scale.y, attached.scale.z],
+          });
         }
-        if (kind === "camera" && workspaceRef.current !== "build") {
-          return;
-        }
-        onTransformCommitRef.current({
-          worldElementId: id,
-          kind,
-          position: [attached.position.x, attached.position.y, attached.position.z],
-          rotation: [attached.rotation.x, attached.rotation.y, attached.rotation.z],
-          scale: [attached.scale.x, attached.scale.y, attached.scale.z],
-        });
       }
     });
     renderer.domElement.addEventListener("pointerdown", pickObject);
@@ -666,12 +741,14 @@ export const StageViewport = ({
         }
         api.shotCamera.position.copy(camera.position);
         api.shotCamera.quaternion.copy(camera.quaternion);
-        api.shotCamera.rotation.setFromQuaternion(camera.quaternion);
+        api.shotCamera.rotation.order = EULER_ORDER;
+        api.shotCamera.rotation.setFromQuaternion(camera.quaternion, EULER_ORDER);
         api.shotCamera.updateMatrixWorld(true);
         if (onLiveCameraPoseRef.current) {
           onLiveCameraPoseRef.current({
             position: [api.shotCamera.position.x, api.shotCamera.position.y, api.shotCamera.position.z],
             rotation: [api.shotCamera.rotation.x, api.shotCamera.rotation.y, api.shotCamera.rotation.z],
+            quaternion: [api.shotCamera.quaternion.x, api.shotCamera.quaternion.y, api.shotCamera.quaternion.z, api.shotCamera.quaternion.w],
             focalLength: 35,
           });
         }
@@ -796,6 +873,55 @@ export const StageViewport = ({
     }
   }, [outputAspect, workspace]);
 
+  // Build pickable joint helpers when an actor is selected
+  useEffect(() => {
+    const api = sceneApiRef.current;
+    if (!api) return;
+    // Clean up previous
+    if (api.jointGroup) {
+      api.scene.remove(api.jointGroup);
+      api.jointGroup.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      });
+      api.jointGroup = null;
+    }
+    if (!selectedId || workspace === "record") return;
+    const selected = api.objects.get(selectedId);
+    const kind = api.objectKinds.get(selectedId);
+    if (!selected || kind !== "actor") return;
+    const group = new THREE.Group();
+    group.position.copy(selected.position);
+    group.rotation.copy(selected.rotation);
+    const JOINTS: Array<{ name: string; target: JointTarget; pos: [number, number, number] }> = [
+      { name: smplxJointForRigPart("pelvis"), target: { kind: "global_orient" }, pos: [0, 0.9, 0] },
+      { name: "spine", target: { kind: "body", index: 0 }, pos: [0, 1.1, 0] },
+      { name: "neck", target: { kind: "body", index: 3 }, pos: [0, 1.45, 0] },
+      { name: "jaw", target: { kind: "jaw" }, pos: [0, 1.55, 0.08] },
+      { name: "shoulder_l", target: { kind: "body", index: 5 }, pos: [-0.18, 1.38, 0] },
+      { name: "shoulder_r", target: { kind: "body", index: 8 }, pos: [0.18, 1.38, 0] },
+      { name: "elbow_l", target: { kind: "body", index: 6 }, pos: [-0.45, 1.25, 0] },
+      { name: "elbow_r", target: { kind: "body", index: 9 }, pos: [0.45, 1.25, 0] },
+      { name: "hip_l", target: { kind: "body", index: 12 }, pos: [-0.12, 0.95, 0] },
+      { name: "hip_r", target: { kind: "body", index: 15 }, pos: [0.12, 0.95, 0] },
+      { name: "knee_l", target: { kind: "body", index: 13 }, pos: [-0.12, 0.55, 0] },
+      { name: "knee_r", target: { kind: "body", index: 16 }, pos: [0.12, 0.55, 0] },
+    ];
+    JOINTS.forEach((j, i) => {
+      const node = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 10), new THREE.MeshStandardMaterial({ color: 0x6cb6ff }));
+      node.position.set(...j.pos);
+      node.userData.joint = true;
+      node.userData.target = j.target;
+      node.userData.actorElementId = selectedId;
+      node.name = `joint-${j.name}-${i}`;
+      group.add(node);
+    });
+    api.scene.add(group);
+    api.jointGroup = group;
+  }, [selectedId, sceneObjects, workspace]);
+
   useEffect(() => {
     const api = sceneApiRef.current;
     if (!api) {
@@ -822,6 +948,7 @@ export const StageViewport = ({
         return;
       }
       object.position.set(...item.position);
+      object.rotation.order = EULER_ORDER;
       object.rotation.set(...item.rotation);
       if (item.scale) object.scale.set(...item.scale);
     });
@@ -846,7 +973,9 @@ export const StageViewport = ({
       return;
     }
     api.shotCamera.position.set(...cameraPose.position);
-    api.shotCamera.rotation.set(...cameraPose.rotation);
+    api.shotCamera.rotation.order = EULER_ORDER;
+    if (cameraPose.quaternion) api.shotCamera.quaternion.set(...cameraPose.quaternion);
+    else api.shotCamera.rotation.set(...cameraPose.rotation);
     const lookTarget = lookAtTargetId ? api.objects.get(lookAtTargetId) : undefined;
     if (lookTarget) {
       api.shotCamera.lookAt(lookTarget.position);
@@ -902,10 +1031,27 @@ export const StageViewport = ({
     }
 
     if (pathSamples.length > 0) {
-      api.pathLine.geometry.dispose();
-      api.pathLine.geometry = new THREE.BufferGeometry().setFromPoints(
+      const geometry = new THREE.BufferGeometry().setFromPoints(
         pathSamples.map((point) => new THREE.Vector3(...point)),
       );
+      const material = api.pathLine.material as THREE.LineBasicMaterial;
+      if (pathColors && pathColors.length === pathSamples.length) {
+        const colors = new Float32Array(pathColors.length * 3);
+        pathColors.forEach((color, index) => {
+          colors[index * 3] = color[0];
+          colors[index * 3 + 1] = color[1];
+          colors[index * 3 + 2] = color[2];
+        });
+        geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+        material.vertexColors = true;
+        material.color.setHex(0xffffff);
+      } else {
+        material.vertexColors = false;
+        material.color.setHex(0x79c0ff);
+      }
+      material.needsUpdate = true;
+      api.pathLine.geometry.dispose();
+      api.pathLine.geometry = geometry;
       const current = cameraPose?.position ?? pathSamples[0];
       api.playheadMarker.position.set(...current);
     }
@@ -918,7 +1064,7 @@ export const StageViewport = ({
         lookTarget.position.clone(),
       ]);
     }
-  }, [keyframes, playheadFrame, cameraViz, pathSamples, lookAtTargetId, workspace, cameraPose]);
+  }, [keyframes, playheadFrame, cameraViz, pathSamples, pathColors, lookAtTargetId, workspace, cameraPose]);
 
   useEffect(() => {
     const api = sceneApiRef.current;
@@ -962,6 +1108,7 @@ export const StageViewport = ({
         });
       }
       group.position.set(...item.position);
+      group.rotation.order = EULER_ORDER;
       group.rotation.set(...item.rotation);
       group.scale.set(...item.scale);
       group.visible = item.visible;
@@ -990,6 +1137,7 @@ export const StageViewport = ({
       object.userData.locked = item.locked;
       if (!api.dragging) {
         object.position.set(...item.position);
+        object.rotation.order = EULER_ORDER;
         object.rotation.set(...item.rotation);
         object.scale.set(...item.scale);
       }
@@ -1167,11 +1315,13 @@ export const StageViewport = ({
     const shot = sceneApiRef.current.shotCamera;
     const source = workspaceRef.current === "record" ? sceneApiRef.current.camera : shot;
     source.updateMatrixWorld(true);
-    source.rotation.setFromQuaternion(source.quaternion);
+    source.rotation.order = EULER_ORDER;
+    source.rotation.setFromQuaternion(source.quaternion, EULER_ORDER);
     onCapturePose({
       camera: {
         position: [source.position.x, source.position.y, source.position.z],
         rotation: [source.rotation.x, source.rotation.y, source.rotation.z],
+        quaternion: [source.quaternion.x, source.quaternion.y, source.quaternion.z, source.quaternion.w],
         focalLength: cameraPose?.focalLength ?? 35,
       },
       objects: objectTransformsCaptured,
@@ -1204,7 +1354,9 @@ export const StageViewport = ({
       liveOverrideRef.current = false;
       if (cameraPose) {
         api.camera.position.set(...cameraPose.position);
-        api.camera.rotation.set(...cameraPose.rotation);
+        api.camera.rotation.order = EULER_ORDER;
+        if (cameraPose.quaternion) api.camera.quaternion.set(...cameraPose.quaternion);
+        else api.camera.rotation.set(...cameraPose.rotation);
         api.shotCamera.position.copy(api.camera.position);
         api.shotCamera.quaternion.copy(api.camera.quaternion);
       }

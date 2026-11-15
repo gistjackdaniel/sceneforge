@@ -1,5 +1,5 @@
 import type { Mat4, SceneCoordinateContract } from "../worlds/coordinates";
-import type { LegacyRef } from "../worlds/sceneState";
+import type { LegacyRef, RigPart } from "../worlds/sceneState";
 
 export type ShotId = string & { readonly __brand: "ShotId" };
 export type SubjectId = string & { readonly __brand: "SubjectId" };
@@ -104,13 +104,105 @@ export type CameraKey = {
   aperture?: number;
 };
 
+/** Previous take id kept so a deterministic migration can be repeated. Same shape as a World legacy ref. */
+export type CameraTakeLegacyRef = {
+  kind: "camera_take";
+  shotId: string;
+  takeId: string;
+};
+
+export type TrackingState = "normal" | "limited" | "not_available";
+
+/** Original sample. Calibration and mapping never write back into this list. */
+export type CameraSample = {
+  frame: number;
+  position: Vec3;
+  rotation: Quat;
+  deviceTimestampNs?: number;
+  timecode?: string;
+  trackingState: TrackingState;
+  focalLengthMm?: number;
+  focusDistanceM?: number;
+  aperture?: number;
+};
+
+/** Pixel K plus the lens data it was built from. K is omitted until an image size is known. */
+export type CameraIntrinsics = {
+  imageSize?: readonly [number, number];
+  K?: readonly [
+    readonly [number, number, number],
+    readonly [number, number, number],
+    readonly [number, number, number],
+  ];
+  focalLengthMm?: number;
+  sensorSizeMm?: readonly [number, number];
+  sensorFit?: "horizontal" | "vertical" | "auto";
+  /** OpenCV order k1, k2, p1, p2, k3. Kept from the device unchanged. */
+  distortion?: readonly [number, number, number, number, number];
+};
+
+/**
+ * Similarity `T_world_device`. Scene position is `scale * R * p_device + translation`.
+ * Scene orientation is `rotation * deviceRotation`.
+ */
+export type DeviceCalibration = {
+  calibrationId: string;
+  arFramework: "arkit" | "arcore" | "webxr" | "viewport" | "other";
+  scale: number;
+  rotation: Quat;
+  translation: Vec3;
+  method: "manual_anchor" | "marker" | "plane_fit" | "identity";
+  residualRmsM?: number;
+  createdAt: string;
+};
+
+export type TrackingEvent = {
+  kind: "tracking_lost" | "tracking_recovered" | "relocalized" | "drift_correction";
+  frame: number;
+  deviceTimestampNs?: number;
+  correction?: { translation: Vec3; rotation: Quat };
+  estimatedDriftM?: number;
+};
+
+/**
+ * Physical camera → virtual camera. Stored beside the original samples.
+ * Only `mode` is applied; the other numbers stay so switching mode does not drop them.
+ */
+export type CameraMotionMapping = {
+  mode: "one_to_one" | "gain" | "smoothing" | "retiming";
+  translationGain: Vec3;
+  rotationGain: number;
+  /** 0 copies the pose. 1 holds the previous pose. */
+  smoothing: number;
+  timeScale: number;
+  timeOffsetFrames: number;
+  /**
+   * How virtual keys fill samples whose tracking state is limited or lost.
+   * `preserve` keeps the recorded pose. The original samples are not rewritten.
+   */
+  lossPolicy?: "preserve" | "hold" | "interpolate";
+  /** When false or omitted, `drift_correction` events are ignored. */
+  applyDriftCorrection?: boolean;
+};
+
 export type CameraTake = {
   schemaVersion: 1;
   id: TakeId;
   name: string;
   source: "record" | "manual" | "preset";
+  /** Virtual camera keys. Viewport playback reads these. */
   keys: readonly [CameraKey, ...CameraKey[]];
   createdAt: string;
+  /** Original samples. Calibration and mapping never replace this list. */
+  samples: readonly CameraSample[];
+  intrinsics?: CameraIntrinsics;
+  calibration: DeviceCalibration;
+  trackingEvents: readonly TrackingEvent[];
+  mapping: CameraMotionMapping;
+  /** Earlier ids this take was migrated from. Not a second live id. */
+  legacyRefs: readonly CameraTakeLegacyRef[];
+  /** Present after the one-time ZYX → XYZ quaternion migration. */
+  rotationStorage: "quaternion_xyzw";
 };
 
 export type CameraInterpolation = "linear" | "catmull_rom";
@@ -119,6 +211,8 @@ export type EmptyCamera = {
   status: "empty";
   lens: Lens;
   interpolation: CameraInterpolation;
+  /** Deleted take ids. A later mint will not return them. */
+  retiredTakeIds: readonly TakeId[];
 };
 
 export type ReadyCamera = {
@@ -127,6 +221,7 @@ export type ReadyCamera = {
   interpolation: CameraInterpolation;
   selectedTakeId: TakeId;
   takes: readonly [CameraTake, ...CameraTake[]];
+  retiredTakeIds: readonly TakeId[];
 };
 
 export type ShotCamera = EmptyCamera | ReadyCamera;
@@ -147,10 +242,52 @@ export type ShotRender = {
   message: string;
 };
 
+/**
+ * Same pair as a world `AssetRef`. Shot-record asset ids include `primitive:*`,
+ * so the pin keeps those strings instead of the world persistent-id pattern.
+ */
+export type ShotAssetRef = {
+  assetId: string;
+  revisionId: string;
+};
+
+export type ShotContact = {
+  id: string;
+  actorId: SubjectId;
+  targetActorId?: SubjectId;
+  effector: RigPart;
+};
+
+/** Structured edit. `preserve` and `recompute` stay opaque strings. */
+export type ShotOverrideEvent = {
+  id: string;
+  operation: "change_contact_effector";
+  contactId: string;
+  actorId: SubjectId;
+  effector: RigPart;
+  preserve: readonly string[];
+  recompute: readonly string[];
+};
+
+export type ShotRevision = {
+  id: string;
+  parentId?: string;
+  createdAt: string;
+  overrides: readonly ShotOverrideEvent[];
+  assetRefs: readonly ShotAssetRef[];
+};
+
+export type ShotApproval = {
+  revisionId: string;
+  status: "pending" | "approved" | "rejected";
+  at?: string;
+};
+
 export type Shot = {
   schemaVersion: 1;
   id: ShotId;
   name: string;
+  /** `time.fps` is the only frame rate. `origin` stays `clip_local`. Frames are integers. */
   time: ShotTime;
   /**
    * Canonical scene frame (`SCENE_COORDINATE_CONTRACT`).
@@ -161,6 +298,13 @@ export type Shot = {
   camera: ShotCamera;
   environment?: { worldId: string };
   renders: readonly ShotRender[];
+  /** Base contacts. Override events do not replace this list. */
+  contacts?: readonly ShotContact[];
+  overrides?: readonly ShotOverrideEvent[];
+  revisions?: readonly ShotRevision[];
+  headRevisionId?: string;
+  /** Data only. No approval UI. */
+  approvals?: readonly ShotApproval[];
 };
 
 export type EnvironmentView = {
@@ -263,6 +407,23 @@ export type ShotCommand =
       source: "record" | "manual";
       keys: readonly [CameraKey, ...CameraKey[]];
       name?: string;
+      samples?: readonly CameraSample[];
+      intrinsics?: CameraIntrinsics;
+      calibration?: DeviceCalibration;
+      trackingEvents?: readonly TrackingEvent[];
+      mapping?: CameraMotionMapping;
+    }
+  | {
+      type: "SET_CAMERA_TRACK_MAPPING";
+      shotId: ShotId;
+      takeId?: TakeId;
+      mapping: CameraMotionMapping;
+    }
+  | {
+      type: "SET_DEVICE_CALIBRATION";
+      shotId: ShotId;
+      takeId?: TakeId;
+      calibration: DeviceCalibration;
     }
   | { type: "KEY_CAMERA"; shotId: ShotId; key: CameraKey }
   | { type: "DELETE_CAMERA_KEY"; shotId: ShotId; frame: number }
@@ -273,4 +434,17 @@ export type ShotCommand =
   | { type: "APPLY_CAMERA_PRESET"; shotId: ShotId; keys: readonly [CameraKey, ...CameraKey[]] }
   | { type: "TRIM_KEYS"; shotId: ShotId }
   | { type: "SET_SHOT_TIME"; shotId: ShotId; fps: number; durationFrames: number }
-  | { type: "RECORD_SHOT_RENDER"; shotId: ShotId; receipt: ShotRender };
+  | { type: "RECORD_SHOT_RENDER"; shotId: ShotId; receipt: ShotRender }
+  | {
+      type: "ADD_SHOT_OVERRIDE";
+      shotId: ShotId;
+      contactId: string;
+      actorSubjectId: SubjectId;
+      targetSubjectId?: SubjectId;
+      newEffector: string;
+      preserve: readonly string[];
+      recompute: readonly string[];
+    }
+  | { type: "UPDATE_SHOT_OVERRIDE"; shotId: ShotId; eventId: string; newEffector: string }
+  | { type: "REMOVE_SHOT_OVERRIDE"; shotId: ShotId; eventId: string }
+  | { type: "REVERT_SHOT_REVISION"; shotId: ShotId; revisionId: string };

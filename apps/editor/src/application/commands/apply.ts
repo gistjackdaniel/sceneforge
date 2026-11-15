@@ -9,9 +9,20 @@ import { createClipVariant, setActiveVariant } from "../../domain/timeline/varia
 import { linkWorldToClip } from "../services/worldLinking";
 import { applyCameraRigToProject } from "../services/cameraCraft";
 import type { CommandResult, DomainCommand, DomainEvent } from "./types";
+import { smplxTrackSchema, upsertSmplxKeyframe, removeSmplxKeyframe, setJointAxisAngleAtFrame, type SmplxTrack } from "../../domain/performance/poseTrack";
+import { posePreset, applyHandPreset } from "../../domain/performance/presets";
+import { performancePlanNodeIdForClip, performancePlanFromNode } from "../../domain/performance";
 import { cameraPathParamsFromNode, deleteCameraKeyframe, keyframeAtExactFrame, upsertCameraKeyframe } from "../../domain/graph/cameraPath";
 import { lensNodeIdForClip, lensParamsFromNode } from "../../domain/graph/lens";
 import { applyShotCommand } from "../../domain/shot";
+import {
+  changeContactEffector,
+  HANDSHAKE_SHOT_ID,
+  installInteractionScene,
+  setInteractionOverrides,
+  uninstallInteractionScene,
+} from "../../domain/sceneAuthoring";
+import { ActionGraphSchema } from "../../domain/speech2motion/actionGraph";
 import { applyImportRiggedActor, applyRestoreSceneState } from "./importRiggedActor";
 
 const event = (type: DomainEvent["type"], payload: Record<string, unknown>, timestamp: string): DomainEvent => ({
@@ -19,6 +30,13 @@ const event = (type: DomainEvent["type"], payload: Record<string, unknown>, time
   timestamp,
   payload,
 });
+
+const fallbackSmplxTrack = (parameters: Record<string, unknown>): SmplxTrack => {
+  const actorElementId = typeof parameters.actorElementId === "string" && parameters.actorElementId.length > 0
+    ? parameters.actorElementId
+    : "actor";
+  return { actorElementId, interpolation: "slerp", keyframes: [] };
+};
 
 export interface ApplyCommandContext {
   timestamp: string;
@@ -40,6 +58,243 @@ export const applyCommand = (
   });
 
   switch (command.type) {
+    case "ADD_POSE_KEYFRAME": {
+      const node = project.nodes[command.nodeId];
+      if (!node || node.kind !== "ActorPoseNode") {
+        return fail("ActorPoseNode not found.");
+      }
+      const parsed = smplxTrackSchema.safeParse(node.parameters);
+      const track = parsed.success
+        ? parsed.data
+        : fallbackSmplxTrack(node.parameters);
+      const previous = track.keyframes;
+      const nextTrack = upsertSmplxKeyframe(track, { frame: command.frame, pose: command.pose });
+      const patched = {
+        ...node,
+        parameters: { ...node.parameters, keyframes: nextTrack.keyframes },
+        params: { ...node.params, keyframes: nextTrack.keyframes },
+        updatedAt: timestamp,
+      };
+      patched.contentHash = computeNodeContentHash(patched);
+      const withNode: Project = { ...project, nodes: { ...project.nodes, [node.id]: patched } };
+      // Ensure a motion_capture PerformanceSource exists for this actor in the same clip.
+      const clipId = project.dependencyMap.clipsByNodeId[node.id]?.[0];
+      let withPlan: Project = withNode;
+      if (clipId) {
+        const planId = performancePlanNodeIdForClip(clipId);
+        const plan = withNode.nodes[planId];
+        if (plan && plan.kind === "PerformancePlanNode") {
+          const planParams = performancePlanFromNode(plan.parameters);
+          const label = `Authored pose · ${track.actorElementId}`;
+          const exists = planParams.sources.some((s) => s.type === "motion_capture" && (s.assetId === track.actorElementId || s.label === label));
+          if (!exists) {
+            const nextSources = [
+              ...planParams.sources,
+              { id: `authored-${track.actorElementId}`, type: "motion_capture", label, assetId: track.actorElementId, enabled: true },
+            ];
+            const updatedPlan = {
+              ...plan,
+              parameters: { ...plan.parameters, sources: nextSources },
+              params: { ...plan.params, sources: nextSources },
+              updatedAt: timestamp,
+            };
+            updatedPlan.contentHash = computeNodeContentHash(updatedPlan);
+            withPlan = { ...withNode, nodes: { ...withNode.nodes, [plan.id]: updatedPlan } };
+          }
+        }
+      }
+      const { nodes, result: dirty } = applyDirtyEventToNodes(
+        { nodes: withPlan.nodes, references: withPlan.references, clipGraphs: withPlan.clipGraphs, dependencyMap: withPlan.dependencyMap },
+        { sourceNodeId: node.id, reason: "params_changed", timestamp },
+      );
+      return {
+        project: { ...withPlan, nodes },
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UPDATE_NODE_PARAMS",
+            nodeId: node.id,
+            patch: { keyframes: previous },
+            previous: { keyframes: nextTrack.keyframes },
+          },
+          events: [
+            event("NodeParamsChanged", { nodeId: node.id, keyframe: command.frame }, timestamp),
+            event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
+          ],
+        },
+      };
+    }
+    case "REMOVE_POSE_KEYFRAME": {
+      const node = project.nodes[command.nodeId];
+      if (!node || node.kind !== "ActorPoseNode") {
+        return fail("ActorPoseNode not found.");
+      }
+      const parsed = smplxTrackSchema.safeParse(node.parameters);
+      const track = parsed.success
+        ? parsed.data
+        : fallbackSmplxTrack(node.parameters);
+      const previous = track.keyframes;
+      const nextTrack = removeSmplxKeyframe(track, command.frame);
+      const patched = {
+        ...node,
+        parameters: { ...node.parameters, keyframes: nextTrack.keyframes },
+        params: { ...node.params, keyframes: nextTrack.keyframes },
+        updatedAt: timestamp,
+      };
+      patched.contentHash = computeNodeContentHash(patched);
+      const withNode: Project = { ...project, nodes: { ...project.nodes, [node.id]: patched } };
+      const { nodes, result: dirty } = applyDirtyEventToNodes(
+        { nodes: withNode.nodes, references: withNode.references, clipGraphs: withNode.clipGraphs, dependencyMap: withNode.dependencyMap },
+        { sourceNodeId: node.id, reason: "params_changed", timestamp },
+      );
+      return {
+        project: { ...withNode, nodes },
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UPDATE_NODE_PARAMS",
+            nodeId: node.id,
+            patch: { keyframes: previous },
+            previous: { keyframes: nextTrack.keyframes },
+          },
+          events: [
+            event("NodeParamsChanged", { nodeId: node.id, removeKeyframe: command.frame }, timestamp),
+            event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
+          ],
+        },
+      };
+    }
+    case "MOVE_POSE_KEYFRAME": {
+      const node = project.nodes[command.nodeId];
+      if (!node || node.kind !== "ActorPoseNode") {
+        return fail("ActorPoseNode not found.");
+      }
+      const parsed = smplxTrackSchema.safeParse(node.parameters);
+      const track = parsed.success
+        ? parsed.data
+        : fallbackSmplxTrack(node.parameters);
+      const previous = track.keyframes;
+      const moved = track.keyframes.find((k) => k.frame === command.from);
+      const without = removeSmplxKeyframe(track, command.from);
+      const nextTrack = moved ? { ...without, keyframes: [...without.keyframes, { ...moved, frame: command.to }].sort((a, b) => a.frame - b.frame) } : without;
+      const patched = {
+        ...node,
+        parameters: { ...node.parameters, keyframes: nextTrack.keyframes },
+        params: { ...node.params, keyframes: nextTrack.keyframes },
+        updatedAt: timestamp,
+      };
+      patched.contentHash = computeNodeContentHash(patched);
+      const withNode: Project = { ...project, nodes: { ...project.nodes, [node.id]: patched } };
+      const { nodes, result: dirty } = applyDirtyEventToNodes(
+        { nodes: withNode.nodes, references: withNode.references, clipGraphs: withNode.clipGraphs, dependencyMap: withNode.dependencyMap },
+        { sourceNodeId: node.id, reason: "params_changed", timestamp },
+      );
+      return {
+        project: { ...withNode, nodes },
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UPDATE_NODE_PARAMS",
+            nodeId: node.id,
+            patch: { keyframes: previous },
+            previous: { keyframes: nextTrack.keyframes },
+          },
+          events: [
+            event("NodeParamsChanged", { nodeId: node.id, moveKeyframe: { from: command.from, to: command.to } }, timestamp),
+            event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
+          ],
+        },
+      };
+    }
+    case "APPLY_POSE_PRESET": {
+      const node = project.nodes[command.nodeId];
+      if (!node || node.kind !== "ActorPoseNode") {
+        return fail("ActorPoseNode not found.");
+      }
+      const parsed = smplxTrackSchema.safeParse(node.parameters);
+      const track = parsed.success
+        ? parsed.data
+        : fallbackSmplxTrack(node.parameters);
+      const previous = track.keyframes;
+      let base = posePreset(command.presetId);
+      if (command.hand) {
+        base = applyHandPreset(base, command.hand.side, command.hand.preset);
+      }
+      const nextTrack = upsertSmplxKeyframe(track, { frame: command.frame, pose: base });
+      const patched = {
+        ...node,
+        parameters: { ...node.parameters, keyframes: nextTrack.keyframes },
+        params: { ...node.params, keyframes: nextTrack.keyframes },
+        updatedAt: timestamp,
+      };
+      patched.contentHash = computeNodeContentHash(patched);
+      const withNode: Project = { ...project, nodes: { ...project.nodes, [node.id]: patched } };
+      const { nodes, result: dirty } = applyDirtyEventToNodes(
+        { nodes: withNode.nodes, references: withNode.references, clipGraphs: withNode.clipGraphs, dependencyMap: withNode.dependencyMap },
+        { sourceNodeId: node.id, reason: "params_changed", timestamp },
+      );
+      return {
+        project: { ...withNode, nodes },
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UPDATE_NODE_PARAMS",
+            nodeId: node.id,
+            patch: { keyframes: previous },
+            previous: { keyframes: nextTrack.keyframes },
+          },
+          events: [
+            event("NodeParamsChanged", { nodeId: node.id, preset: command.presetId, frame: command.frame }, timestamp),
+            event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
+          ],
+        },
+      };
+    }
+    case "SET_JOINT_ROTATION": {
+      const node = project.nodes[command.nodeId];
+      if (!node || node.kind !== "ActorPoseNode") {
+        return fail("ActorPoseNode not found.");
+      }
+      const parsed = smplxTrackSchema.safeParse(node.parameters);
+      const track = parsed.success
+        ? parsed.data
+        : fallbackSmplxTrack(node.parameters);
+      const before = track.keyframes;
+      const { track: nextTrack } = setJointAxisAngleAtFrame(track, command.frame, command.target, command.axisAngle);
+      const patched = {
+        ...node,
+        parameters: { ...node.parameters, keyframes: nextTrack.keyframes },
+        params: { ...node.params, keyframes: nextTrack.keyframes },
+        updatedAt: timestamp,
+      };
+      patched.contentHash = computeNodeContentHash(patched);
+      const withNode: Project = { ...project, nodes: { ...project.nodes, [node.id]: patched } };
+      const { nodes, result: dirty } = applyDirtyEventToNodes(
+        { nodes: withNode.nodes, references: withNode.references, clipGraphs: withNode.clipGraphs, dependencyMap: withNode.dependencyMap },
+        { sourceNodeId: node.id, reason: "params_changed", timestamp },
+      );
+      return {
+        project: { ...withNode, nodes },
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UPDATE_NODE_PARAMS",
+            nodeId: node.id,
+            patch: { keyframes: before },
+            previous: { keyframes: nextTrack.keyframes },
+          },
+          events: [
+            event("NodeParamsChanged", { nodeId: node.id, joint: command.target, frame: command.frame }, timestamp),
+            event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
+          ],
+        },
+      };
+    }
     case "CREATE_NODE": {
       if (project.nodes[command.node.id]) {
         return fail("Node already exists.");
@@ -722,6 +977,108 @@ export const applyCommand = (
           command,
           inverse: edited.inverse ? { type: "SHOT", command: edited.inverse } : undefined,
           events: [event("ShotChanged", { shotId: edited.shot.id }, timestamp)],
+        },
+      };
+    }
+    case "INSTALL_INTERACTION_SCENE": {
+      const installed = installInteractionScene(project);
+      if (!installed.addedShot && !installed.addedPreview && installed.addedWorldIds.length === 0) {
+        return { project, result: { ok: true, command, events: [] } };
+      }
+      return {
+        project: installed.project,
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UNINSTALL_INTERACTION_SCENE",
+            shotId: HANDSHAKE_SHOT_ID,
+            removeShot: installed.addedShot,
+            removePreview: installed.addedPreview,
+            worldIds: installed.addedWorldIds,
+          },
+          events: [event("SceneAuthoringChanged", { shotId: HANDSHAKE_SHOT_ID, op: "install" }, timestamp)],
+        },
+      };
+    }
+    case "UNINSTALL_INTERACTION_SCENE": {
+      return {
+        project: uninstallInteractionScene(
+          project,
+          command.shotId,
+          command.removeShot,
+          command.removePreview,
+          command.worldIds,
+        ),
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "INSTALL_INTERACTION_SCENE" },
+          events: [event("SceneAuthoringChanged", { shotId: command.shotId, op: "uninstall" }, timestamp)],
+        },
+      };
+    }
+    case "CHANGE_CONTACT_EFFECTOR": {
+      const edited = changeContactEffector(project, command);
+      if ("error" in edited) return fail(edited.error);
+      if (!edited.changed) return { project, result: { ok: true, command, events: [] } };
+      return {
+        project: edited.project,
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "SET_INTERACTION_OVERRIDES", shotId: command.shotId, overrides: edited.previous },
+          events: [event("SceneAuthoringChanged", { shotId: command.shotId, contactId: command.contactId }, timestamp)],
+        },
+      };
+    }
+    case "SET_INTERACTION_OVERRIDES": {
+      const edited = setInteractionOverrides(project, command.shotId, command.overrides);
+      if ("error" in edited) return fail(edited.error);
+      if (!edited.changed) return { project, result: { ok: true, command, events: [] } };
+      return {
+        project: edited.project,
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "SET_INTERACTION_OVERRIDES", shotId: command.shotId, overrides: edited.previous },
+          events: [event("SceneAuthoringChanged", { shotId: command.shotId, op: "overrides" }, timestamp)],
+        },
+      };
+    }
+    case "RECORD_SPEECH2MOTION": {
+      const current = project.shots?.[command.shotId];
+      if (!current) return fail("Shot not found.");
+      const previous = project.speech2motion?.[command.shotId] ?? null;
+      if (command.graph === null) {
+        if (!previous) return { project, result: { ok: true, command, events: [] } };
+        const rest = { ...(project.speech2motion ?? {}) };
+        delete rest[command.shotId];
+        const speech2motion = Object.keys(rest).length > 0 ? rest : undefined;
+        return {
+          project: speech2motion ? { ...project, speech2motion } : { ...project, speech2motion: undefined },
+          result: {
+            ok: true,
+            command,
+            inverse: { type: "RECORD_SPEECH2MOTION", shotId: command.shotId, graph: previous },
+            events: [event("Speech2MotionRecorded", { shotId: command.shotId, cleared: true }, timestamp)],
+          },
+        };
+      }
+      const parsed = ActionGraphSchema.safeParse(command.graph);
+      if (!parsed.success) return fail("Action graph does not match the v0.1 contract.");
+      if (parsed.data.status !== "ready") return fail("Only a ready action graph can be recorded.");
+      if (parsed.data.shot_id !== command.shotId) return fail("Action graph shot does not match the command.");
+      return {
+        project: {
+          ...project,
+          speech2motion: { ...project.speech2motion, [command.shotId]: parsed.data },
+        },
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "RECORD_SPEECH2MOTION", shotId: command.shotId, graph: previous },
+          events: [event("Speech2MotionRecorded", { shotId: command.shotId, graphVersion: parsed.data.graph_version }, timestamp)],
         },
       };
     }
