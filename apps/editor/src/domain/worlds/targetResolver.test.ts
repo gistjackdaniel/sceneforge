@@ -110,5 +110,34 @@ describe("World target resolver and query index", () => {
     expect(livingRoom[0]?.assetId).toBe(world.id);
     expect(livingRoom[0]?.kind).toBe("location");
   });
+
+  it("resolves a spoken mention to a persistent id and asks when 그 컵 is ambiguous", () => {
+    const world = normalizeWorldAsset({
+      id: "world-stage",
+      name: "Stage",
+      elements: [
+        { id: "elem-a", name: "A", kind: "actor_mark", description: "" },
+        { id: "elem-b", name: "B", kind: "actor_mark", description: "" },
+      ],
+      props: ["컵", "컵"],
+    });
+    const scene = migrateWorldToSceneState(world);
+    const resolver = createWorldTargetResolver({ [world.id]: world }, { [world.id]: scene });
+    const ctx = { selectionIds: [], locale: "ko" as const };
+    const actor = resolver.resolveMention("A", ctx);
+    expect(actor.status).toBe("resolved");
+    if (actor.status !== "resolved") return;
+    expect(actor.persistentId).toBe(instanceIdForLegacyElement(scene, world.id, "elem-a"));
+    expect(actor.entityKind).toBe("actor");
+
+    const hand = resolver.resolveMention("오른손", ctx);
+    expect(hand).toEqual({ status: "part", rigPart: "right_hand" });
+
+    const cup = resolver.resolveMention("그 컵", { ...ctx, entityKind: "object" });
+    expect(cup.status).toBe("ambiguous");
+    if (cup.status !== "ambiguous") return;
+    expect(cup.candidates).toHaveLength(2);
+    expect(new Set(cup.candidates.map((candidate) => candidate.persistentId)).size).toBe(2);
+  });
 });
 
