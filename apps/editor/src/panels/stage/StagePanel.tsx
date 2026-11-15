@@ -40,6 +40,7 @@ import { gltfRiggedActorCommand, rigImportAlreadyApplied } from "../../applicati
 import { rigWarningsForActors } from "../../presentation/viewport/skinnedMeshBones";
 import type { GlbRigRead } from "./readSkinnedMesh";
 import "./sceneWorkspace.css";
+import { PoseAuthoringController } from "../../presentation/pose/PoseAuthoringController";
 
 const tuple3 = (value: readonly [number, number, number]): [number, number, number] => [value[0], value[1], value[2]];
 const tuple4 = (value: readonly [number, number, number, number]): [number, number, number, number] => [value[0], value[1], value[2], value[3]];
@@ -521,6 +522,16 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
             }
             const object = sceneObjects.find((item) => item.id === payload.worldElementId);
             if (object) commitPose(object, { position: payload.position, rotation: payload.rotation, scale: payload.scale ?? object.scale });
+          }}
+          onJointRotateCommit={(payload) => {
+            if (!clip || !canEdit || takeRecording) return;
+            const cmd = PoseAuthoringController.setJointRotation(
+              { clipId: clip.id, actorElementId: payload.actorElementId, frame },
+              payload.target,
+              payload.axisAngle,
+            );
+            dispatch({ type: "agent-execute-commands", commands: [cmd], logMessage: "Joint rotation applied." });
+            setNotice(`${payload.actorElementId} joint rotated · ${frame}f`);
           }}
           onLoadStateChange={(state, message) => setLoad({ state, message })}
           onRiggedModelLoaded={importRiggedModel}
