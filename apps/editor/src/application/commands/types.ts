@@ -5,7 +5,7 @@ import type { CameraRigPreset } from "../../domain/graph/cameraRig";
 import type { ShotCommand } from "../../domain/shot";
 import type { ActionGraph } from "../../domain/speech2motion/actionGraph";
 import type { RiggedActorImportSource } from "../../domain/worlds/riggedActorImport";
-import type { SceneState } from "../../domain/worlds/sceneState";
+import type { RigPart, SceneState } from "../../domain/worlds/sceneState";
 
 /** PRD §13.1 — domain commands. UI-only actions are not commands. */
 export type DomainCommand =
@@ -107,6 +107,33 @@ export type DomainCommand =
       logMessage?: string;
     }
   | { type: "SHOT"; command: ShotCommand }
+  | { type: "INSTALL_INTERACTION_SCENE" }
+  | {
+      type: "UNINSTALL_INTERACTION_SCENE";
+      shotId: string;
+      removeShot: boolean;
+      removePreview: boolean;
+      worldIds: string[];
+    }
+  | {
+      /** Point one contact effector at another rig part. One undo restores the previous override list. */
+      type: "CHANGE_CONTACT_EFFECTOR";
+      shotId: string;
+      subjectRef: string;
+      locale: "ko" | "en";
+      contactId: string;
+      rigPart: RigPart;
+    }
+  | {
+      type: "SET_INTERACTION_OVERRIDES";
+      shotId: string;
+      overrides: Array<{
+        contactId: string;
+        worldAssetId: string;
+        subjectId: string;
+        rigPart: RigPart;
+      }>;
+    }
   | {
       /** Import one rigged actor. Undo restores the previous world scene. */
       type: "IMPORT_RIGGED_ACTOR";
@@ -144,6 +171,7 @@ export type DomainEventType =
   | "RenderCompleted"
   | "RenderFailed"
   | "ShotChanged"
+  | "SceneAuthoringChanged"
   | "RiggedActorImported"
   | "Speech2MotionRecorded";
 
