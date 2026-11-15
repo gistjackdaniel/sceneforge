@@ -100,6 +100,7 @@ export const phase0Shot = (): Shot => {
           name: "Take 1",
           source: "manual" as const,
           createdAt: NOW,
+          rotationStorage: "quaternion_xyzw" as const,
           keys: [
             { frame: 0, position: eye0, rotation: lookRotation(eye0, target), focalLengthMm: 35, focusDistanceM: 3, aperture: 2.8 },
             { frame: 96, position: eye1, rotation: lookRotation(eye1, target), focalLengthMm: 35, focusDistanceM: 3, aperture: 2.8 },

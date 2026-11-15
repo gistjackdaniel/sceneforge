@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { applyShotCommand } from "../shot/evolve";
 import { parseShot } from "../shot/schema";
 import { selectedTake } from "../shot/queries";
-import { shotId, subjectId, type Shot } from "../shot/types";
+import { shotId, subjectId, type CameraTake, type Shot } from "../shot/types";
 import { sanitizeLegacyToken } from "../worlds/ids";
 import { hashNormalized, hashString } from "../../core/dependency";
 import { deriveInstanceTable } from "./instanceTable";
@@ -37,6 +37,16 @@ const render = (shot: Shot, extra?: { instanceTable?: readonly InstanceIdEntry[]
   const result = RenderPassRenderer.render(shot, { ...context, traceFrames, ...extra });
   if (!result.ok) throw new Error(result.reason);
   return result.output;
+};
+
+const withSelectedTake = (shot: Shot, patch: Partial<CameraTake>): Shot => {
+  if (shot.camera.status !== "ready") throw new Error("missing take");
+  const take = selectedTake(shot);
+  if (!take) throw new Error("missing take");
+  const takes = shot.camera.takes.map((item) => (item.id === take.id ? { ...item, ...patch } : item));
+  const [first, ...rest] = takes;
+  if (!first) throw new Error("missing take");
+  return { ...shot, camera: { ...shot.camera, takes: [first, ...rest] } };
 };
 
 const hashesOf = (shot: Shot, extra?: { instanceTable?: readonly InstanceIdEntry[] }) => {
@@ -103,12 +113,15 @@ describe("phase 2 render passes", () => {
     const loaded = reload(shot);
     const before = render(shot);
     const after = render(loaded);
+    const takeId = selectedTake(shot)?.id;
+    expect(takeId?.startsWith("cam_")).toBe(true);
+    expect(takeId).not.toBe(PHASE0_IDS.take);
 
     expect(before.fps).toBe(shot.time.fps);
-    expect(before.cameraId).toBe(PHASE0_IDS.take);
+    expect(before.cameraId).toBe(takeId);
     expect(before.rendererVersion).toBe(RENDERER_VERSION);
     expect(before.trajectory).toHaveLength(128);
-    expect(before.trajectory.map((frame) => frame.cameraId)).toEqual(Array(128).fill(PHASE0_IDS.take));
+    expect(before.trajectory.map((frame) => frame.cameraId)).toEqual(Array(128).fill(takeId));
     expect(before.trajectory.map((frame) => frame.frame)).toEqual(Array.from({ length: 128 }, (_, index) => index));
     expect(before.trajectory[0]?.position).toEqual(selectedTake(shot)?.keys[0]?.position);
     expect(before.trajectory[127]?.position).toEqual(selectedTake(shot)?.keys[1]?.position);
@@ -228,6 +241,47 @@ describe("phase 2 render passes", () => {
     for (const id of [take.id, legacyId, PHASE0_IDS.actorA, PHASE0_IDS.actorB, PHASE0_IDS.cup, PHASE0_IDS.table, PHASE0_IDS.room]) {
       expect(containsString(record, id)).toBe(false);
     }
+  });
+
+  it("changes every pass hash when a calibration or drift layer value changes", () => {
+    const shot = phase0Shot();
+    const take = selectedTake(shot);
+    if (!take || shot.camera.status !== "ready") throw new Error("missing take");
+    const original = hashesOf(shot);
+    const plain = upstreamPassRecord(shot, spec);
+    expect((plain.camera as { layers?: unknown }).layers).toBeUndefined();
+    expect(containsString(plain, take.calibration.calibrationId)).toBe(false);
+    expect(containsString(plain, take.id)).toBe(false);
+
+    const calibrated = withSelectedTake(shot, {
+      calibration: { ...take.calibration, translation: [0, 0.25, 0], method: "marker" },
+    });
+    const calibratedHashes = hashesOf(calibrated);
+    for (const kind of RENDER_PASS_KINDS) expect(calibratedHashes[kind]).not.toBe(original[kind]);
+    const calibratedRecord = upstreamPassRecord(calibrated, spec);
+    expect(containsString(calibratedRecord, take.calibration.calibrationId)).toBe(false);
+    expect(containsString(calibratedRecord, take.id)).toBe(false);
+    expect((calibratedRecord.camera as { layers: { calibration: { translation: readonly number[] } } }).layers.calibration.translation).toEqual([0, 0.25, 0]);
+    const before = render(shot);
+    const raised = render(calibrated);
+    const start = before.trajectory[0]?.position;
+    expect(raised.trajectory[0]?.position).toEqual(start && [start[0], start[1] + 0.25, start[2]]);
+
+    const drifted = withSelectedTake(shot, {
+      mapping: { ...take.mapping, applyDriftCorrection: true },
+      trackingEvents: [{
+        kind: "drift_correction",
+        frame: 0,
+        correction: { translation: [0.1, 0, 0], rotation: [0, 0, 0, 1] },
+      }],
+    });
+    const driftedHashes = hashesOf(drifted);
+    for (const kind of RENDER_PASS_KINDS) expect(driftedHashes[kind]).not.toBe(original[kind]);
+    const driftRecord = upstreamPassRecord(drifted, spec);
+    expect(containsString(driftRecord, take.id)).toBe(false);
+    expect(containsString(driftRecord, take.calibration.calibrationId)).toBe(false);
+    const shifted = render(drifted);
+    expect(shifted.trajectory[0]?.position[0]).toBe((start?.[0] ?? 0) + 0.1);
   });
 
   it("changes only the instance_id hash when the id-to-pixel map changes", () => {

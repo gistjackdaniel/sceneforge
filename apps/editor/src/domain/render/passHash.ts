@@ -1,5 +1,5 @@
 import { computePassHash } from "../../core/dependency";
-import type { Lens, Shot, Subject } from "../shot/types";
+import type { CameraTake, Lens, Quat, Shot, Subject, Vec3 } from "../shot/types";
 import { selectedTake } from "../shot/queries";
 import type { InstanceIdEntry, RenderPassKind, RenderPassSpec } from "./types";
 import { RENDER_PASS_KINDS, RENDERER_VERSION } from "./types";
@@ -69,12 +69,69 @@ const subjectContent = (subject: Subject): Record<string, unknown> => {
  * Upstream payload hashed into the parent `passHash`.
  * The shot still addresses targets by their current persistent ids; those
  * strings are not copied here. Display names, take ids, legacy ids, room
- * instance ids, and render receipts are omitted. `fps` is a top-level
- * pass-hash field (`Shot.time.fps`), not part of this payload.
+ * instance ids, calibration ids, and render receipts are omitted. `fps` is a
+ * top-level pass-hash field (`Shot.time.fps`), not part of this payload.
  * Resolution and clip planes live here because every AOV shares them.
+ * Calibration, drift, and mapping values are included only when they are not
+ * the identity layer parse injects for a take that stored none.
  */
+const zeroVec = (value: Vec3): boolean => value[0] === 0 && value[1] === 0 && value[2] === 0;
+const oneVec = (value: Vec3): boolean => value[0] === 1 && value[1] === 1 && value[2] === 1;
+const identityQuat = (value: Quat): boolean => value[0] === 0 && value[1] === 0 && value[2] === 0 && value[3] === 1;
+
+/**
+ * Layer values that change the resolved c2w. Ids and timestamps stay out.
+ * An identity calibration, one-to-one mapping, and no tracking events return
+ * undefined so a take with no stored layers hashes as before.
+ */
+export const cameraLayerRecord = (take: CameraTake): Record<string, unknown> | undefined => {
+  const { calibration, mapping } = take;
+  const events = [...take.trackingEvents].sort((left, right) => left.frame - right.frame || (left.kind < right.kind ? -1 : left.kind > right.kind ? 1 : 0));
+  const calibrationIdentity = calibration.method === "identity"
+    && calibration.scale === 1
+    && identityQuat(calibration.rotation)
+    && zeroVec(calibration.translation)
+    && calibration.residualRmsM === undefined;
+  const mappingIdentity = mapping.mode === "one_to_one"
+    && oneVec(mapping.translationGain)
+    && mapping.rotationGain === 1
+    && mapping.smoothing === 0
+    && mapping.timeScale === 1
+    && mapping.timeOffsetFrames === 0
+    && (mapping.lossPolicy ?? "preserve") === "preserve"
+    && mapping.applyDriftCorrection !== true;
+  if (calibrationIdentity && mappingIdentity && events.length === 0) return undefined;
+  return {
+    calibration: {
+      arFramework: calibration.arFramework,
+      scale: calibration.scale,
+      rotation: calibration.rotation,
+      translation: calibration.translation,
+      method: calibration.method,
+      ...(calibration.residualRmsM !== undefined ? { residualRmsM: calibration.residualRmsM } : {}),
+    },
+    mapping: {
+      mode: mapping.mode,
+      translationGain: mapping.translationGain,
+      rotationGain: mapping.rotationGain,
+      smoothing: mapping.smoothing,
+      timeScale: mapping.timeScale,
+      timeOffsetFrames: mapping.timeOffsetFrames,
+      lossPolicy: mapping.lossPolicy ?? "preserve",
+      applyDriftCorrection: mapping.applyDriftCorrection === true,
+    },
+    trackingEvents: events.map((event) => ({
+      kind: event.kind,
+      frame: event.frame,
+      ...(event.correction ? { correction: { translation: event.correction.translation, rotation: event.correction.rotation } } : {}),
+      ...(event.estimatedDriftM !== undefined ? { estimatedDriftM: event.estimatedDriftM } : {}),
+    })),
+  };
+};
+
 export const upstreamPassRecord = (shot: Shot, spec: RenderPassSpec): Record<string, unknown> => {
   const take = selectedTake(shot);
+  const layers = take ? cameraLayerRecord(take) : undefined;
   return {
     durationFrames: shot.time.durationFrames,
     subjects: shot.subjects.map(subjectContent),
@@ -91,6 +148,7 @@ export const upstreamPassRecord = (shot: Shot, spec: RenderPassSpec): Record<str
             ...(key.aperture !== undefined ? { aperture: key.aperture } : {}),
           }))
         : [],
+      ...(layers ? { layers } : {}),
     },
     spec: { width: spec.width, height: spec.height, near: spec.near, far: spec.far },
   };

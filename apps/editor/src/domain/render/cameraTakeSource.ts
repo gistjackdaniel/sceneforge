@@ -1,6 +1,4 @@
-import { BackboneCameraBuilder } from "../rendering/backboneV01";
-import type { SensorPreset } from "../graph/lens";
-import { sampleCameraPose, selectedTake } from "../shot/queries";
+import { resolveCameraTakeFrames, selectedTake } from "../shot/queries";
 import type { Quat, Shot, Vec3 } from "../shot/types";
 import type { RenderPassSpec } from "./types";
 
@@ -18,8 +16,8 @@ export type CameraIntrinsics = {
 
 /**
  * One integer frame of the selected take.
- * `cameraId` is `CameraTake.id` as stored, including a later `cam_<ULID>` or
- * `cam_legacy_…` id. The pass hash does not read this string.
+ * `cameraId` is the stored `CameraTake.id` (`cam_<ULID>` or `cam_legacy_*`).
+ * The pass hash does not read this string.
  */
 export type CameraFrame = {
   frame: number;
@@ -41,18 +39,15 @@ export type CameraTrajectory = {
   frames: CameraFrame[];
 };
 
-const sensorPreset = (value: string | undefined): SensorPreset =>
-  value === "super35" || value === "micro-four-thirds" || value === "full-frame" ? value : "full-frame";
-
 /**
  * Sole reader of shot-record camera takes for the protected render path.
  *
- * TODO(#34, #41): After `feat/scene-camera-track-shot-record` (#34) and
- * `resolveCameraTakeFrames` (#41) land on `feat/shot-record`, this class
- * should call `resolveCameraTakeFrames` and attach `cameraId` from
- * `CameraTake.id` outside that return value. Until then, pose and intrinsics
- * are sampled from the stored take keys. Do not read the take anywhere else
- * in `domain/render`. fps comes from `Shot.time.fps` only.
+ * Pose, intrinsics, and OpenCV c2w come from `resolveCameraTakeFrames`, which
+ * applies calibration, tracking-loss fill, drift correction, and motion
+ * mapping before sampling. `cameraId` is attached here from `CameraTake.id`
+ * (`cam_<ULID>`, or `cam_legacy_*` after migration) and is not part of that
+ * return value or the pass hash. Do not read the take anywhere else in
+ * `domain/render`. fps comes from `Shot.time.fps` only.
  */
 export class CameraTakeSource {
   static trajectory(shot: Shot, spec: RenderPassSpec, frames: readonly number[]): CameraTrajectory | { ok: false; reason: string } {
@@ -60,31 +55,35 @@ export class CameraTakeSource {
     if (!take || shot.camera.status !== "ready") {
       return { ok: false, reason: "A selected camera take is required." };
     }
-    const imageSize: [number, number] = [spec.width, spec.height];
-    const preset = sensorPreset(shot.camera.lens.sensorPreset);
-    const sampled = frames.map((frame) => {
-      const pose = sampleCameraPose(take, frame, shot.camera.interpolation);
-      const lens = {
-        focalLengthMm: pose.focalLengthMm,
-        sensorPreset: preset,
-        ...(pose.focusDistanceM !== undefined ? { focusDistanceM: pose.focusDistanceM } : {}),
-        ...(pose.aperture !== undefined ? { aperture: pose.aperture } : {}),
-      };
-      const K = BackboneCameraBuilder.computeIntrinsicsK(lens, imageSize, "horizontal");
+    const resolved = resolveCameraTakeFrames(take, shot, {
+      frames,
+      imageSize: [spec.width, spec.height],
+    });
+    if (resolved.length !== frames.length) {
+      return { ok: false, reason: "The selected camera take has no frames." };
+    }
+    const sampled = resolved.map((pose) => {
       const rotation: Quat = [pose.rotation[0], pose.rotation[1], pose.rotation[2], pose.rotation[3]];
       const position: Vec3 = [pose.position[0], pose.position[1], pose.position[2]];
-      const c2w = BackboneCameraBuilder.composeC2W(
-        [position[0], position[1], position[2]],
-        BackboneCameraBuilder.glToOpenCvRotation(BackboneCameraBuilder.quatToMat3([rotation[0], rotation[1], rotation[2], rotation[3]])),
-      );
+      const K = pose.intrinsics.K;
       const framePose: CameraFrame = {
-        frame,
+        frame: pose.frame,
         cameraId: take.id,
         position,
         rotation,
         focalLengthMm: pose.focalLengthMm,
-        intrinsics: { fx: K[0][0], fy: K[1][1], cx: K[0][2], cy: K[1][2], K },
-        c2w,
+        intrinsics: {
+          fx: pose.intrinsics.fx,
+          fy: pose.intrinsics.fy,
+          cx: pose.intrinsics.cx,
+          cy: pose.intrinsics.cy,
+          K: [
+            [K[0][0], K[0][1], K[0][2]],
+            [K[1][0], K[1][1], K[1][2]],
+            [K[2][0], K[2][1], K[2][2]],
+          ],
+        },
+        c2w: pose.c2w.map((row) => [row[0], row[1], row[2], row[3]]),
         ...(pose.focusDistanceM !== undefined ? { focusDistanceM: pose.focusDistanceM } : {}),
         ...(pose.aperture !== undefined ? { aperture: pose.aperture } : {}),
       };
