@@ -13,10 +13,26 @@ import type { ApplyCommandContext } from "../commands/apply";
 import type { DomainCommand } from "../commands/types";
 import { MODEL_PROFILES } from "../../domain/rendering/modelProfile";
 import { createMeshExampleWorld, createPointCloudExampleWorld, createSplatExampleWorld } from "../../domain/worlds/sampleWorlds";
+import { shotId, type Shot } from "../../domain/shot";
 
 const now = "2026-01-01T00:00:00.000Z";
 
-const projectFixture = (): { project: Project; clip: TimelineClip } => {
+const shotFixture = (): Shot => ({
+  schemaVersion: 1,
+  id: shotId("shot-001"),
+  name: "Shot 01",
+  time: { fps: 24, durationFrames: 96, origin: "clip_local" },
+  subjects: [],
+  camera: {
+    status: "empty",
+    lens: { focalLengthMm: 35 },
+    interpolation: "linear",
+    retiredTakeIds: [],
+  },
+  renders: [],
+});
+
+const projectFixture = (): { project: Project; clip: TimelineClip; shot: Shot } => {
   const clip: TimelineClip = {
     id: "clip-001",
     name: "Clip 01",
@@ -90,8 +106,9 @@ const projectFixture = (): { project: Project; clip: TimelineClip } => {
     connectors: {},
     libraryNodeIds: [],
     clipDrafts: {},
+    shots: { [clip.id]: shotFixture() },
   };
-  return { project, clip };
+  return { project, clip, shot: project.shots![clip.id]! };
 };
 
 describe("Model profile validation", () => {
@@ -123,8 +140,8 @@ describe("Camera movement description", () => {
 
 describe("ClipDraft to GenerationRequest", () => {
   it("builds a request with Backbone v0.1 camera and pose conditions", () => {
-    const { project, clip } = projectFixture();
-    const draft = createEmptyClipDraft(clip, { prompt: "Walk forward", durationSeconds: 4, fps: 16, width: 1280, height: 720 });
+    const { project, clip, shot } = projectFixture();
+    const draft = createEmptyClipDraft(shot, { clipId: clip.id, prompt: "Walk forward", durationSeconds: 4, fps: 16, width: 1280, height: 720 });
 
     // Create a minimal SMPL-X pose node so exportBackboneSmplxForClip succeeds
     const poseNode = createNodeBase({
@@ -154,8 +171,10 @@ describe("ClipDraft to GenerationRequest", () => {
       clip,
       nodes: projectWithPose.nodes,
       draft,
+      shot,
     });
     expect(request.task).toBe("world_to_video");
+    expect(request.fps).toBe(shot.time.fps);
     const camera = request.conditions.find((c) => c.type === "camera");
     expect(camera?.payload?.format).toBe("backbone_v0.1");
     const pose = request.conditions.find((c) => c.type === "pose");
@@ -166,10 +185,10 @@ describe("ClipDraft to GenerationRequest", () => {
 
 describe("Image anchors: reference mode by default, hard only on toggle", () => {
   it("excludes images from hard conditions by default and sends soft guidance; toggling to hard moves to conditions", () => {
-    const { project, clip } = projectFixture();
-    let draft = createEmptyClipDraft(clip, { durationSeconds: 4, fps: 16, width: 1280, height: 720 });
+    const { project, clip, shot } = projectFixture();
+    let draft = createEmptyClipDraft(shot, { clipId: clip.id, durationSeconds: 4, fps: 16, width: 1280, height: 720 });
     draft = { ...draft, references: [...(draft.references ?? []), { id: "img-1", kind: "image", assetId: "asset-img-1" }] };
-    const { request, validation } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft });
+    const { request, validation } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft, shot });
     expect(validation.ok).toBe(true);
     // No hard image conditions by default
     expect(request.conditions.some((c) => c.type === "image")).toBe(false);
@@ -179,9 +198,9 @@ describe("Image anchors: reference mode by default, hard only on toggle", () => 
 
     // Toggle to hard via DomainCommand (undoable)
     const ctx: ApplyCommandContext = { timestamp: now };
-    const created = applyCommand({ ...project, clipDrafts: { [clip.id]: draft } } as Project, { type: "SET_DRAFT_IMAGE_MODE", clipId: clip.id, referenceId: "img-1", mode: "hard" } as DomainCommand, ctx);
-    const hardened = created.project.clipDrafts![clip.id]!;
-    const { request: req2, validation: val2 } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft: hardened });
+    const created = applyCommand({ ...project, clipDrafts: { [shot.id]: draft } } as Project, { type: "SET_DRAFT_IMAGE_MODE", clipId: clip.id, referenceId: "img-1", mode: "hard" } as DomainCommand, ctx);
+    const hardened = created.project.clipDrafts![shot.id]!;
+    const { request: req2, validation: val2 } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft: hardened, shot });
     expect(val2.ok).toBe(true);
     expect(req2.conditions.some((c) => c.type === "image" && c.assetId === "asset-img-1")).toBe(true);
     expect(((req2.backendOptions as any).softGuidanceImages ?? []).length).toBe(0);
@@ -189,8 +208,8 @@ describe("Image anchors: reference mode by default, hard only on toggle", () => 
     // Undo toggle
     const inverse = created.result.inverse!;
     const undone = applyCommand(created.project, inverse as DomainCommand, ctx);
-    const reverted = undone.project.clipDrafts![clip.id]!;
-    const { request: req3 } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft: reverted });
+    const reverted = undone.project.clipDrafts![shot.id]!;
+    const { request: req3 } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft: reverted, shot });
     expect(req3.conditions.some((c) => c.type === "image")).toBe(false);
     expect((req3.backendOptions as any).softGuidanceImages?.length).toBe(1);
   });
@@ -220,50 +239,105 @@ describe("Model capability for image guidance/conditioning", () => {
       supportsHardImageConditioning: false,
     };
 
-    const { project, clip } = projectFixture();
+    const { project, clip, shot } = projectFixture();
     // Soft guidance unsupported
-    let draft = createEmptyClipDraft(clip, { durationSeconds: 4, fps: 16, width: 1280, height: 720, modelId: "no-soft" });
+    let draft = createEmptyClipDraft(shot, { clipId: clip.id, durationSeconds: 4, fps: 16, width: 1280, height: 720, modelId: "no-soft" });
     draft = { ...draft, references: [{ id: "img-1", kind: "image", assetId: "asset-img-1" }] };
-    const { request, validation } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft });
+    const { request, validation } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft, shot });
     expect(validation.ok).toBe(true);
     expect(validation.warnings.some((w) => /does not support soft image guidance/i.test(w))).toBe(true);
     expect(((request.backendOptions as any).softGuidanceImages ?? []).length).toBe(0);
 
     // Hard conditioning unsupported
-    let draft2 = createEmptyClipDraft(clip, { durationSeconds: 4, fps: 16, width: 1280, height: 720, modelId: "no-hard" });
+    let draft2 = createEmptyClipDraft(shot, { clipId: clip.id, durationSeconds: 4, fps: 16, width: 1280, height: 720, modelId: "no-hard" });
     draft2 = { ...draft2, references: [{ id: "img-2", kind: "image", assetId: "asset-img-2", imageMode: "hard" }] };
-    const { validation: v2 } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft: draft2 });
+    const { validation: v2 } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft: draft2, shot });
     expect(v2.ok).toBe(false);
     expect(v2.issues.some((i) => /does not support hard image conditioning/i.test(i.message))).toBe(true);
   });
 });
 
 describe("Generation handoff DTO", () => {
-  it("includes clipId, depHash, and final:clipId:depHash cacheKey; returns failure when invalid", () => {
-    const { project, clip } = projectFixture();
-    const valid = createEmptyClipDraft(clip, { durationSeconds: 4, fps: 16, width: 1280, height: 720, prompt: "" });
+  it("hashes the pass without clip or shot ids and fails closed when the shot rate is missing", () => {
+    const { project, clip, shot } = projectFixture();
+    const valid = createEmptyClipDraft(shot, { clipId: clip.id, durationSeconds: 4, fps: 16, width: 1280, height: 720, prompt: "Walk forward" });
     const ok = prepareGenerationHandoff({ project, clip, nodes: project.nodes, draft: valid });
     if (!ok.ok) throw new Error("expected ok handoff");
     expect(ok.dto.clipId).toBe(clip.id);
     expect(ok.dto.depHash).toBe("h1");
-    expect(ok.dto.cacheKey).toBe(`final:${clip.id}:h1`);
+    expect(ok.dto.request.fps).toBe(24);
+    expect(ok.dto.cacheKey).not.toContain(clip.id);
+    expect(ok.dto.cacheKey).not.toContain(shot.id);
+    const again = prepareGenerationHandoff({ project, clip, nodes: project.nodes, draft: valid });
+    if (!again.ok) throw new Error("expected ok handoff");
+    expect(again.dto.cacheKey).toBe(ok.dto.cacheKey);
 
-    const invalid = createEmptyClipDraft(clip, { durationSeconds: 999, fps: 120, width: 1024, height: 1024 });
+    const changed = prepareGenerationHandoff({
+      project,
+      clip,
+      nodes: project.nodes,
+      draft: { ...valid, prompt: "Turn around" },
+    });
+    if (!changed.ok) throw new Error("expected ok handoff");
+    expect(changed.dto.cacheKey).not.toBe(ok.dto.cacheKey);
+
+    const faster = prepareGenerationHandoff({
+      project: { ...project, shots: { [clip.id]: { ...shot, time: { ...shot.time, fps: 12 } } } },
+      clip,
+      nodes: project.nodes,
+      draft: valid,
+    });
+    if (!faster.ok) throw new Error("expected ok handoff");
+    expect(faster.dto.cacheKey).not.toBe(ok.dto.cacheKey);
+
+    const otherId = "clip-other";
+    const otherClip: TimelineClip = { ...clip, id: otherId };
+    const otherLensId = `node-${otherId}-lens`;
+    const lensId = `node-${clip.id}-lens`;
+    const other = prepareGenerationHandoff({
+      project: {
+        ...project,
+        clips: { [otherId]: otherClip },
+        shots: { [otherId]: shot },
+        sequences: { "seq-1": { ...project.sequences["seq-1"]!, clipIds: [otherId] } },
+        clipGraphs: { "g-1": { ...project.clipGraphs["g-1"]!, clipId: otherId, nodeIds: ["performance", "camera", otherLensId] } },
+        nodes: {
+          ...project.nodes,
+          [otherLensId]: { ...project.nodes[lensId]!, id: otherLensId },
+        },
+      },
+      clip: otherClip,
+      nodes: {
+        ...project.nodes,
+        [otherLensId]: { ...project.nodes[lensId]!, id: otherLensId },
+      },
+      draft: { ...valid, clipId: otherId },
+    });
+    if (!other.ok) throw new Error("expected ok handoff");
+    expect(other.dto.cacheKey).toBe(ok.dto.cacheKey);
+
+    const invalid = createEmptyClipDraft(shot, { clipId: clip.id, durationSeconds: 999, fps: 120, width: 1024, height: 1024 });
     const fail = prepareGenerationHandoff({ project, clip, nodes: project.nodes, draft: invalid });
     expect(fail.ok).toBe(false);
     if (fail.ok) return;
     expect(fail.failure.code).toBe("VALIDATION_ERROR");
     expect(fail.failure.clipId).toBe(clip.id);
-    expect(fail.failure.cacheKey).toBe(`final:${clip.id}:h1`);
+    expect(fail.failure.cacheKey).not.toBe(ok.dto.cacheKey);
+    expect(fail.failure.cacheKey ?? "").not.toContain(clip.id);
     expect(fail.failure.retryable).toBe(false);
+
+    const { shots: _shots, ...withoutShot } = project;
+    const missing = prepareGenerationHandoff({ project: withoutShot, clip, nodes: project.nodes, draft: valid });
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.failure.message).toBe("Shot time.fps is required.");
   });
 });
 
 describe("Backbone v0.1 unchanged when extensions are absent", () => {
   it("does not emit identity/speech/contact_events/render_settings by default", () => {
-    const { project, clip } = projectFixture();
-    const draft = createEmptyClipDraft(clip, { durationSeconds: 4, fps: 16, width: 1280, height: 720 });
-    const { request } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft });
+    const { project, clip, shot } = projectFixture();
+    const draft = createEmptyClipDraft(shot, { clipId: clip.id, durationSeconds: 4, fps: 16, width: 1280, height: 720 });
+    const { request } = buildGenerationRequestFromDraft({ project, clip, nodes: project.nodes, draft, shot });
     const newTypes = new Set(["identity", "speech", "contact_events", "render_settings"]);
     expect(request.conditions.some((c) => newTypes.has(c.type as string))).toBe(false);
     // Ensure existing v0.1 conditions still present
@@ -274,11 +348,12 @@ describe("Backbone v0.1 unchanged when extensions are absent", () => {
 
 describe("Prompt target lookup", () => {
   it("adds a world_reference only for a unique TargetResolver match", () => {
-    const { project, clip } = projectFixture();
+    const { project, clip, shot } = projectFixture();
     const world = createMeshExampleWorld();
     world.localizedNames = { ko: "아파트 거실", en: "Apartment Livingroom" };
     world.aliases = ["living room", "거실"];
-    const draft = createEmptyClipDraft(clip, {
+    const draft = createEmptyClipDraft(shot, {
+      clipId: clip.id,
       prompt: "Walk toward @거실",
       durationSeconds: 4,
       fps: 16,
@@ -290,6 +365,7 @@ describe("Prompt target lookup", () => {
       clip,
       nodes: project.nodes,
       draft,
+      shot,
     });
     expect(validation.ok).toBe(true);
     const worldRef = request.conditions.find((condition) => condition.type === "world_reference");
@@ -298,10 +374,11 @@ describe("Prompt target lookup", () => {
   });
 
   it("does not attach a world_reference when TargetResolver scores tie", () => {
-    const { project, clip } = projectFixture();
+    const { project, clip, shot } = projectFixture();
     const splat = createSplatExampleWorld();
     const points = createPointCloudExampleWorld();
-    const draft = createEmptyClipDraft(clip, {
+    const draft = createEmptyClipDraft(shot, {
+      clipId: clip.id,
       prompt: "@[Color Block]",
       durationSeconds: 4,
       fps: 16,
@@ -313,6 +390,7 @@ describe("Prompt target lookup", () => {
       clip,
       nodes: project.nodes,
       draft,
+      shot,
     });
     expect(validation.ok).toBe(false);
     expect(validation.issues.some((issue) => issue.field === "prompt" && /more than one world target/.test(issue.message))).toBe(true);
@@ -322,8 +400,8 @@ describe("Prompt target lookup", () => {
 
 describe("Draft and plan separation", () => {
   it("does not mutate camera path or lens when editing draft", () => {
-    const { project, clip } = projectFixture();
-    const draft = createEmptyClipDraft(clip);
+    const { project, clip, shot } = projectFixture();
+    const draft = createEmptyClipDraft(shot, { clipId: clip.id });
     const beforeCamera = JSON.stringify(project.nodes["camera"].parameters);
     const lensId = `node-${clip.id}-lens`;
     const beforeLens = JSON.stringify((project.nodes[lensId] as any).parameters);
@@ -334,6 +412,86 @@ describe("Draft and plan separation", () => {
     // Ensure nodes unchanged
     expect(JSON.stringify(project.nodes["camera"].parameters)).toBe(beforeCamera);
     expect(JSON.stringify((project.nodes[lensId] as any).parameters)).toBe(beforeLens);
+  });
+});
+
+describe("Clip draft undo and shot identity", () => {
+  it("restores prompt and references when undoing DISCARD_CLIP_DRAFT", () => {
+    const { project, clip, shot } = projectFixture();
+    const ctx: ApplyCommandContext = { timestamp: now };
+    const reference = { id: "img-1", kind: "image" as const, assetId: "asset-img-1" };
+    const created = applyCommand(project, { type: "CREATE_CLIP_DRAFT", clipId: clip.id }, ctx);
+    const updated = applyCommand(
+      created.project,
+      { type: "UPDATE_CLIP_DRAFT", clipId: clip.id, patch: { prompt: "손을 들어", references: [reference] } },
+      ctx,
+    );
+    expect(updated.project.clipDrafts?.[shot.id]?.prompt).toBe("손을 들어");
+    expect(updated.project.clipDrafts?.[clip.id]).toBeUndefined();
+
+    const discarded = applyCommand(updated.project, { type: "DISCARD_CLIP_DRAFT", clipId: clip.id }, ctx);
+    expect(discarded.project.clipDrafts?.[shot.id]).toBeUndefined();
+    expect(discarded.result.inverse?.type).toBe("CREATE_CLIP_DRAFT");
+
+    const restored = applyCommand(discarded.project, discarded.result.inverse!, ctx);
+    expect(restored.project.clipDrafts?.[shot.id]?.prompt).toBe("손을 들어");
+    expect(restored.project.clipDrafts?.[shot.id]?.references).toEqual([reference]);
+    expect(Object.keys(restored.project.clipDrafts ?? {})).toEqual([shot.id]);
+  });
+
+  it("keeps the draft on the same shot after the clip is moved, cut, deleted, and restored", () => {
+    const { project, clip, shot } = projectFixture();
+    const ctx: ApplyCommandContext = { timestamp: now };
+    const created = applyCommand(project, { type: "CREATE_CLIP_DRAFT", clipId: clip.id }, ctx);
+    const updated = applyCommand(
+      created.project,
+      {
+        type: "UPDATE_CLIP_DRAFT",
+        clipId: clip.id,
+        patch: { prompt: "같은 샷", references: [{ id: "ref-1", kind: "image", assetId: "asset-1" }] },
+      },
+      ctx,
+    );
+
+    const movedClip = { ...updated.project.clips[clip.id]!, start: 24, startFrame: 24 };
+    const moved: Project = { ...updated.project, clips: { [clip.id]: movedClip } };
+    expect(moved.clipDrafts?.[shot.id]?.prompt).toBe("같은 샷");
+
+    const cutId = "clip-cut";
+    const cutClip: TimelineClip = { ...movedClip, id: cutId, duration: 48, durationFrames: 48 };
+    const cut: Project = {
+      ...moved,
+      clips: { [cutId]: cutClip },
+      shots: { [cutId]: shot },
+      sequences: { "seq-1": { ...moved.sequences["seq-1"]!, clipIds: [cutId] } },
+    };
+    expect(cut.clipDrafts?.[shot.id]?.references[0]?.assetId).toBe("asset-1");
+    expect(cut.clipDrafts?.[cutId]).toBeUndefined();
+
+    const deleted: Project = {
+      ...cut,
+      clips: {},
+      shots: {},
+      sequences: { "seq-1": { ...cut.sequences["seq-1"]!, clipIds: [] } },
+    };
+    expect(deleted.clipDrafts?.[shot.id]?.prompt).toBe("같은 샷");
+
+    const restoredId = "clip-restored";
+    const restoredProject: Project = {
+      ...deleted,
+      clips: { [restoredId]: { ...cutClip, id: restoredId } },
+      shots: { [restoredId]: shot },
+      sequences: { "seq-1": { ...deleted.sequences["seq-1"]!, clipIds: [restoredId] } },
+    };
+    const edited = applyCommand(
+      restoredProject,
+      { type: "UPDATE_CLIP_DRAFT", clipId: restoredId, patch: { prompt: "복원 후" } },
+      ctx,
+    );
+    expect(edited.result.ok).toBe(true);
+    expect(edited.project.clipDrafts?.[shot.id]?.prompt).toBe("복원 후");
+    expect(edited.project.clipDrafts?.[shot.id]?.references).toEqual([{ id: "ref-1", kind: "image", assetId: "asset-1" }]);
+    expect(Object.keys(edited.project.clipDrafts ?? {})).toEqual([shot.id]);
   });
 });
 

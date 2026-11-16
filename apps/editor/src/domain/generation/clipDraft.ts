@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { TimelineClip } from "../timeline/types";
 
 export type DraftReferenceKind = "image" | "video" | "audio" | "mesh" | "world" | "pose_track" | "camera_path";
 
@@ -37,7 +36,9 @@ export const draftReferenceSchema = z.object({
 });
 
 export interface ClipDraft {
-  id: string; // equals TimelineClip.id (one draft per shot)
+  /** Shot.id. The draft map is keyed by this, not by the clip. */
+  id: string;
+  /** Clip the UI used to find the shot. Not the storage key. */
   clipId: string;
   modelId: string;
   /** Natural language motion prompt. */
@@ -87,11 +88,11 @@ export const clipDraftSchema = z.object({
   updatedAt: z.string().min(1),
 });
 
-export const createEmptyClipDraft = (clip: Pick<TimelineClip, "id">, defaults?: Partial<ClipDraft>): ClipDraft => {
+export const createEmptyClipDraft = (shot: { id: string }, defaults?: Partial<ClipDraft>): ClipDraft => {
   const now = new Date().toISOString();
   const draft: ClipDraft = {
-    id: clip.id,
-    clipId: clip.id,
+    id: shot.id,
+    clipId: defaults?.clipId ?? shot.id,
     modelId: defaults?.modelId ?? "lyra-2.0",
     prompt: defaults?.prompt ?? "",
     cameraMovementSuggestion: defaults?.cameraMovementSuggestion,

@@ -139,7 +139,16 @@ export type DomainCommand =
       logMessage?: string;
     }
   // ClipDraft commands — generation drafts are separate from blocking plan
-  | { type: "CREATE_CLIP_DRAFT"; clipId: string; modelId?: string }
+  | {
+      type: "CREATE_CLIP_DRAFT";
+      clipId: string;
+      modelId?: string;
+      /** Present on the inverse of DISCARD_CLIP_DRAFT so undo restores the authored draft. */
+      restore?: {
+        prompt: string;
+        references: import("../../domain/generation/clipDraft").DraftReference[];
+      };
+    }
   | {
       type: "UPDATE_CLIP_DRAFT";
       clipId: string;

@@ -12,7 +12,7 @@ import type { CommandResult, DomainCommand, DomainEvent } from "./types";
 import { smplxTrackSchema, upsertSmplxKeyframe, removeSmplxKeyframe, setJointAxisAngleAtFrame, type SmplxTrack } from "../../domain/performance/poseTrack";
 import { posePreset, applyHandPreset } from "../../domain/performance/presets";
 import { performancePlanNodeIdForClip, performancePlanFromNode } from "../../domain/performance";
-import { createEmptyClipDraft } from "../../domain/generation/clipDraft";
+import { createEmptyClipDraft, type ClipDraft } from "../../domain/generation/clipDraft";
 import { cameraPathParamsFromNode, deleteCameraKeyframe, keyframeAtExactFrame, upsertCameraKeyframe } from "../../domain/graph/cameraPath";
 import { lensNodeIdForClip, lensParamsFromNode } from "../../domain/graph/lens";
 import { applyShotCommand } from "../../domain/shot";
@@ -42,6 +42,14 @@ const fallbackSmplxTrack = (parameters: Record<string, unknown>): SmplxTrack => 
 export interface ApplyCommandContext {
   timestamp: string;
 }
+
+/** The clip id locates the shot. Drafts are stored under Shot.id. */
+const shotForClip = (project: Project, clipId: string) => project.shots?.[clipId];
+
+const withDraft = (project: Project, shotId: string, draft: ClipDraft): Project => ({
+  ...project,
+  clipDrafts: { ...(project.clipDrafts ?? {}), [shotId]: draft },
+});
 
 /**
  * Apply a domain command to a project. Returns inverse for undo.
@@ -930,16 +938,23 @@ export const applyCommand = (
     case "CREATE_CLIP_DRAFT": {
       const clip = project.clips[command.clipId];
       if (!clip) return fail("Clip not found.");
-      const existing = project.clipDrafts?.[clip.id];
+      const shot = shotForClip(project, clip.id);
+      if (!shot) return fail("Shot not found.");
+      const existing = project.clipDrafts?.[shot.id];
       if (existing) {
         return {
           project,
           result: { ok: true, command, events: [] },
         };
       }
-      const draft = createEmptyClipDraft(clip, { modelId: command.modelId });
+      const draft = createEmptyClipDraft(shot, {
+        clipId: clip.id,
+        modelId: command.modelId,
+        prompt: command.restore?.prompt,
+        references: command.restore?.references,
+      });
       return {
-        project: { ...project, clipDrafts: { ...(project.clipDrafts ?? {}), [clip.id]: draft } },
+        project: withDraft(project, shot.id, draft),
         result: {
           ok: true,
           command,
@@ -949,18 +964,21 @@ export const applyCommand = (
       };
     }
     case "UPDATE_CLIP_DRAFT": {
-      const draft = project.clipDrafts?.[command.clipId];
+      const shot = shotForClip(project, command.clipId);
+      if (!shot) return fail("Shot not found.");
+      const draft = project.clipDrafts?.[shot.id];
       if (!draft) return fail("Draft not found.");
       const previous = { ...draft };
       const next = {
         ...draft,
         ...command.patch,
+        id: shot.id,
         updatedAt: timestamp,
         // Do not allow accidental mutation of completed lock via patch:
         completed: draft.completed,
       };
       return {
-        project: { ...project, clipDrafts: { ...(project.clipDrafts ?? {}), [command.clipId]: next } },
+        project: withDraft(project, shot.id, next),
         result: {
           ok: true,
           command,
@@ -970,24 +988,37 @@ export const applyCommand = (
       };
     }
     case "DISCARD_CLIP_DRAFT": {
-      if (!project.clipDrafts?.[command.clipId]) {
+      const shot = shotForClip(project, command.clipId);
+      if (!shot || !project.clipDrafts?.[shot.id]) {
         return { project, result: { ok: true, command, events: [] } };
       }
       const drafts = { ...(project.clipDrafts ?? {}) };
-      const previous = drafts[command.clipId];
-      delete drafts[command.clipId];
+      const previous = drafts[shot.id];
+      delete drafts[shot.id];
       return {
         project: { ...project, clipDrafts: drafts },
         result: {
           ok: true,
           command,
-          inverse: previous ? { type: "CREATE_CLIP_DRAFT", clipId: command.clipId, modelId: previous.modelId } : undefined,
+          inverse: previous
+            ? {
+                type: "CREATE_CLIP_DRAFT",
+                clipId: command.clipId,
+                modelId: previous.modelId,
+                restore: {
+                  prompt: previous.prompt,
+                  references: previous.references.map((reference) => ({ ...reference })),
+                },
+              }
+            : undefined,
           events: [{ type: "NodeUiChanged", timestamp, payload: { clipId: command.clipId, draftDiscarded: true } }],
         },
       };
     }
     case "ADD_DRAFT_REFERENCE": {
-      const draft = project.clipDrafts?.[command.clipId];
+      const shot = shotForClip(project, command.clipId);
+      if (!shot) return fail("Shot not found.");
+      const draft = project.clipDrafts?.[shot.id];
       if (!draft) return fail("Draft not found.");
       const exists = draft.references.find((r) => r.id === command.reference.id);
       const next = {
@@ -998,7 +1029,7 @@ export const applyCommand = (
         updatedAt: timestamp,
       };
       return {
-        project: { ...project, clipDrafts: { ...(project.clipDrafts ?? {}), [command.clipId]: next } },
+        project: withDraft(project, shot.id, next),
         result: {
           ok: true,
           command,
@@ -1008,7 +1039,9 @@ export const applyCommand = (
       };
     }
     case "REMOVE_DRAFT_REFERENCE": {
-      const draft = project.clipDrafts?.[command.clipId];
+      const shot = shotForClip(project, command.clipId);
+      if (!shot) return fail("Shot not found.");
+      const draft = project.clipDrafts?.[shot.id];
       if (!draft) return fail("Draft not found.");
       const before = draft.references;
       const next = {
@@ -1017,7 +1050,7 @@ export const applyCommand = (
         updatedAt: timestamp,
       };
       return {
-        project: { ...project, clipDrafts: { ...(project.clipDrafts ?? {}), [command.clipId]: next } },
+        project: withDraft(project, shot.id, next),
         result: {
           ok: true,
           command,
@@ -1027,7 +1060,9 @@ export const applyCommand = (
       };
     }
     case "SET_DRAFT_IMAGE_MODE": {
-      const draft = project.clipDrafts?.[command.clipId];
+      const shot = shotForClip(project, command.clipId);
+      if (!shot) return fail("Shot not found.");
+      const draft = project.clipDrafts?.[shot.id];
       if (!draft) return fail("Draft not found.");
       const refs = draft.references.slice();
       const index = refs.findIndex((r) => r.id === command.referenceId && r.kind === "image");
@@ -1036,7 +1071,7 @@ export const applyCommand = (
       refs[index] = { ...refs[index], imageMode: command.mode };
       const next = { ...draft, references: refs, updatedAt: timestamp };
       return {
-        project: { ...project, clipDrafts: { ...(project.clipDrafts ?? {}), [command.clipId]: next } },
+        project: withDraft(project, shot.id, next),
         result: {
           ok: true,
           command,
@@ -1046,7 +1081,9 @@ export const applyCommand = (
       };
     }
     case "SET_DRAFT_IMAGE_GUIDANCE": {
-      const draft = project.clipDrafts?.[command.clipId];
+      const shot = shotForClip(project, command.clipId);
+      if (!shot) return fail("Shot not found.");
+      const draft = project.clipDrafts?.[shot.id];
       if (!draft) return fail("Draft not found.");
       const refs = draft.references.slice();
       const index = refs.findIndex((r) => r.id === command.referenceId && r.kind === "image");
@@ -1056,7 +1093,7 @@ export const applyCommand = (
       refs[index] = { ...refs[index], guidance: bounded };
       const next = { ...draft, references: refs, updatedAt: timestamp };
       return {
-        project: { ...project, clipDrafts: { ...(project.clipDrafts ?? {}), [command.clipId]: next } },
+        project: withDraft(project, shot.id, next),
         result: {
           ok: true,
           command,
@@ -1066,12 +1103,14 @@ export const applyCommand = (
       };
     }
     case "SET_DRAFT_MODEL": {
-      const draft = project.clipDrafts?.[command.clipId];
+      const shot = shotForClip(project, command.clipId);
+      if (!shot) return fail("Shot not found.");
+      const draft = project.clipDrafts?.[shot.id];
       if (!draft) return fail("Draft not found.");
       const previous = draft.modelId;
       const next = { ...draft, modelId: command.modelId, updatedAt: timestamp };
       return {
-        project: { ...project, clipDrafts: { ...(project.clipDrafts ?? {}), [command.clipId]: next } },
+        project: withDraft(project, shot.id, next),
         result: {
           ok: true,
           command,

@@ -4,14 +4,32 @@ import type { NodeBase } from "../../domain/graph/types";
 import type { RenderRequest } from "../../domain/rendering/request";
 import { buildGenerationRequestFromDraft, type DraftValidationExtended } from "./generationClipRequest";
 import type { ClipDraft } from "../../domain/generation/clipDraft";
-import { computeClipCacheDependencyHash } from "../../core/dependency";
+import { computeClipCacheDependencyHash, computePassHash } from "../../core/dependency";
+
+/** Identity fields. They name a clip, shot, or request and are not part of the pass. */
+const IDENTITY_KEYS = new Set(["id", "clipId", "shotId", "requestId", "nodeId", "metadataRefId"]);
+
+/** Drop clip, shot, and request identity so equal authored input hashes the same. */
+const omitIdentity = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(omitIdentity);
+  if (!value || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (IDENTITY_KEYS.has(key)) continue;
+    out[key] = omitIdentity(nested);
+  }
+  return out;
+};
+
+/** Cache key for a generation pass. Uses `computePassHash` and no clip or shot id. */
+export const generationPassCacheKey = (request: RenderRequest): string => computePassHash(omitIdentity(request));
 
 /** Typed DTO passed to the Agentic system bot (kept behind the bridge, not UI). */
 export interface GenerationHandoffDTO {
   clipId: string;
-  /** Stable dependency hash for this clip's blocking plan. Matches #14 cacheKey shape: final:clipId:depHash */
+  /** Dependency hash of the clip graph. Not the generation cache key. */
   depHash: string;
-  /** Convenience composite key (stubbed to match #14): final:clipId:depHash */
+  /** `computePassHash` of the request with identity fields removed. */
   cacheKey: string;
   /** Normalized, model-agnostic request payload. */
   request: RenderRequest;
@@ -48,10 +66,39 @@ export const prepareGenerationHandoff = (input: {
   draft: ClipDraft;
 }): GenerationHandoffResult => {
   const { project, clip, nodes, draft } = input;
-  const { request, validation } = buildGenerationRequestFromDraft({ project, clip, nodes, draft });
+  const shot = project.shots?.[clip.id];
+  if (!shot) {
+    return {
+      ok: false,
+      failure: {
+        code: "MISSING_DEPENDENCY",
+        message: "Shot time.fps is required.",
+        clipId: clip.id,
+        retryable: false,
+      },
+      validation: { ok: false, issues: [{ field: "fps", message: "Shot time.fps is required." }], warnings: [] },
+    };
+  }
+  let request: RenderRequest;
+  let validation: DraftValidationExtended;
+  try {
+    ({ request, validation } = buildGenerationRequestFromDraft({ project, clip, nodes, draft, shot }));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Shot time.fps is required.";
+    return {
+      ok: false,
+      failure: {
+        code: "MISSING_DEPENDENCY",
+        message,
+        clipId: clip.id,
+        retryable: false,
+      },
+      validation: { ok: false, issues: [{ field: "fps", message }], warnings: [] },
+    };
+  }
 
   const depHash = extractDepHash(clip.id, project.dependencyMap.cacheHashesByClipId[clip.id], project);
-  const cacheKey = `final:${clip.id}:${depHash}`; // #14 shape (stubbed when #14 is not present)
+  const cacheKey = generationPassCacheKey(request);
 
   if (!validation.ok) {
     return {

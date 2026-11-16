@@ -12,12 +12,16 @@ import type { ClipDraft, DraftValidationIssue } from "../../domain/generation/cl
 import { DraftTargetLookup } from "../../domain/generation/draftTargetLookup";
 import { CameraMovementDescriber } from "../../domain/rendering/cameraMovement";
 import { getModelProfile, validateDraftAgainstProfile } from "../../domain/rendering/modelProfile";
+import { readShotTimeFps } from "../../domain/shot";
+import type { Shot } from "../../domain/shot";
 
 export interface BuildRequestInput {
   project: Project;
   clip: TimelineClip;
   nodes: Record<string, NodeBase>;
   draft: ClipDraft;
+  /** Output frame rate comes only from this shot. A missing rate fails. */
+  shot: Pick<Shot, "time">;
 }
 
 export const generationRequestSchema = z.object({
@@ -54,9 +58,10 @@ export const validateMotionPromptComplexity = (prompt: string, durationSeconds: 
 };
 
 export const buildGenerationRequestFromDraft = (input: BuildRequestInput): { request: RenderRequest; validation: DraftValidationExtended } => {
-  const { project, clip, nodes, draft } = input;
+  const { project, clip, nodes, draft, shot } = input;
+  const fps = readShotTimeFps(shot);
   const model = getModelProfile(draft.modelId);
-  const durationFrames = Math.round(draft.durationSeconds * draft.fps);
+  const durationFrames = Math.round(draft.durationSeconds * fps);
   const lens = lensParamsFromNode(nodes[lensNodeIdForClip(clip.id)]?.parameters ?? {});
   const camera = cameraPathParamsFromNode(nodes[clip.cameraPathNodeId ?? `node-${clip.id}-trajectory`]?.parameters ?? {});
   const cameraSuggestion = CameraMovementDescriber.describe(camera);
@@ -70,11 +75,11 @@ export const buildGenerationRequestFromDraft = (input: BuildRequestInput): { req
     clipId: clip.id,
     prompt: draft.prompt?.trim() ? draft.prompt : `Camera movement: ${cameraSuggestion}`,
     camera: { label: "authored camera", frameCount: durationFrames },
-    fps: draft.fps,
+    fps,
     imageSize: [draft.width, draft.height],
     cameraPath: camera,
     lens,
-    pose: exportBackboneSmplxForClip(project, clip.id, { fps: draft.fps }),
+    pose: exportBackboneSmplxForClip(project, clip.id, { fps }),
   }).conditions;
 
   // @멘션은 World #21 TargetResolver로만 고른다. 모호하면 조건을 넣지 않는다.
@@ -114,7 +119,7 @@ export const buildGenerationRequestFromDraft = (input: BuildRequestInput): { req
     task: "world_to_video",
     conditions,
     frameCount: durationFrames,
-    fps: draft.fps,
+    fps,
     width: draft.width,
     height: draft.height,
     backendOptions: {
