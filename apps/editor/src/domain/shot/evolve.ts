@@ -1,5 +1,6 @@
 import type { AssetRecord } from "../assets/types";
 import { createPersistentIdFactory, type PersistentIdFactory } from "../worlds/ids";
+import { editShotEditorial } from "./editorial";
 import {
   identityCalibration,
   identityMapping,
@@ -14,7 +15,7 @@ import {
   revisionIdForAssetVersion,
 } from "./instanceLink";
 import { parseShot } from "./schema";
-import { generateHash } from "./queries";
+import { generateHash, readShotTimeFps } from "./queries";
 import { mintCameraTakeId, reservedCameraTakeIds } from "./takeId";
 import type {
   AssetId,
@@ -157,11 +158,12 @@ const buildTake = (
     now: string;
   },
 ): CameraTake | undefined => {
+  const fps = readShotTimeFps(shot);
   const calibration = input.calibration ?? identityCalibration();
   const mapping = input.mapping ?? identityMapping();
   const provided = (input.samples ?? []).filter((sample) => inClock(shot, sample.frame)).map(copySample);
   const keyed = input.keys.filter((key) => inClock(shot, key.frame));
-  const samples = provided.length > 0 ? provided : samplesFromKeyframes(keyed, shot.time.fps);
+  const samples = provided.length > 0 ? provided : samplesFromKeyframes(keyed, fps);
   if (samples.length === 0) return undefined;
   const keys = nonEmpty(resolveVirtualKeyframes({
     samples,
@@ -377,6 +379,7 @@ export const applyShotCommand = (
       return withTake(shot, take);
     }
     case "KEY_CAMERA": {
+      const fps = readShotTimeFps(shot);
       if (!inClock(shot, command.key.frame)) return fail("Frame is outside the shot.");
       if (shot.camera.status === "empty") {
         const take = buildTake(shot, { source: "manual", name: "Take 1", keys: [command.key], now });
@@ -388,7 +391,7 @@ export const applyShotCommand = (
       const selected = camera.takes.find((take) => take.id === selectedId) ?? camera.takes[0];
       const keys = nonEmpty(sortKeys([...selected.keys.filter((key) => key.frame !== command.key.frame), command.key]));
       if (!keys) return fail("A camera take needs a key inside the shot.");
-      const samples = mirrorsSamples(selected) ? samplesFromKeyframes(keys, shot.time.fps) : selected.samples;
+      const samples = mirrorsSamples(selected) ? samplesFromKeyframes(keys, fps) : selected.samples;
       const takes = nonEmpty(camera.takes.map((take) => take.id === selected.id ? { ...take, keys, samples } : take));
       if (!takes) return fail("A camera take needs a key inside the shot.");
       return finish(
@@ -398,6 +401,7 @@ export const applyShotCommand = (
       );
     }
     case "DELETE_CAMERA_KEY": {
+      const fps = readShotTimeFps(shot);
       if (shot.camera.status !== "ready") return fail("Camera take not found.");
       const camera = shot.camera;
       const selectedId = camera.selectedTakeId;
@@ -408,7 +412,7 @@ export const applyShotCommand = (
       const retire = (id: TakeId) => [...camera.retiredTakeIds, id];
       const takes = keys
         ? camera.takes.map((take) => take.id === selected.id
-          ? { ...take, keys, samples: mirrorsSamples(take) ? samplesFromKeyframes(keys, shot.time.fps) : take.samples }
+          ? { ...take, keys, samples: mirrorsSamples(take) ? samplesFromKeyframes(keys, fps) : take.samples }
           : take)
         : camera.takes.filter((take) => take.id !== selected.id);
       const packed = nonEmpty(takes);
@@ -490,6 +494,7 @@ export const applyShotCommand = (
       });
       let camera = shot.camera;
       if (camera.status === "ready") {
+        const fps = readShotTimeFps(shot);
         const dropped: TakeId[] = [];
         const takes = nonEmpty(camera.takes.flatMap((take) => {
           const samples = take.samples.filter((sample) => inClock(shot, sample.frame));
@@ -500,7 +505,7 @@ export const applyShotCommand = (
             dropped.push(take.id);
             return [];
           }
-          return [{ ...take, keys, samples: samples.length > 0 ? samples : samplesFromKeyframes(keys, shot.time.fps) }];
+          return [{ ...take, keys, samples: samples.length > 0 ? samples : samplesFromKeyframes(keys, fps) }];
         }));
         const selectedId = camera.selectedTakeId;
         camera = takes
@@ -518,6 +523,20 @@ export const applyShotCommand = (
             };
       }
       return finish({ ...shot, subjects, camera }, { type: "REPLACE_SHOT", shotId: shot.id, shot }, true);
+    }
+    case "ADD_SHOT_OVERRIDE":
+    case "UPDATE_SHOT_OVERRIDE":
+    case "REMOVE_SHOT_OVERRIDE":
+    case "REVERT_SHOT_REVISION": {
+      const edited = editShotEditorial(shot, command, now);
+      if (!edited.ok) return fail(edited.reason);
+      if (!edited.changed) return finish(shot, undefined, false);
+      try {
+        parseShot(edited.shot);
+      } catch {
+        return fail("Shot record is invalid.");
+      }
+      return { ok: true, shot: edited.shot, inverse: { type: "REPLACE_SHOT", shotId: shot.id, shot }, changed: true };
     }
     case "SET_SHOT_TIME":
       if (!(command.fps > 0) || command.durationFrames < 1) return fail("Shot time is invalid.");

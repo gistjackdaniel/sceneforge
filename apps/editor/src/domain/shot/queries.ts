@@ -1,5 +1,6 @@
 import { BackboneCameraBuilder } from "../rendering/backboneV01";
 import type { SensorPreset } from "../graph/lens";
+import { DEFAULT_CLIP_FPS } from "../timeline/timing";
 import { resolveVirtualKeyframes } from "./cameraTrack";
 import { detectTrackingLoss } from "./trackingContinuity";
 import type { CameraInterpolation, CameraTake, Quat, Shot, ShotCamera, TrackingState, Transform, Vec3 } from "./types";
@@ -11,6 +12,16 @@ export const readShotTimeFps = (shot: Pick<Shot, "time">): number => {
     throw new Error("Shot time.fps is required.");
   }
   return fps;
+};
+
+/**
+ * Frame rate for a shot. Reads `Shot.time.fps` only.
+ * A missing or non-positive rate uses {@link DEFAULT_CLIP_FPS}.
+ */
+export const shotFps = (shot: { time?: { fps?: number } } | undefined): number => {
+  const fps = shot?.time?.fps;
+  if (typeof fps === "number" && Number.isFinite(fps) && fps > 0) return fps;
+  return DEFAULT_CLIP_FPS;
 };
 
 export const selectedTake = (shot: Shot): CameraTake | undefined => {
@@ -220,12 +231,14 @@ const layeredKeys = (take: CameraTake): CameraTake["keys"] | undefined => {
  * motion mapping, in that order. Each requested frame is the OpenCV c2w and
  * the intrinsics of that pose. The returned objects contain no id strings.
  * Viewport playback and recorded-take playback both call this.
+ * A missing `Shot.time.fps` throws. This path does not use the display fallback.
  */
 export const resolveCameraTakeFrames = (
   take: CameraTake,
   shot: Pick<Shot, "time" | "camera">,
   options?: ResolveCameraTakeOptions,
 ): ResolvedCameraFrame[] => {
+  readShotTimeFps(shot);
   const keys = layeredKeys(take);
   if (!keys) return [];
   const virtual: CameraTake = { ...take, keys };

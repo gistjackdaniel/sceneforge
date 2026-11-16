@@ -7,6 +7,7 @@ import { SceneAssets } from "./SceneAssets";
 import { type CameraKeyframe } from "../../domain/graph/cameraPath";
 import { verticalFovFromLens } from "../../domain/graph/lens";
 import { buildRigPreset, CAMERA_RIG_PRESETS, type CameraRigPreset } from "../../domain/graph/cameraRig";
+import { frameContainingSeconds, isPositiveIntegerFps, shotLocalFrame } from "../../domain/timeline/timecode";
 import { clipStartFrame } from "../../domain/timeline/timing";
 import { firstViewportImageUri, resolveViewportRepresentation, type ViewportLoadState } from "../../domain/worlds/viewportRepresentation";
 import { commitFieldsFromCapture, viewportCaptureFromPoses } from "../../application/services/cameraCapture";
@@ -15,7 +16,6 @@ import { environmentFromWorld } from "../../application/services/shotEnvironment
 import { type ObjectPose } from "../../domain/worlds/sceneObjects";
 import { OUTPUT_ASPECT_PRESETS, outputAspectRatio, type OutputAspectPreset } from "../../domain/rendering";
 import {
-  clipLocalFrame,
   detectTrackingLoss,
   prepareModelInput,
   readShotTimeFps,
@@ -34,6 +34,8 @@ import {
 } from "../../domain/shot";
 import type { SceneObject } from "../../domain/worlds/sceneObjects";
 import { subjectDraftFromObject } from "./subjectDraft";
+import { InteractionPreview } from "../../presentation/scene/InteractionPreview";
+import { HANDSHAKE_SHOT_ID } from "../../domain/sceneAuthoring";
 import { gltfRiggedActorCommand, rigImportAlreadyApplied } from "../../application/commands/gltfRiggedActor";
 import { rigWarningsForActors } from "../../presentation/viewport/skinnedMeshBones";
 import type { GlbRigRead } from "./readSkinnedMesh";
@@ -69,6 +71,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [freeView, setFreeView] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [interaction, setInteraction] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [takeRecording, setTakeRecording] = useState(false);
   const loopRef = useRef<ReturnType<typeof createLoopClock> | null>(null);
@@ -87,9 +90,17 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [notice, setNotice] = useState("");
   const [selectedFrames, setSelectedFrames] = useState<number[]>([]);
   const shot = clip ? project.shots?.[clip.id] : undefined;
+  const shotRef = useRef(shot);
+  shotRef.current = shot;
   const duration = shot?.time.durationFrames ?? 1;
   const start = clip ? clipStartFrame(clip) : 0;
-  const frame = shot ? clipLocalFrame((sequence?.playhead ?? start) - start, shot) : 0;
+  const frame = shot
+    ? shotLocalFrame({
+        playhead: sequence?.playhead ?? start,
+        clipStartFrame: start,
+        durationFrames: shot.time.durationFrames,
+      })
+    : 0;
   const fps = shot ? readShotTimeFps(shot) : undefined;
   playbackRef.current = { duration, start, fps: fps ?? 0, clipId: clip?.id ?? "" };
   const subjects = shot && !previewOnly ? shot.subjects : [];
@@ -271,18 +282,18 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       const last = Math.max(...takeRef.current.keys());
       takeRef.current.set(last, live);
     }
-    const fpsSafe = playbackRef.current.fps;
     const poses = Array.from(takeRef.current.entries())
       .sort((a, b) => a[0] - b[0])
       .map(([frame, pose]) => ({ frame, position: pose.position, quaternion: pose.quaternion }));
     takeRef.current.clear();
     setTakeRecording(false);
     setPlaying(false);
-    if (poses.length === 0 || !(fpsSafe > 0)) {
+    const recordedShot = shotRef.current;
+    if (poses.length === 0 || !recordedShot) {
       setNotice(reason === "complete" ? "Record finished with no poses." : "Record cancelled.");
       return;
     }
-    const captured = viewportCaptureFromPoses({ poses, fps: fpsSafe, lens: lensParams });
+    const captured = viewportCaptureFromPoses({ poses, shot: recordedShot, lens: lensParams });
     const fields = commitFieldsFromCapture(captured);
     const spanFrames = poses[poses.length - 1].frame - poses[0].frame + 1;
     dispatch({ type: "shot", command: { type: "COMMIT_CAMERA_TAKE", shotId: shotId(clipId), source: "record", ...fields } });
@@ -315,7 +326,32 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const switchMode = (mode: "build" | "record") => {
     if (takeRecording) finishTakeRecording("stop");
     setPlaying(false); setDraft(undefined); setDrawer(null); setNotice(""); setSelectedFrames([]);
+    setInteraction(false);
     dispatch({ type: "set-viewport-workspace", workspace: mode });
+  };
+  const openInteraction = () => {
+    setInteraction(true);
+    dispatch({
+      type: "agent-execute-commands",
+      commands: [{ type: "INSTALL_INTERACTION_SCENE" }],
+      logMessage: "악수 상호작용 프리뷰를 열었습니다.",
+    });
+  };
+  const changeHandshakeHand = (rigPart: "left_hand" | "right_hand") => {
+    dispatch({
+      type: "agent-execute-commands",
+      commands: [{
+        type: "CHANGE_CONTACT_EFFECTOR",
+        shotId: HANDSHAKE_SHOT_ID,
+        subjectRef: "B",
+        locale: "ko",
+        contactId: "handshake_01",
+        rigPart,
+      }],
+      logMessage: rigPart === "left_hand"
+        ? "B의 악수 손을 왼손으로 바꿨습니다. 카메라, 배경, A의 이동은 그대로입니다."
+        : "B의 악수 손을 오른손으로 바꿨습니다. 카메라, 배경, A의 이동은 그대로입니다.",
+    });
   };
   useEffect(() => {
     setSelectedId("camera");
@@ -343,8 +379,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       return;
     }
     const { duration: totalFramesRaw, start: clipStart, fps: clipFps } = playbackRef.current;
+    if (!isPositiveIntegerFps(clipFps)) return;
     const totalFrames = Math.max(1, totalFramesRaw);
-    if (!(clipFps > 0)) return;
     const fpsSafe = clipFps;
     const loop = createLoopClock({
       duration: Math.max(0.001, totalFrames / fpsSafe),
@@ -372,7 +408,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
     };
     stampTakeFrame(0);
     const unsub = loop.subscribe((tSec) => {
-      const next = Math.max(0, Math.min(totalFrames - 1, Math.floor(tSec * fpsSafe)));
+      const next = Math.max(0, Math.min(totalFrames - 1, frameContainingSeconds(Math.max(0, tSec), fpsSafe)));
       stampTakeFrame(next);
       dispatch({ type: "scrub-playhead", playhead: clipStart + next });
       if (takeRecordingRef.current && !reachedEnd && next >= totalFrames - 1) {
@@ -452,9 +488,13 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       <div className="scene-mode-switch" role="group" aria-label="Workspace mode">
         <button aria-pressed={!recording} onClick={() => switchMode("build")}>Scene</button>
         <button aria-pressed={recording} onClick={() => switchMode("record")}>Motion</button>
+        <button aria-pressed={interaction} onClick={() => (interaction ? setInteraction(false) : openInteraction())}>상호작용</button>
       </div>
     </header>
     <div className="scene-stage-area">
+      {interaction && (
+        <InteractionPreview project={project} onClose={() => setInteraction(false)} onChangeHand={changeHandshakeHand} />
+      )}
       <div className={`scene-stage-canvas ${cameraView ? "is-camera-view" : ""}`} style={{ "--scene-aspect": outputAspectRatio(ui.outputAspect) } as React.CSSProperties}>
         <StageViewport world={world} worldName={world?.name} previewPlan={previewPlan} fallbackImageUri={fallbackImageUri}
           overlays={ui.viewportOverlays} tool={ui.viewportTool} workspace={cameraView ? "record" : "build"}

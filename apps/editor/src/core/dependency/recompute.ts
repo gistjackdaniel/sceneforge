@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { collectDownstream } from "../../domain/graph/dirty";
-import { contactHandId, interpretScopeEntry, scopeLabel, type EditScopeInput, type EditSourceInput } from "./editScope";
+import type { EditSource } from "../../domain/speech2motion/actionGraph";
+import { contactHandId, interpretScopeEntry, scopeLabel, type EditScopeInput } from "./editScope";
 import {
   issuesFromZod,
   productionOutputSchema,
@@ -17,15 +18,16 @@ import {
 
 /**
  * Envelope for an edit's preserve/recompute lists.
- * List items stay `unknown`: the producer schema is `actionGraph.ts`, which is
- * not on this branch, so this object does not redefine that schema.
+ * Typed entries are `EditSelector` from `actionGraph.ts`. The parser still
+ * accepts `unknown` items so string tokens and shot-entity entries keep the
+ * same `interpretScopeEntry` path and do not become `invalid_input`.
  */
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const text = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
-const readSource = (value: unknown): EditSourceInput | undefined => {
+const readSource = (value: unknown): EditSource | undefined => {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -91,7 +93,7 @@ export interface UnresolvedScope {
 export interface OutdatedEditReason {
   outputId: string;
   edit_id?: string;
-  source?: EditSourceInput;
+  source?: EditSource;
   reason: string;
 }
 
@@ -106,7 +108,7 @@ export type RevisionPlan =
       preservedOutputIds: string[];
       hardLockedOutputIds: string[];
       edit_id?: string;
-      source?: EditSourceInput;
+      source?: EditSource;
       reasons: OutdatedEditReason[];
     }
   | { ok: false; error: "invalid_input"; issues: InputIssue[] }

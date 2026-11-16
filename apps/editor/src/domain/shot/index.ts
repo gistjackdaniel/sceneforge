@@ -21,8 +21,13 @@ export type {
   Quat,
   ReadyCamera,
   Shot,
+  ShotApproval,
+  ShotAssetRef,
   ShotCamera,
   ShotCommand,
+  ShotContact,
+  ShotOverrideEvent,
+  ShotRevision,
   ShotId,
   ShotModelInput,
   ShotRender,
@@ -43,6 +48,7 @@ export { legacyCameraTakeId, mintCameraTakeId } from "./takeId";
 export { shotId, subjectId, takeId } from "./types";
 export { parseShot, parseShotModelInput, shotModelInputSchema, shotSchema } from "./schema";
 export { applyShotCommand, type ShotEdit } from "./evolve";
+export { resolveShotContacts, subjectForActorRef } from "./editorial";
 export { SHOT_EULER_ORDER, eulerToQuaternion, quaternionToEuler } from "./eulerAdapter";
 export {
   clonePosedSubject,
@@ -71,6 +77,7 @@ export {
   sampleCameraPose,
   sampleSubjectPose,
   selectedTake,
+  shotFps,
   subjectPoseKeys,
   viewportPlaybackPoses,
 } from "./queries";
@@ -81,7 +88,6 @@ export type {
 } from "./queries";
 export { detectTrackingLoss, TRACKING_PATH_COLOR } from "./trackingContinuity";
 export type { TrackingLossInterval } from "./trackingContinuity";
-export { deviceTimestampToFrame, type DeviceTimestampToFrame } from "./deviceTimestamp";
 export { devicePointToScene, devicePoseToScenePose } from "./deviceFrame";
 export { createMobileSessionAdapter, mobileCameraSessionSchema } from "./mobileSession";
 export type { MobileCameraSession } from "./mobileSession";
