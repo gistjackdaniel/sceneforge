@@ -1,7 +1,7 @@
 import { CameraTakeSource, type CameraFrame } from "../../domain/render/cameraTakeSource";
 import { defaultRenderPassSpec, type RenderPassSpec } from "../../domain/render/types";
-import { readShotTimeFps } from "../../domain/shot/queries";
 import type { Shot } from "../../domain/shot/types";
+import { readGraphShotFps, type MissingShotFpsError } from "./graphShotFps";
 import { hashNormalized } from "./hash";
 
 /**
@@ -19,6 +19,7 @@ export type CameraPassFrame = Omit<CameraFrame, "cameraId">;
 
 export type CameraPassFrames =
   | { ok: true; frames: CameraPassFrame[]; framesHash: string; fps: number }
+  | MissingShotFpsError
   | { ok: false; message: string };
 
 const ID_STRING = /^(?:cam_|act_|obj_|take-)/;
@@ -60,7 +61,9 @@ const passFrame = (frame: CameraFrame): CameraPassFrame | undefined => {
  * Calls `CameraTakeSource.trajectory`, the only reader of `resolveCameraTakeFrames`
  * on the render path. Does not sample the take again. Frames are integers from
  * `0` through `durationFrames - 1`. fps is `readShotTimeFps` (`Shot.time.fps`).
- * A missing rate throws. `shotFps` is display-only and is not read here.
+ * A missing or non-positive rate returns `{ ok: false, error: "missing_shot_fps" }`
+ * before the trajectory is read, and does not throw. `shotFps` is display-only
+ * and is not read here.
  * The returned digest is `hashNormalized` of those frames. Ids are not part of the digest.
  * Does not write the shot or the cache.
  */
@@ -69,7 +72,11 @@ export const cameraPassFrames = (shot: Shot, spec: RenderPassSpec = cameraPassRe
   if (!Number.isInteger(count) || count < 0) {
     return { ok: false, message: "카메라 프레임은 정수여야 합니다." };
   }
-  const fps = readShotTimeFps(shot);
+  const rate = readGraphShotFps(shot);
+  if (!rate.ok) {
+    return rate;
+  }
+  const fps = rate.fps;
   const requested = Array.from({ length: count }, (_, frame) => frame);
   const trajectory = CameraTakeSource.trajectory(shot, spec, requested);
   if (!trajectory.ok) {

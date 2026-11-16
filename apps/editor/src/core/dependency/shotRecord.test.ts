@@ -373,19 +373,30 @@ describe("shot record dependency cache", () => {
     expect(nextContact.value).not.toEqual(contactB.value);
   });
 
-  it("fails the dependency pass when Shot.time.fps is missing", () => {
+  it("returns missing_shot_fps when Shot.time.fps is missing or not positive", () => {
     const { world, shot, environment } = stage();
-    const time = { ...shot.time };
-    Reflect.deleteProperty(time, "fps");
-    const missing = { ...shot, time };
-    expect(() =>
-      projectShotDependencies({
-        shot: missing,
+    const deleted = { ...shot.time };
+    Reflect.deleteProperty(deleted, "fps");
+    const times = [
+      deleted,
+      { ...shot.time, fps: 0 },
+      { ...shot.time, fps: -1 },
+      { ...shot.time, fps: Number.NaN },
+      { ...shot.time, fps: Number.POSITIVE_INFINITY },
+    ];
+    for (const time of times) {
+      const graph = projectShotDependencies({
+        shot: { ...shot, time, environment: undefined },
         worlds: { [world.id]: world },
         environment,
         modelVersion: "video-0.1",
         seed: 3,
-      }),
-    ).toThrow("Shot time.fps is required.");
+      });
+      expect(graph).toEqual({
+        ok: false,
+        error: "missing_shot_fps",
+        message: "Shot.time.fps가 없거나 양수가 아닙니다.",
+      });
+    }
   });
 });
