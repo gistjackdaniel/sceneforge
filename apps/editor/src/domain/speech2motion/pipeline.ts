@@ -1,4 +1,4 @@
-import type { Shot, ShotCommand } from "../shot";
+import type { MotionProvenance, Shot, ShotCommand } from "../shot";
 import { readShotTimeFps, selectedTake } from "../shot";
 import type { ResolveContext, TargetResolver } from "../worlds/query";
 import { ActionGraphValidator, type ActionGraphIssue, type Event } from "./actionGraph";
@@ -78,7 +78,13 @@ export class Speech2MotionPipeline {
       attachments: solved.attachments,
       contacts: solved.contacts,
     };
-    return { ok: true, scene, commands: Speech2MotionPipeline.commands(request.shot, scene) };
+    const provenance = ShotPoseAdapter.generatedProvenance({
+      shotId: graph.shot_id,
+      graphVersion: graph.graph_version,
+      adapterId: model.adapterId,
+      modelFps: model.modelFps,
+    });
+    return { ok: true, scene, commands: Speech2MotionPipeline.commands(request.shot, scene, provenance) };
   }
 
   /**
@@ -161,12 +167,12 @@ export class Speech2MotionPipeline {
     };
   }
 
-  private static commands(shot: Shot, scene: Speech2MotionScene): ShotCommand[] {
+  private static commands(shot: Shot, scene: Speech2MotionScene, provenance: MotionProvenance): ShotCommand[] {
     const commands: ShotCommand[] = [];
     for (const sequence of scene.actors) {
       const subject = ShotPoseAdapter.subjectForActor(shot, sequence.actorId);
       const keys = ShotPoseAdapter.rootKeys(sequence).filter((key) => key.frame >= 0 && key.frame < shot.time.durationFrames);
-      const next = subject ? ShotPoseAdapter.withKeys(subject, keys) : undefined;
+      const next = subject ? ShotPoseAdapter.withKeys(subject, keys, provenance) : undefined;
       if (subject && next && JSON.stringify(subject) !== JSON.stringify(next)) {
         commands.push({ type: "REPLACE_SUBJECT", shotId: shot.id, subject: next });
       }

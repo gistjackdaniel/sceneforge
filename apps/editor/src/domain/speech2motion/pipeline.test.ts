@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { emptyCommandBusState, executeCommand, undoCommand } from "../../application/commands/bus";
 import type { DomainCommand } from "../../application/commands/types";
+import { attachSceneStates } from "../../domain/project/sceneLink";
 import type { Project } from "../../domain/project/types";
 import { parseShot, selectedTake, type Shot, type ShotCommand } from "../shot";
 import { normalizeWorldAsset } from "../worlds/normalize";
 import { createWorldTargetResolver, type TargetResolver } from "../worlds/query";
-import type { ActorPoseSequence } from "./motionModel";
+import { StubMotionModel, type ActorPoseSequence } from "./motionModel";
 import { computePassHash } from "./normalizedHash";
 import { MOTION_BAKE_TOLERANCE } from "../shot/motionBake";
 import {
@@ -21,6 +22,7 @@ import { composeWorldPose, GENERATED_MOTION_SOURCE, translationOf } from "./obje
 import { jointIndex, SmplxSkeleton, Vec, type Vec3 } from "./pose";
 import { PreserveVerifier } from "./preserveVerifier";
 import { Speech2MotionPipeline } from "./pipeline";
+import { ShotPoseAdapter } from "./shotPoseAdapter";
 
 const now = "2026-11-12T00:00:00.000Z";
 const SHOT_ID = "shot-handshake-cup";
@@ -394,6 +396,71 @@ describe("speech2motion pipeline", () => {
     expect(() =>
       Speech2MotionPipeline.run({ graph: handshakeGraph("right_hand"), shot: missing, targetResolver: room() }),
     ).toThrow("Shot time.fps is required.");
+  });
+
+  it("keeps a keyed pose when no generated provenance is supplied", () => {
+    const shot = shotOf(CAMERA_A);
+    const subject = shot.subjects.find((item) => item.id === ACTOR_A);
+    expect(subject && subject.kind !== "light").toBe(true);
+    if (!subject || subject.kind === "light") return;
+    const keyed = ShotPoseAdapter.withKeys(subject, [{
+      frame: 0,
+      position: subject.placement.position,
+      rotationEuler: subject.placement.rotationEuler,
+      scale: subject.placement.scale,
+    }]);
+    expect(keyed && keyed.kind !== "light" && keyed.motion.channel === "explicit" && keyed.motion.provenance).toEqual({ kind: "keyed" });
+    const stored = parseShot({ ...shot, subjects: shot.subjects.map((item) => item.id === ACTOR_A && keyed ? keyed : item) });
+    const again = stored.subjects.find((item) => item.id === ACTOR_A);
+    expect(again && again.kind !== "light" && again.motion.channel === "explicit" && again.motion.provenance).toEqual({ kind: "keyed" });
+  });
+
+  it("keeps generated pose provenance on the shot after scene state is attached", () => {
+    const shot = parseShot({
+      ...shotOf(CAMERA_A),
+      subjects: shotOf(CAMERA_A).subjects.map((subject) =>
+        subject.kind === "human"
+          ? { ...subject, instanceId: subject.id, assetRef: { assetId: subject.assetId, revisionId: `${subject.assetId}-r1` } }
+          : subject,
+      ),
+    });
+    const model = new StubMotionModel();
+    const result = Speech2MotionPipeline.run({ graph: handshakeGraph("right_hand"), shot, targetResolver: room(), model });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const expected = {
+      kind: "generated" as const,
+      source: GENERATED_MOTION_SOURCE,
+      actionGraph: { shotId: SHOT_ID, graphVersion: "1" },
+      model: { adapterId: model.adapterId, modelFps: model.modelFps },
+    };
+    const applied = executeCommand(projectOf(shot), emptyCommandBusState(), busCommand(result.commands), now);
+    expect(applied.result.ok).toBe(true);
+    const saved = applied.project.shots?.[SHOT_ID];
+    expect(saved).toBeDefined();
+    if (!saved) return;
+    const roundTrip = parseShot(JSON.parse(JSON.stringify(saved)));
+    const pose = roundTrip.subjects.find((subject) => subject.id === ACTOR_A);
+    expect(pose && pose.kind !== "light" && pose.motion.channel === "explicit" && pose.motion.provenance).toEqual(expected);
+    if (!pose || pose.kind === "light" || pose.motion.channel !== "explicit") return;
+    expect(pose.motion.keys.every((key) => Number.isInteger(key.frame))).toBe(true);
+
+    const linked = attachSceneStates({
+      ...applied.project,
+      shots: { ...applied.project.shots, [SHOT_ID]: roundTrip },
+      worlds: {
+        [WORLD]: normalizeWorldAsset({
+          id: WORLD,
+          name: "Handshake set",
+          props: [CUP, "table"],
+          aliases: [CUP, TABLE, "table"],
+        }),
+      },
+    });
+    expect(linked.sceneStates?.[WORLD]?.actors[ACTOR_A]?.id).toBe(ACTOR_A);
+    expect(linked.sceneStates?.[WORLD]?.actors[ACTOR_B]?.id).toBe(ACTOR_B);
+    const kept = linked.shots?.[SHOT_ID]?.subjects.find((subject) => subject.id === ACTOR_A);
+    expect(kept && kept.kind !== "light" && kept.motion.channel === "explicit" && kept.motion.provenance).toEqual(expected);
   });
 
   it("rejects an action graph whose fps is not Shot.time.fps", () => {
