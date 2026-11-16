@@ -1,12 +1,11 @@
 import type { RenderCacheEntry } from "../../domain/rendering/types";
 import type { EnvironmentView, Motion, Shot, ShotModelInput } from "../../domain/shot";
-import { prepareModelInput } from "../../domain/shot";
+import { prepareModelInput, readShotTimeFps } from "../../domain/shot";
 import type { WorldAsset } from "../../domain/worlds/types";
 import { ZodError } from "zod";
 import { cameraPassFrames } from "./cameraFrames";
 import { contactHandDownstreamId, contactHandId } from "./editScope";
 import { buildDependencyFingerprint, computePassHash, productionOutputSchema, type ProductionOutput } from "./fingerprint";
-import { shotRecordFps, type ShotFpsSource } from "./shotFps";
 import type { ProductionSelector } from "./selector";
 import { bindWorldPhase1Selectors, resolveWorldAssetId } from "./worldPhase1";
 
@@ -16,7 +15,8 @@ import { bindWorldPhase1Selectors, resolveWorldAssetId } from "./worldPhase1";
  * The shot keeps one motion per subject and one selected camera take.
  * Root motion reads placement plus key positions. Contact-hand pose reads
  * key rotation and scale. The room is `environment.worldId`, a `WorldAsset.id`.
- * Frames are integers. fps comes from `ShotFpsSource` (`shot.time.fps`).
+ * Frames are integers. fps comes from `readShotTimeFps` (`Shot.time.fps`).
+ * `shotFps` and `shotFpsForClip` fill `DEFAULT_CLIP_FPS` for display and are not read here.
  * Pose rotation is intrinsic Euler `XYZ`. Subject and take ids are the invalidation
  * unit on the selector and are omitted from the pass hash, so a rename keeps the hash.
  * Camera-dependent passes hash `CameraTakeSource` frames (`resolveCameraTakeFrames`)
@@ -135,10 +135,10 @@ export const projectShotDependencies = (input: {
   modelVersion: string;
   seed: number;
   outputAspect?: string;
-  fps?: ShotFpsSource;
   computedAt?: string;
 }): ShotDependencyGraph => {
   const shot = input.shot;
+  const fps = readShotTimeFps(shot);
   const worldRef = shot.environment?.worldId;
   if (!worldRef) {
     return { ok: false, error: "invalid_shot", message: "룸은 shot.environment.worldId 입니다." };
@@ -150,11 +150,6 @@ export const projectShotDependencies = (input: {
   const world = input.worlds[resolved.assetId];
   if (!world) {
     return { ok: false, error: "unresolved_asset", message: `"${resolved.assetId}"는 WorldAsset.id가 아닙니다.` };
-  }
-
-  const fps = (input.fps ?? shotRecordFps).fps(shot);
-  if (!Number.isFinite(fps) || fps <= 0) {
-    return { ok: false, error: "invalid_shot", message: "fps는 Shot.time.fps 에서만 읽습니다." };
   }
 
   const prepared = prepareModelInput(shot, input.environment, input.outputAspect ?? "16:9");

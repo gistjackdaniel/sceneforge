@@ -10,6 +10,7 @@ import {
   projectShotDependencies,
   recordComputedOutput,
   resolveLegacyId,
+  type LegacyRefCarrier,
   type OutputProvenanceStore,
   type ShotDependencyNode,
 } from "./index";
@@ -147,7 +148,7 @@ describe("legacy id cache alias", () => {
       return;
     }
 
-    const carriers = [
+    const carriers: LegacyRefCarrier[] = [
       { id: ACT_A, legacyRefs: [{ kind: "shot_subject", shotId: shot.id, subjectId: "subject-A" }] },
       renamedTake,
       legacyTake,
@@ -236,7 +237,7 @@ describe("legacy id cache alias", () => {
   });
 
   it("misses a legacy id that has no mapping", () => {
-    const carriers = [{ id: ACT_A, legacyRefs: [{ kind: "shot_subject", shotId: "shot-contact", subjectId: "subject-A" }] }];
+    const carriers: LegacyRefCarrier[] = [{ id: ACT_A, legacyRefs: [{ kind: "shot_subject", shotId: "shot-contact", subjectId: "subject-A" }] }];
     expect(resolveLegacyId("subject-Z", carriers)).toBeUndefined();
     expect(resolveLegacyId("subject-A", carriers)).toBe(ACT_A);
     const cache = {
