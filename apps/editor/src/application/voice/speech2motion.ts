@@ -1,8 +1,11 @@
 import type { DomainCommand } from "../commands/types";
 import { executeCommand, type CommandBusState, type ExecuteResult } from "../commands/bus";
-import { readShotTimeFps, type Shot } from "../../domain/shot";
+import { readShotTimeFps, type Shot, type ShotCommand } from "../../domain/shot";
 import type { ActionGraph } from "../../domain/speech2motion/actionGraph";
 import { produceSpeech2Motion, type Speech2MotionInput } from "../../domain/speech2motion/produce";
+import { Speech2MotionPipeline } from "../../domain/speech2motion/pipeline";
+import { createWorldTargetResolver } from "../../domain/worlds/query";
+import type { Project } from "../../domain/project/types";
 import { toFrame } from "./toFrame";
 
 /** Shot clock. Frame rate lives only on `Shot.time`. */
@@ -50,6 +53,20 @@ export const planSpeech2Motion = (
 export const commandsForSpeech2Motion = (graph: ActionGraph): DomainCommand[] => {
   if (graph.status !== "ready") return [];
   return [{ type: "RECORD_SPEECH2MOTION", shotId: graph.shot_id, graph }];
+};
+
+/**
+ * Turn a ready graph into shot commands.
+ * `RECORD_SPEECH2MOTION` stores the graph only. These commands write the body and face onto subjects.
+ */
+export const poseCommandsForGraph = (project: Project, shot: Shot, graph: ActionGraph): readonly ShotCommand[] => {
+  if (graph.status !== "ready" || graph.shot_id !== shot.id) return [];
+  const solved = Speech2MotionPipeline.run({
+    graph,
+    shot,
+    targetResolver: createWorldTargetResolver(project.worlds, project.sceneStates),
+  });
+  return solved.ok ? solved.commands : [];
 };
 
 /** Apply the producer's commands through the domain command bus. */

@@ -56,6 +56,19 @@ const motionProvenanceSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+const smplxBodyFrameSchema = z.object({
+  frame: z.number().int().nonnegative(),
+  pose: z.object({
+    global_orient: vec3,
+    transl: vec3,
+    body_pose: z.array(z.number().finite()).length(63),
+    left_hand_pose: z.array(z.number().finite()).length(45),
+    right_hand_pose: z.array(z.number().finite()).length(45),
+    jaw_pose: vec3,
+    expression: z.array(z.number().finite()).length(10),
+  }),
+});
+
 const motionSchema = z.discriminatedUnion("channel", [
   z.object({ channel: z.literal("unset") }),
   z.object({ channel: z.literal("text"), prompt: z.string().trim().min(1) }),
@@ -64,6 +77,10 @@ const motionSchema = z.discriminatedUnion("channel", [
     interpolation: z.enum(["linear", "hold"]),
     keys: z.array(transformSchema.extend({ frame: z.number().int().nonnegative() })).min(1),
     provenance: motionProvenanceSchema,
+    body: z.object({
+      model: z.literal("smplx"),
+      frames: z.array(smplxBodyFrameSchema).min(1),
+    }).optional(),
   }),
 ]);
 

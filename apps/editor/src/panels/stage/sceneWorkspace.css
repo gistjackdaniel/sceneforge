@@ -21,7 +21,10 @@
 .scene-workspace .scene-primary { background: var(--scene-accent); color: #17241e; font-weight: 600; }
 .scene-workspace .scene-primary:hover { background: #cceada; }
 .scene-workspace kbd { font: 9px ui-monospace, monospace; padding: 1px 4px; border: 1px solid currentColor; border-radius: 3px; opacity: 0.65; margin-left: 4px; }
-.scene-header { display: flex; align-items: center; gap: 16px; min-height: 50px; padding: 8px 16px; border-bottom: 1px solid var(--scene-border); flex: 0 0 auto; background: #181d1b; }
+.scene-header { display: flex; align-items: center; gap: 16px; min-height: 50px; padding: 8px 16px; border-bottom: 1px solid var(--scene-border); flex: 0 0 auto; background: #181d1b; flex-wrap: wrap; }
+.scene-direction { display: flex; align-items: center; gap: 6px; min-width: 280px; flex: 1; }
+.scene-direction label { display: flex; align-items: center; gap: 6px; flex: 1; color: #abb5ae; font-size: 10px; }
+.scene-direction input { flex: 1; min-width: 160px; color: #e0e8e2; background: #111713; border: 1px solid #354038; border-radius: 4px; padding: 6px 8px; font: inherit; font-size: 11px; }
 .scene-title { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; }
 .scene-title strong { font-size: 12px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .scene-title > span:last-child { color: var(--scene-muted); font-size: 10px; white-space: nowrap; }

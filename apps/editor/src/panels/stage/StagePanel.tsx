@@ -41,6 +41,8 @@ import { rigWarningsForActors } from "../../presentation/viewport/skinnedMeshBon
 import type { GlbRigRead } from "./readSkinnedMesh";
 import "./sceneWorkspace.css";
 import { PoseAuthoringController } from "../../presentation/pose/PoseAuthoringController";
+import { planSpeech2Motion, poseCommandsForGraph } from "../../application/voice/speech2motion";
+import { createWebSpeechInput } from "../../infrastructure/voice/SpeechInput/webSpeechAdapter";
 
 const tuple3 = (value: readonly [number, number, number]): [number, number, number] => [value[0], value[1], value[2]];
 const tuple4 = (value: readonly [number, number, number, number]): [number, number, number, number] => [value[0], value[1], value[2], value[3]];
@@ -72,6 +74,10 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [showPreview, setShowPreview] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [interaction, setInteraction] = useState(false);
+  const [directionText, setDirectionText] = useState("A와 B가 악수하고 A가 컵을 테이블에 내려놓는다");
+  const [listening, setListening] = useState(false);
+  const speechUnsub = useRef<(() => void) | undefined>(undefined);
+  const speechInput = useRef<ReturnType<typeof createWebSpeechInput>>(undefined);
   const [playing, setPlaying] = useState(false);
   const [takeRecording, setTakeRecording] = useState(false);
   const loopRef = useRef<ReturnType<typeof createLoopClock> | null>(null);
@@ -203,6 +209,57 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
     ...subjects.map((subject) => ({ id: subject.id, name: subject.name, frames: [...subjectPoseKeys(subject)] })),
   ];
   const send = (command: ShotCommand) => { if (shot) dispatch({ type: "shot", command }); };
+  const applyDirection = () => {
+    if (!shot || !canEdit) return;
+    const text = directionText.trim();
+    if (!text) {
+      setNotice("동작 지시를 입력하세요.");
+      return;
+    }
+    const planned = planSpeech2Motion({
+      text,
+      locale: "ko",
+      source: listening ? "voice" : "text",
+      shotId: shot.id,
+      shot,
+      worlds: project.worlds,
+      sceneStates: project.sceneStates,
+    });
+    if (planned.graph.status !== "ready") {
+      setNotice(planned.graph.clarifications[0]?.question ?? "명령을 해석하지 못했습니다.");
+      return;
+    }
+    dispatch({
+      type: "agent-execute-commands",
+      commands: planned.commands,
+      logMessage: "Action Graph를 저장했습니다.",
+    });
+    const poses = poseCommandsForGraph(project, shot, planned.graph);
+    poses.forEach((command) => send(command));
+    setNotice(`그래프를 저장하고 전신·표정 키 ${poses.length}개를 샷에 썼습니다.`);
+  };
+  const toggleMic = () => {
+    if (listening) {
+      speechInput.current?.stop();
+      speechUnsub.current?.();
+      speechUnsub.current = undefined;
+      setListening(false);
+      return;
+    }
+    const speech = speechInput.current ?? createWebSpeechInput();
+    if (!speech) {
+      setNotice("이 브라우저는 마이크 인식을 지원하지 않습니다. 텍스트를 고치세요.");
+      return;
+    }
+    speechInput.current = speech;
+    speechUnsub.current?.();
+    speechUnsub.current = speech.subscribe((segment) => {
+      if (segment.isFinal && segment.text.trim()) setDirectionText(segment.text.trim());
+    });
+    speech.start();
+    setListening(true);
+    setNotice("말하면 텍스트가 채워집니다. 고친 뒤 적용하세요.");
+  };
   const select = (id: string) => {
     setSelectedId(id);
     setDraft(undefined);
@@ -490,6 +547,13 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         <button aria-pressed={recording} onClick={() => switchMode("record")}>Motion</button>
         <button aria-pressed={interaction} onClick={() => (interaction ? setInteraction(false) : openInteraction())}>상호작용</button>
       </div>
+      <form className="scene-direction" onSubmit={(event) => { event.preventDefault(); applyDirection(); }}>
+        <label>동작 지시
+          <input aria-label="동작 지시" value={directionText} onChange={(event) => setDirectionText(event.target.value)} />
+        </label>
+        <button type="button" aria-pressed={listening} onClick={toggleMic}>{listening ? "듣는 중" : "마이크"}</button>
+        <button type="submit" disabled={!canEdit}>적용</button>
+      </form>
     </header>
     <div className="scene-stage-area">
       {interaction && (

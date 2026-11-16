@@ -171,8 +171,11 @@ export class Speech2MotionPipeline {
     const commands: ShotCommand[] = [];
     for (const sequence of scene.actors) {
       const subject = ShotPoseAdapter.subjectForActor(shot, sequence.actorId);
-      const keys = ShotPoseAdapter.rootKeys(sequence).filter((key) => key.frame >= 0 && key.frame < shot.time.durationFrames);
-      const next = subject ? ShotPoseAdapter.withKeys(subject, keys, provenance) : undefined;
+      const clipped = {
+        ...sequence,
+        frames: sequence.frames.filter((frame) => frame.frame >= 0 && frame.frame < shot.time.durationFrames),
+      };
+      const next = subject ? ShotPoseAdapter.withPose(subject, clipped, provenance) : undefined;
       if (subject && next && JSON.stringify(subject) !== JSON.stringify(next)) {
         commands.push({ type: "REPLACE_SUBJECT", shotId: shot.id, subject: next });
       }

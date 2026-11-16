@@ -156,6 +156,44 @@ describe("Phase 1 contact effector", () => {
     expect(second.project).toBe(first.project);
   });
 
+  it("텍스처 메시로 표시된 A와 B에서도 손만 바꾸고 카메라와 A 루트는 남긴다", () => {
+    const installed = install(emptyProject());
+    const shot = installed.shots?.[HANDSHAKE_SHOT_ID];
+    const preview = installed.interactionPreviews?.[HANDSHAKE_SHOT_ID];
+    if (!shot || !preview) throw new Error("fixture missing");
+    const textured = {
+      ...shot,
+      subjects: shot.subjects.map((subject) =>
+        subject.kind === "human"
+          ? { ...subject, representation: "mesh" as const, uri: `actors/${subject.id}.textured.glb` }
+          : subject,
+      ),
+    };
+    const project = { ...installed, shots: { ...installed.shots, [HANDSHAKE_SHOT_ID]: textured } };
+    const beforeCamera = hash(textured, preview, { kind: "camera_track", takeId: HANDSHAKE_TAKE_ID });
+    const beforeRoot = hash(textured, preview, { kind: "actor_root_motion", subjectId: SUBJECT_IDS.actorA });
+    const changed = executeCommand(project, emptyCommandBusState(), {
+      type: "CHANGE_CONTACT_EFFECTOR",
+      shotId: HANDSHAKE_SHOT_ID,
+      subjectRef: "B",
+      locale: "ko",
+      contactId: "handshake_01",
+      rigPart: "left_hand",
+    }, NOW);
+    expect(changed.result.ok).toBe(true);
+    const next = changed.project.shots?.[HANDSHAKE_SHOT_ID];
+    const nextPreview = changed.project.interactionPreviews?.[HANDSHAKE_SHOT_ID];
+    if (!next || !nextPreview) throw new Error("fixture missing");
+    expect(next).toBe(textured);
+    const actorA = next.subjects.find((subject) => subject.id === SUBJECT_IDS.actorA);
+    const actorB = next.subjects.find((subject) => subject.id === SUBJECT_IDS.actorB);
+    expect(actorA?.kind === "human" && actorA.uri).toBe(`actors/${SUBJECT_IDS.actorA}.textured.glb`);
+    expect(actorB?.kind === "human" && actorB.uri).toBe(`actors/${SUBJECT_IDS.actorB}.textured.glb`);
+    expect(previewStateEqual(beforeCamera, hash(next, nextPreview, { kind: "camera_track", takeId: HANDSHAKE_TAKE_ID }))).toBe(true);
+    expect(previewStateEqual(beforeRoot, hash(next, nextPreview, { kind: "actor_root_motion", subjectId: SUBJECT_IDS.actorA }))).toBe(true);
+    expect(resolveContacts(nextPreview).find((contact) => contact.contactId === "handshake_01")?.b.rigPart).toBe("left_hand");
+  });
+
   it("텍스트 포즈와 접촉 손 변경은 한 언두로 합쳐지지 않는다", () => {
     const installed = install(emptyProject());
     const posed = executeCommand(installed, emptyCommandBusState(), {

@@ -1,5 +1,5 @@
 import { GENERATED_MOTION_SOURCE, type MotionSource } from "./objectStream";
-import { PoseResample, QuatMath, SmplxSkeleton, TwoBoneIk, Vec, type JointPose, type PoseFrame, type Quat, type Vec3 } from "./pose";
+import { PoseResample, QuatMath, SmplxSkeleton, TwoBoneIk, Vec, neutralFace, type FacePose, type JointPose, type PoseFrame, type Quat, type Vec3 } from "./pose";
 import type { RigPart } from "./actionGraph";
 
 /** OmniMotion-X and PASPA are not public. The stub is the only model in this phase. */
@@ -62,9 +62,15 @@ export class StubMotionModel implements MotionModelAdapter {
   infer(request: MotionModelRequest): readonly ActorPoseSequence[] {
     const times = PoseResample.modelTimes(request.shotFps, request.frameCount, StubMotionModel.modelFps);
     return request.actors.map((actor, index) => {
+      const text = request.events
+        .filter((event) => event.actorId === actor.actorId)
+        .map((event) => event.text ?? "")
+        .join("\n");
+      const face = StubMotionModel.faceForText(text);
       const samples = times.map((time) => ({
         time,
         joints: this.poseAt(actor.actorId, index, time, request),
+        face,
       }));
       return {
         actorId: actor.actorId,
@@ -123,6 +129,20 @@ export class StubMotionModel implements MotionModelAdapter {
     return {
       position: Vec.lerp(left.position, right.position, amount),
       heading: (left.heading ?? 0) + ((right.heading ?? 0) - (left.heading ?? 0)) * amount,
+    };
+  }
+
+  /** Mouth opening follows the utterance. Speech words also open the jaw. */
+  static faceForText(text: string): FacePose {
+    const face = neutralFace();
+    const expression = [...face.expression];
+    let hash = 0;
+    for (const char of text) hash = (hash + char.charCodeAt(0)) % 97;
+    expression[0] = text.length > 0 ? (hash / 97) * 0.25 : 0;
+    const speaking = /말|웃|smile|talk|speech/i.test(text);
+    return {
+      expression: expression as unknown as FacePose["expression"],
+      jawPose: speaking ? [0.35, 0, 0] : [0, 0, 0],
     };
   }
 

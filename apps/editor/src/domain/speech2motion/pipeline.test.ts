@@ -360,6 +360,16 @@ describe("speech2motion pipeline", () => {
     expect(afterRight?.subjects.find((subject) => subject.id === "light-1")).toEqual(shot.subjects.find((subject) => subject.id === "light-1"));
     const actorA = afterRight?.subjects.find((subject) => subject.id === ACTOR_A);
     expect(actorA && actorA.kind !== "light" && actorA.motion.channel).toBe("explicit");
+    if (actorA && actorA.kind !== "light" && actorA.motion.channel === "explicit") {
+      expect(actorA.motion.body?.model).toBe("smplx");
+      expect(actorA.motion.body?.frames).toHaveLength(FRAME_COUNT);
+      expect(actorA.motion.body?.frames[0]?.pose.body_pose).toHaveLength(63);
+      expect(actorA.motion.body?.frames[0]?.pose.left_hand_pose).toHaveLength(45);
+      expect(actorA.motion.body?.frames[0]?.pose.right_hand_pose).toHaveLength(45);
+      expect(actorA.motion.body?.frames[0]?.pose.expression).toHaveLength(10);
+      expect(actorA.motion.body?.frames[0]?.pose.jaw_pose).toHaveLength(3);
+      expect(actorA.uri).toBe("mesh/human.glb");
+    }
     const cupSubject = afterRight?.subjects.find((subject) => subject.id === CUP);
     expect(cupSubject && cupSubject.kind !== "light" && cupSubject.motion.channel).toBe("unset");
 

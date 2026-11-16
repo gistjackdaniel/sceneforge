@@ -155,10 +155,28 @@ export interface JointPose {
   translation: Vec3;
 }
 
+/** Ten SMPL-X expression coefficients. Index 0 is the mouth opening used by the stub. */
+export type Expression10 = readonly [
+  number, number, number, number, number,
+  number, number, number, number, number,
+];
+
+export interface FacePose {
+  expression: Expression10;
+  jawPose: readonly [number, number, number];
+}
+
+export const neutralFace = (): FacePose => ({
+  expression: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  jawPose: [0, 0, 0],
+});
+
 export interface PoseFrame {
   /** Integer frame on Shot.fps. */
   frame: number;
   joints: readonly JointPose[];
+  /** Absent only on older in-memory samples. The shot writer fills a neutral face. */
+  face?: FacePose;
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -425,6 +443,7 @@ export class TwoBoneIk {
 interface TimedJoints {
   time: number;
   joints: readonly JointPose[];
+  face?: FacePose;
 }
 
 export class PoseResample {
@@ -441,29 +460,43 @@ export class PoseResample {
   /** Sample model-time joint tracks onto integer shot frames. Positions lerp, rotations slerp. */
   static toShotFrames(samples: readonly TimedJoints[], shotFps: number, frameCount: number): PoseFrame[] {
     const ordered = [...samples].sort((left, right) => left.time - right.time);
-    return Array.from({ length: frameCount }, (_, frame) => ({
-      frame,
-      joints: PoseResample.mixAt(ordered, frame / shotFps),
-    }));
+    return Array.from({ length: frameCount }, (_, frame) => {
+      const mixed = PoseResample.mixAt(ordered, frame / shotFps);
+      return { frame, joints: mixed.joints, face: mixed.face };
+    });
   }
 
-  private static mixAt(samples: readonly TimedJoints[], time: number): JointPose[] {
+  private static mixAt(samples: readonly TimedJoints[], time: number): { joints: JointPose[]; face: FacePose } {
     const first = samples[0];
-    if (!first) return [];
-    if (samples.length === 1 || time <= first.time) return SmplxSkeleton.clone(first.joints);
+    if (!first) return { joints: [], face: neutralFace() };
+    if (samples.length === 1 || time <= first.time) return { joints: SmplxSkeleton.clone(first.joints), face: first.face ?? neutralFace() };
     const last = samples[samples.length - 1]!;
-    if (time >= last.time) return SmplxSkeleton.clone(last.joints);
+    if (time >= last.time) return { joints: SmplxSkeleton.clone(last.joints), face: last.face ?? neutralFace() };
     const after = samples.findIndex((sample) => sample.time > time);
     const right = samples[after]!;
     const left = samples[after - 1]!;
     const span = right.time - left.time;
     const amount = span > 0 ? (time - left.time) / span : 0;
-    return left.joints.map((joint, index) => {
-      const next = right.joints[index] ?? joint;
-      return {
-        rotation: QuatMath.slerp(joint.rotation, next.rotation, amount),
-        translation: Vec.lerp(joint.translation, next.translation, amount),
-      };
-    });
+    return {
+      joints: left.joints.map((joint, index) => {
+        const next = right.joints[index] ?? joint;
+        return {
+          rotation: QuatMath.slerp(joint.rotation, next.rotation, amount),
+          translation: Vec.lerp(joint.translation, next.translation, amount),
+        };
+      }),
+      face: PoseResample.mixFace(left.face ?? neutralFace(), right.face ?? neutralFace(), amount),
+    };
+  }
+
+  private static mixFace(left: FacePose, right: FacePose, amount: number): FacePose {
+    return {
+      expression: left.expression.map((value, index) => value + ((right.expression[index] ?? value) - value) * amount) as unknown as Expression10,
+      jawPose: [
+        left.jawPose[0] + (right.jawPose[0] - left.jawPose[0]) * amount,
+        left.jawPose[1] + (right.jawPose[1] - left.jawPose[1]) * amount,
+        left.jawPose[2] + (right.jawPose[2] - left.jawPose[2]) * amount,
+      ],
+    };
   }
 }

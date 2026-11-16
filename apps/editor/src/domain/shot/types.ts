@@ -55,6 +55,25 @@ export type GeneratedMotionProvenance = {
 
 export type MotionProvenance = KeyedMotionProvenance | GeneratedMotionProvenance;
 
+/** One SMPL-X frame. Root placement also stays on `ObjectPoseKey`. */
+export type SmplxBodyFrame = {
+  frame: number;
+  pose: {
+    global_orient: [number, number, number];
+    transl: [number, number, number];
+    body_pose: number[];
+    left_hand_pose: number[];
+    right_hand_pose: number[];
+    jaw_pose: [number, number, number];
+    expression: number[];
+  };
+};
+
+export type BodyCurve = {
+  model: "smplx";
+  frames: readonly [SmplxBodyFrame, ...SmplxBodyFrame[]];
+};
+
 export type Motion =
   | { channel: "unset" }
   | { channel: "text"; prompt: string }
@@ -63,6 +82,8 @@ export type Motion =
       interpolation: "linear" | "hold";
       keys: readonly [ObjectPoseKey, ...ObjectPoseKey[]];
       provenance: MotionProvenance;
+      /** Full body and face. Absent on Stage keys that only moved the root. */
+      body?: BodyCurve;
     };
 
 type SubjectBase = {

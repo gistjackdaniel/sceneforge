@@ -2,7 +2,7 @@ import type { ContactGraph, RigPart } from "./actionGraph";
 import type { ActorPoseSequence } from "./motionModel";
 import { PHASE0_CUP_IN_HAND_OFFSET } from "../shot/phase0Sample";
 import { GENERATED_MOTION_SOURCE, composeWorldPose, worldTransform, type ObjectAttachment, type ObjectPoseStream } from "./objectStream";
-import { QuatMath, SmplxSkeleton, TwoBoneIk, Vec, type PoseFrame, type Quat, type Vec3 } from "./pose";
+import { QuatMath, SmplxSkeleton, TwoBoneIk, Vec, type FacePose, type PoseFrame, type Quat, type Vec3 } from "./pose";
 
 export interface PlacementSource {
   position: Vec3;
@@ -112,7 +112,7 @@ export class ContactSolver {
       const anchorFrame = anchor.frames.find((item) => item.frame === frame.frame);
       const target = anchorFrame?.joints[anchorLimb.end]?.translation;
       if (!target) return frame;
-      return { frame: frame.frame, joints: TwoBoneIk.solve(frame.joints, limb, target) };
+      return { ...frame, joints: TwoBoneIk.solve(frame.joints, limb, target) };
     });
     return { sequences: next, resolved: true };
   }
@@ -184,13 +184,13 @@ export class ContactSolver {
           const solved = TwoBoneIk.solve(frame.joints, limb, guide.translation);
           const wrist = solved[limb.end];
           if (wrist) wrist.rotation = guide.rotation;
-          return { frame: frame.frame, joints: solved };
+          return { ...frame, joints: solved };
         }
         if (!place || frame.frame < approachStart || frame.frame > release) return frame;
         const span = Math.max(1, release - approachStart);
         const amount = Math.min(1, Math.max(0, (frame.frame - approachStart) / span));
         const wrist = frame.joints[limb.end]?.translation ?? object.position;
-        return { frame: frame.frame, joints: TwoBoneIk.solve(frame.joints, limb, Vec.lerp(wrist, graspOnTable, amount)) };
+        return { ...frame, joints: TwoBoneIk.solve(frame.joints, limb, Vec.lerp(wrist, graspOnTable, amount)) };
       });
       const parentId = object.subjectId ?? holder.a.actor_id;
       const handParent = holder.a.actor_id;
@@ -233,8 +233,19 @@ export class ContactSolver {
     return { sequences: next, streams, attachments };
   }
 
+  private static cloneFace(face: FacePose): FacePose {
+    return {
+      expression: [...face.expression] as FacePose["expression"],
+      jawPose: [face.jawPose[0], face.jawPose[1], face.jawPose[2]],
+    };
+  }
+
   private static cloneFrame(frame: PoseFrame): PoseFrame {
-    return { frame: frame.frame, joints: SmplxSkeleton.clone(frame.joints) };
+    return {
+      frame: frame.frame,
+      joints: SmplxSkeleton.clone(frame.joints),
+      ...(frame.face ? { face: ContactSolver.cloneFace(frame.face) } : {}),
+    };
   }
 
   private static cloneSequences(sequences: readonly ActorPoseSequence[]): ActorPoseSequence[] {
