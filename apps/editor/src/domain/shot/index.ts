@@ -14,6 +14,8 @@ export type {
   Lens,
   LightSubject,
   ModelSubject,
+  GeneratedMotionProvenance,
+  KeyedMotionProvenance,
   Motion,
   MotionProvenance,
   ObjectPoseKey,

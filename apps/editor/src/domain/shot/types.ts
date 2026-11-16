@@ -38,8 +38,22 @@ export type ShotTime = {
 
 export type ObjectPoseKey = Transform & { frame: number };
 
-/** MVP keys are authored on Stage. A later action event writes the same keys and extends provenance. */
-export type MotionProvenance = { kind: "keyed" };
+/** Stage-authored keys. The pose was not produced by a motion model. */
+export type KeyedMotionProvenance = { kind: "keyed" };
+
+/**
+ * Pose written by speech2motion.
+ * `source` is the performance source. The action graph and model adapter name the recipe.
+ * Model internals are not stored.
+ */
+export type GeneratedMotionProvenance = {
+  kind: "generated";
+  source: "generated";
+  actionGraph: { shotId: string; graphVersion: string };
+  model: { adapterId: string; modelFps: number };
+};
+
+export type MotionProvenance = KeyedMotionProvenance | GeneratedMotionProvenance;
 
 export type Motion =
   | { channel: "unset" }

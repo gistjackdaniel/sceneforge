@@ -40,6 +40,22 @@ const transformSchema = z.object({
   scale: vec3,
 });
 
+const motionProvenanceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("keyed") }),
+  z.object({
+    kind: z.literal("generated"),
+    source: z.literal("generated"),
+    actionGraph: z.object({
+      shotId: z.string().min(1),
+      graphVersion: z.string().min(1),
+    }),
+    model: z.object({
+      adapterId: z.string().min(1),
+      modelFps: z.number().finite().positive(),
+    }),
+  }),
+]);
+
 const motionSchema = z.discriminatedUnion("channel", [
   z.object({ channel: z.literal("unset") }),
   z.object({ channel: z.literal("text"), prompt: z.string().trim().min(1) }),
@@ -47,7 +63,7 @@ const motionSchema = z.discriminatedUnion("channel", [
     channel: z.literal("explicit"),
     interpolation: z.enum(["linear", "hold"]),
     keys: z.array(transformSchema.extend({ frame: z.number().int().nonnegative() })).min(1),
-    provenance: z.object({ kind: z.literal("keyed") }),
+    provenance: motionProvenanceSchema,
   }),
 ]);
 
