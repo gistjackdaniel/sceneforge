@@ -36,6 +36,9 @@ export interface ActorPoseSequence {
 }
 
 export interface MotionModelAdapter {
+  readonly adapterId: string;
+  /** Sample rate of the adapter. Output frames are still integers on `Shot.time.fps`. */
+  readonly modelFps: number;
   infer(request: MotionModelRequest): readonly ActorPoseSequence[];
 }
 
@@ -49,6 +52,8 @@ const ACTOR_SPACING = 1;
  */
 export class StubMotionModel implements MotionModelAdapter {
   static readonly modelFps = MODEL_FPS;
+  readonly adapterId = "stub-motion";
+  readonly modelFps = StubMotionModel.modelFps;
 
   static infer(request: MotionModelRequest): readonly ActorPoseSequence[] {
     return new StubMotionModel().infer(request);
