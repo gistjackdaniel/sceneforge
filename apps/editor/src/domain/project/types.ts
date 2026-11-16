@@ -58,6 +58,8 @@ export interface Project {
   connectors: Record<string, ExternalConnector>;
   libraryNodeIds: string[];
   modelExecutions?: Record<string, ModelExecutionRecord>;
+  /** Generation drafts keyed by Shot.id. A clip id only locates the shot. */
+  clipDrafts?: Record<string, import("../generation/clipDraft").ClipDraft>;
   /**
    * Ready speech2motion graphs keyed by shot id.
    * Present only after `RECORD_SPEECH2MOTION`. Domain producers do not write this field.
