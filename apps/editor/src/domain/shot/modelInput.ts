@@ -7,6 +7,7 @@ import {
   type Mat4,
 } from "../worlds/coordinates";
 import { eulerToQuaternion } from "./eulerAdapter";
+import { motionConditionGraph } from "./motionConditions";
 import { generateHash, hasSelectedTake, selectedTake } from "./queries";
 import type { CanonicalPlacement, EnvironmentView, GenerateBlocker, Shot, ShotModelInput, Transform } from "./types";
 
@@ -76,12 +77,14 @@ export const prepareModelInput = (shot: Shot, environment: EnvironmentView | und
       environment: environment?.geometryUri
         ? {
             worldId: environment.worldId,
+            revisionId: shot.environment?.revisionId,
             geometryUri: environment.geometryUri,
             coordinateSystem: environment.coordinateSystem,
             unitScaleMeters: environment.unitScaleMeters,
             ...(importTransform ? { importTransform } : {}),
           }
         : undefined,
+      motionConditions: motionConditionGraph(shot),
       recipe: { generateHash: generateHash(shot) },
     },
   };

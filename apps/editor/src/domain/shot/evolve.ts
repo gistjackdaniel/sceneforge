@@ -527,6 +527,7 @@ export const applyShotCommand = (
     case "ADD_SHOT_OVERRIDE":
     case "UPDATE_SHOT_OVERRIDE":
     case "REMOVE_SHOT_OVERRIDE":
+    case "SET_TIMELINE_MOTION":
     case "REVERT_SHOT_REVISION": {
       const edited = editShotEditorial(shot, command, now);
       if (!edited.ok) return fail(edited.reason);

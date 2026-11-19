@@ -4,6 +4,7 @@ import { legacyRefSchema } from "../worlds/sceneState";
 import { identityCalibration, identityMapping, samplesFromKeyframes } from "./cameraTrack";
 import { migrateZyxEncodedQuaternion, normalizeQuat } from "./cameraRotation";
 import { shotApprovalSchema, shotContactSchema, shotOverrideEventSchema, shotRevisionSchema } from "./editorial";
+import { motionConditionGraphSchema, motionSourceSchema } from "./motionConditions";
 import { migrateCameraTakeIds } from "./takeId";
 import type {
   AssetId,
@@ -267,18 +268,27 @@ export const shotSchema = z.object({
   coordinateContract: sceneCoordinateContractSchema.default(SCENE_COORDINATE_CONTRACT),
   subjects: z.array(subjectSchema),
   camera: cameraSchema,
-  environment: z.object({ worldId: z.string().min(1) }).optional(),
+  environment: z.object({ worldId: z.string().min(1), revisionId: z.string().min(1).optional() }).optional(),
   renders: z.array(renderSchema),
   contacts: z.array(shotContactSchema).optional(),
   overrides: z.array(shotOverrideEventSchema).optional(),
   revisions: z.array(shotRevisionSchema).optional(),
   headRevisionId: z.string().min(1).optional(),
+  motionSources: z.record(motionSourceSchema.shape.sha256, motionSourceSchema).optional(),
   approvals: z.array(shotApprovalSchema).optional(),
 }).superRefine((shot, ctx) => {
   const ids = new Set<string>();
   for (const subject of shot.subjects) {
     if (ids.has(subject.id)) ctx.addIssue({ code: "custom", message: "Duplicate subject id." });
     ids.add(subject.id);
+  }
+  for (const [id, source] of Object.entries(shot.motionSources ?? {})) {
+    if (id !== source.sha256) ctx.addIssue({ code: "custom", message: "Motion source id does not match its digest." });
+  }
+  for (const revision of shot.revisions ?? []) {
+    if (revision.motionSpans?.some((span) => !shot.motionSources?.[span.sourceId])) {
+      ctx.addIssue({ code: "custom", message: "Revision motion source is missing." });
+    }
   }
   if (!shot.headRevisionId) return;
   const head = shot.revisions?.find((revision) => revision.id === shot.headRevisionId);
@@ -340,11 +350,13 @@ export const shotModelInputSchema = z.object({
   }),
   environment: z.object({
     worldId: z.string().min(1),
+    revisionId: z.string().min(1).optional(),
     geometryUri: z.string().min(1),
     coordinateSystem: z.enum(["Y_UP", "Z_UP"]),
     unitScaleMeters: z.number().positive(),
     importTransform: mat4Schema.optional(),
   }).optional(),
+  motionConditions: motionConditionGraphSchema.optional(),
   recipe: z.object({ generateHash: z.string().min(1) }),
 });
 

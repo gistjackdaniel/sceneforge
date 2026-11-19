@@ -272,6 +272,40 @@ describe("rig part mapping", () => {
       true,
     );
   });
+
+  it("maps Quaternius fist joints onto the hands", () => {
+    const mapped = mapImportedRigParts([
+      { name: "Fist.L" },
+      { name: "Fist.R" },
+      { name: "Hips" },
+      { name: "Head" },
+      { name: "Foot.L" },
+      { name: "Foot.R" },
+    ]);
+    expect(mapped.partMap.left_hand).toBe("Fist.L");
+    expect(mapped.partMap.right_hand).toBe("Fist.R");
+    expect(mapped.partMap.pelvis).toBe("Hips");
+    expect(mapped.partMap.head).toBe("Head");
+    expect(mapped.partMap.left_foot).toBe("Foot.L");
+    expect(mapped.partMap.right_foot).toBe("Foot.R");
+  });
+
+  it("maps loader-sanitized Quaternius joint names", () => {
+    const mapped = mapImportedRigParts([
+      { name: "FistL" },
+      { name: "FistR" },
+      { name: "Hips" },
+      { name: "Head" },
+      { name: "FootL" },
+      { name: "FootR" },
+    ]);
+    expect(mapped.partMap.left_hand).toBe("FistL");
+    expect(mapped.partMap.right_hand).toBe("FistR");
+    expect(mapped.partMap.pelvis).toBe("Hips");
+    expect(mapped.partMap.head).toBe("Head");
+    expect(mapped.partMap.left_foot).toBe("FootL");
+    expect(mapped.partMap.right_foot).toBe("FootR");
+  });
 });
 
 describe("rigged actor coordinate contract", () => {

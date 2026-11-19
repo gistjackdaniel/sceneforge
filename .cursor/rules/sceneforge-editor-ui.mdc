@@ -1,40 +1,58 @@
 ---
-description: SceneForge 에디터 UI 패널, UX 플로우, 사용자-facing 표시 규칙
+description: SceneForge 에디터의 최소 화면과 사용자에게 보이는 상태
 globs: apps/editor/src/panels/**,apps/editor/src/app/**,apps/editor/src/state/**,apps/editor/src/components/**,apps/editor/src/presentation/**
 alwaysApply: false
 ---
 
 # SceneForge Editor UI
 
-기준 문서: [sceneforge_PRD.md](sceneforge_PRD.md)
+화면 기준은 [docs/SceneForge_3D_Native_Production_Roadmap.md](../../docs/SceneForge_3D_Native_Production_Roadmap.md) §3.1과 §3.2다.
 
 ## 화면
 
-최소 기능의 화면은 Stage 하나다.
+최소 화면의 중심은 3D viewport다. 인물, 소품, 세트, 카메라는 로드맵 §4.1의 scene state 그대로 보인다.
 
-| 영역 | 역할 |
-|------|------|
-| Stage | 3D 자산을 놓고 본다 |
-| Subjects | 사람·사물. 텍스트 포즈 또는 explicit pose |
-| Camera | 카메라 궤적 |
-| Generate video | 자산, 포즈, 궤적을 비디오 모델에 보낸다 |
+viewport 옆에 두는 기록은 네 가지다.
 
-Graph, Inspector, Direction, World Gen, Assistant, Timeline, Shot Workflow는 최소 화면에 넣지 않는다.
+- Subjects. persistent ID가 있는 인물과 사물.
+- Direction. 음성 또는 텍스트를 actor별 action, pose sequence, contact로 컴파일한 결과.
+- Camera. 휴대폰 6DoF take. 위치, 회전, intrinsics, timestamp, 추적 품질.
+- Generate. scene state와 구조화 3D 조건을 모델에 보낸다. 렌더된 MP4를 입력의 원본으로 쓰지 않는다.
 
-## 보여줄 것 / 숨길 것
+한 인물 또는 한 동작만 바꾼 뒤에는, 바뀐 항목과 유지된 항목을 나란히 볼 수 있다.
 
-**보여줄 것**
-- 샷에 들어간 3D 자산
-- 주체의 포즈 프롬프트 또는 explicit pose
-- 카메라 키 수와 궤적
-- Generate 가능 여부와 실패 이유
+노드 그래프 편집기, 부분 재렌더 승인 화면, 멀티컷 IDE는 `docs/archive/sceneforge_PRD_full.md`에 있다. 로드맵 §3.2가 끝나기 전에는 그 화면을 열지 않는다. 이미 있는 그래프와 타임라인 코드를 이 규칙 때문에 지우지 않는다.
 
-**숨길 것**
-- 노드 그래프, 캐시 키, dependency hash, 모델 내부
+## 보여줄 것
+
+- 샷에 들어간 3D 자산과 persistent ID
+- 컴파일된 action, pose, contact
+- 선택된 camera take의 궤적과 시간 맞춤 상태
+- Generate를 실행할 수 있는지, 실패했다면 그 이유
+- 한 대상을 수정했을 때 유지된 항목
+
+## 숨길 것
+
+- 모델 내부의 토큰 배치
+- 아카이브 계획의 노드 그래프, dependency hash, 캐시 키
 
 ## 구현 규칙
 
-- **모든 상태 변경은 Command 경유** — UI Component가 Domain Store를 직접 수정하지 않는다 (`object.position.x = 10` ❌, `commandBus.execute({ type: "UPDATE_NODE_PARAMS", ... })` ✅).
-- Stage의 배치, 포즈 프롬프트, explicit pose, 카메라 궤적은 Command로 저장한다. 새로고침 후 복원되지 않는 값을 React state에만 두지 않는다.
-- Undo/Redo는 Command 단위.
-- 최소 화면에 Graph, Inspector, Direction, Timeline을 다시 열지 않는다.
+상태 변경은 Command다. UI component가 domain store를 직접 수정하지 않는다.
+
+```typescript
+// 직접 고치지 않는다
+scene.actors[id].pose = next;
+
+// Command로 남긴다
+commandBus.execute({
+  type: "CHANGE_CONTACT_EFFECTOR",
+  shotId,
+  subjectRef,
+  locale,
+  contactId,
+  rigPart,
+});
+```
+
+scene state에 남는 값은 Command로 저장한다. 새로고침 후 복원되지 않는 값을 React state에만 두지 않는다. Undo와 Redo는 Command 단위다.

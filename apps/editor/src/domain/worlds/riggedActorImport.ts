@@ -95,10 +95,10 @@ type Vec3 = [number, number, number];
 type Quat = [number, number, number, number];
 
 const BONE_ALIASES: Record<RigPart, readonly string[]> = {
-  left_hand: ["left_hand", "left_wrist", "lefthand", "leftwrist", "l_hand", "l_wrist", "hand_l", "wrist_l", "왼손"],
-  right_hand: ["right_hand", "right_wrist", "righthand", "rightwrist", "r_hand", "r_wrist", "hand_r", "wrist_r", "오른손"],
-  left_foot: ["left_foot", "left_ankle", "leftfoot", "leftankle", "l_foot", "l_ankle", "foot_l", "ankle_l", "왼발"],
-  right_foot: ["right_foot", "right_ankle", "rightfoot", "rightankle", "r_foot", "r_ankle", "foot_r", "ankle_r", "오른발"],
+  left_hand: ["left_hand", "left_wrist", "lefthand", "leftwrist", "l_hand", "l_wrist", "hand_l", "wrist_l", "fist_l", "fistl", "왼손"],
+  right_hand: ["right_hand", "right_wrist", "righthand", "rightwrist", "r_hand", "r_wrist", "hand_r", "wrist_r", "fist_r", "fistr", "오른손"],
+  left_foot: ["left_foot", "left_ankle", "leftfoot", "leftankle", "l_foot", "l_ankle", "foot_l", "footl", "ankle_l", "왼발"],
+  right_foot: ["right_foot", "right_ankle", "rightfoot", "rightankle", "r_foot", "r_ankle", "foot_r", "footr", "ankle_r", "오른발"],
   head: ["head", "머리"],
   pelvis: ["pelvis", "hips", "hip", "골반"],
 };
@@ -571,13 +571,17 @@ export const importRiggedActor = (
   const rotation = convertSourceRotation(importTransform, source.restRotation ?? [0, 0, 0, 1]);
   const scale = finiteTriple(source.restScale, [1, 1, 1], "invalid_transform");
   const mapped = mapImportedRigParts(source.bones, revision.rig?.partMap);
-  const existing = Object.values(scene.actors).find((actor) => actor.importKey === sourceKey);
+  const actors = Object.values(scene.actors);
+  const existing = actors.find((actor) => actor.importKey === sourceKey) ?? actors.find((actor) =>
+    !actor.importKey && !actor.deletedAt && actor.assetRef.assetId === source.assetId && actor.assetRef.revisionId === source.revisionId
+      && actor.legacyRefs.some((ref) => ref.kind === "shot_subject" && ref.shotId === source.shotId && ref.subjectId === source.legacySubjectId),
+  );
   if (existing) {
     const legacyRefs = mergeLegacy(existing.legacyRefs, legacyRefsFor(scene, source, existing.id, translation, scale, label));
-    const sameRefs = JSON.stringify(existing.legacyRefs) === JSON.stringify(legacyRefs);
-    const actor = sameRefs ? existing : { ...existing, legacyRefs };
+    const unchanged = existing.importKey === sourceKey && JSON.stringify(existing.legacyRefs) === JSON.stringify(legacyRefs);
+    const actor = unchanged ? existing : { ...existing, importKey: sourceKey, legacyRefs };
     return {
-      scene: sameRefs ? scene : writeActor(scene, actor),
+      scene: unchanged ? scene : writeActor(scene, actor),
       actor,
       sourceKey,
       minted: false,

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { resolveRigPart, rigPartSchema } from "../worlds/sceneState";
+import { motionEditSchema, motionSpanSchema, type MotionSpan } from "./motionConditions";
 import type { Shot, ShotAssetRef, ShotCommand, ShotOverrideEvent, ShotRevision, Subject, SubjectId } from "./types";
 
 const brand = <T extends string>(value: string) => value as T;
@@ -32,6 +33,7 @@ export const shotRevisionSchema = z.object({
   createdAt: z.string().min(1),
   overrides: z.array(shotOverrideEventSchema),
   assetRefs: z.array(shotAssetRefSchema),
+  motionSpans: z.array(motionSpanSchema).optional(),
 });
 
 export const shotApprovalSchema = z.object({
@@ -42,7 +44,7 @@ export const shotApprovalSchema = z.object({
 
 export type ShotEditorialCommand = Extract<
   ShotCommand,
-  { type: "ADD_SHOT_OVERRIDE" | "UPDATE_SHOT_OVERRIDE" | "REMOVE_SHOT_OVERRIDE" | "REVERT_SHOT_REVISION" }
+  { type: "ADD_SHOT_OVERRIDE" | "UPDATE_SHOT_OVERRIDE" | "REMOVE_SHOT_OVERRIDE" | "REVERT_SHOT_REVISION" | "SET_TIMELINE_MOTION" }
 >;
 
 export type EditorialEdit =
@@ -92,16 +94,10 @@ export const resolveShotContacts = (shot: Shot) => {
 };
 
 const pinsFromSubjects = (shot: Shot): ShotAssetRef[] =>
-  shot.subjects.map((subject) => ({
+  shot.subjects.map((subject) => subject.kind !== "light" && subject.assetRef ? subject.assetRef : {
     assetId: subject.assetId,
     revisionId: `${subject.assetId}@${subject.assetVersion}`,
-  }));
-
-const copyPins = (shot: Shot): ShotAssetRef[] => {
-  const head = (shot.revisions ?? []).find((revision) => revision.id === shot.headRevisionId);
-  const source = head?.assetRefs ?? pinsFromSubjects(shot);
-  return source.map((pin) => ({ assetId: pin.assetId, revisionId: pin.revisionId }));
-};
+  });
 
 const copyEvent = (event: ShotOverrideEvent): ShotOverrideEvent => ({
   ...event,
@@ -113,13 +109,15 @@ const withRevision = (
   shot: Shot,
   overrides: readonly ShotOverrideEvent[],
   now: string,
+  motionSpans = shot.revisions?.find((revision) => revision.id === shot.headRevisionId)?.motionSpans,
 ): Shot => {
   const revision: ShotRevision = {
     id: `shr_${shot.id}_${shot.revisions?.length ?? 0}`,
     parentId: shot.headRevisionId,
     createdAt: now,
     overrides: overrides.map(copyEvent),
-    assetRefs: copyPins(shot),
+    assetRefs: pinsFromSubjects(shot),
+    motionSpans,
   };
   const stored = shotRevisionSchema.parse(revision);
   return {
@@ -136,13 +134,34 @@ const withRevision = (
   };
 };
 
-/**
- * Stack a contact-effector edit on the shot.
- * Subjects, camera, environment, base contacts, and approvals are left in place.
- * The inverse is `REPLACE_SHOT` of the shot passed in.
- */
+/** Edit or select a revision of the shot's motion spans and contact overrides. */
 export const editShotEditorial = (shot: Shot, command: ShotEditorialCommand, now: string): EditorialEdit => {
   if (command.shotId !== shot.id) return { ok: false, reason: "Shot not found." };
+
+  if (command.type === "SET_TIMELINE_MOTION") {
+    const parsed = motionEditSchema.array().min(1).safeParse(command.edits);
+    if (!parsed.success) return { ok: false, reason: "Invalid motion source or frame range." };
+    const sources = { ...shot.motionSources };
+    const head = shot.revisions?.find((revision) => revision.id === shot.headRevisionId);
+    const spans: MotionSpan[] = [...(head?.motionSpans ?? [])];
+    for (const { source, ...edit } of parsed.data) {
+      const actor = shot.subjects.find((subject) => subject.id === edit.subjectId);
+      if (actor?.kind !== "human" || !actor.instanceId || !actor.assetRef || actor.representation !== "mesh") {
+        return { ok: false, reason: "Select an imported actor mesh." };
+      }
+      if (actor.locked || edit.endFrame <= edit.startFrame || edit.endFrame > shot.time.durationFrames) {
+        return { ok: false, reason: "The actor is locked or the range is outside the shot." };
+      }
+      sources[source.sha256] ??= source;
+      const span = { ...edit, sourceId: source.sha256 };
+      const previous = spans.findIndex((item) => item.subjectId === span.subjectId && item.startFrame === span.startFrame && item.endFrame === span.endFrame);
+      if (previous >= 0) spans.splice(previous, 1);
+      spans.push(span);
+    }
+    if (JSON.stringify(spans) === JSON.stringify(head?.motionSpans)) return { ok: true, shot, changed: false };
+    const base = head ? shot : withRevision(shot, shot.overrides ?? [], now);
+    return { ok: true, changed: true, shot: withRevision({ ...base, motionSources: sources }, shot.overrides ?? [], now, spans) };
+  }
 
   if (command.type === "REVERT_SHOT_REVISION") {
     const revision = (shot.revisions ?? []).find((item) => item.id === command.revisionId);

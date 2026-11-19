@@ -3,6 +3,7 @@ import type { SensorPreset } from "../graph/lens";
 import { DEFAULT_CLIP_FPS } from "../timeline/timing";
 import { resolveVirtualKeyframes } from "./cameraTrack";
 import { detectTrackingLoss } from "./trackingContinuity";
+import { motionConditionGraph } from "./motionConditions";
 import type { CameraInterpolation, CameraTake, Quat, Shot, ShotCamera, TrackingState, Transform, Vec3 } from "./types";
 
 /** The only frame rate recording and export may read. */
@@ -336,7 +337,8 @@ export const generateHash = (shot: Shot): string => {
   const take = selectedTake(shot);
   const body = {
     time: shot.time,
-    environment: shot.environment?.worldId ?? null,
+    environment: shot.environment?.revisionId ? shot.environment : shot.environment?.worldId ?? null,
+    motionConditions: motionConditionGraph(shot),
     subjects: shot.subjects.map((subject) => {
       if (subject.kind === "light") {
         return { assetId: subject.assetId, assetVersion: subject.assetVersion, uri: subject.uri, kind: subject.kind, placement: subject.placement, intensity: subject.intensity, color: subject.color };

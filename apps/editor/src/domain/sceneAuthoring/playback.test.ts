@@ -17,6 +17,7 @@ import {
   createHandshakePoseSource,
   createHandshakePreviewRecord,
   createHandshakeShot,
+  createHandshakeWorlds,
   frameAtTime,
   interactionPreviewSchema,
   readContact,
@@ -34,6 +35,19 @@ describe("handshake pose fixture", () => {
   const shot = createHandshakeShot();
   const preview = createHandshakePreviewRecord();
   const poses = createHandshakePoseSource(shot, resolveContacts(preview));
+
+  it("인물 둘은 리깅된 메시이고 배경은 아파트 메시다", () => {
+    const meshOf = (id: string) => {
+      const subject = shot.subjects.find((item) => item.id === id);
+      if (!subject || subject.kind === "light") throw new Error(id);
+      return { uri: subject.uri, representation: subject.representation };
+    };
+    expect(meshOf(SUBJECT_IDS.actorA)).toEqual({ uri: "meshes/phase0/actor-a.glb", representation: "mesh" });
+    expect(meshOf(SUBJECT_IDS.actorB)).toEqual({ uri: "meshes/phase0/actor-b.glb", representation: "mesh" });
+    const set = createHandshakeWorlds().find((world) => world.id === HANDSHAKE_WORLD_IDS.set);
+    expect(set?.surfaceMeshPath).toBe("worlds/apartment_livingroom/preview.glb");
+    expect(set?.previewPath).toBe("worlds/apartment_livingroom/preview.glb");
+  });
 
   it("pelvis는 shot pose이고 회전은 rotationEuler XYZ다", () => {
     const pose = poses.actorPose(SUBJECT_IDS.actorA, 0);

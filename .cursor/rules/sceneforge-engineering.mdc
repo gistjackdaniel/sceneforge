@@ -1,61 +1,82 @@
 ---
-description: 유지보수·확장성·보안 중심 코딩 표준 (DRY, 검증, 에러 처리, 테스트)
+description: 유지보수, 확장, 보안 기준. 제품 아키텍처는 로드맵을 따른다.
 alwaysApply: true
 ---
 
 # Engineering Standards
 
-시니어 소프트웨어 엔지니어 관점: **유지보수성, 확장성, 보안**을 우선한다. 아키텍처 규칙은 [sceneforge_PRD.md](sceneforge_PRD.md) §20을 따른다.
+유지보수, 확장, 보안을 우선한다. 제품 아키텍처는 [docs/SceneForge_3D_Native_Production_Roadmap.md](../../docs/SceneForge_3D_Native_Production_Roadmap.md) §2, §4, §7을 따른다.
 
-## DRY & KISS
+`docs/archive/sceneforge_PRD_full.md` §20은 아카이브다. 그 절의 Node, Clip Graph, Hard Link 질문을 새 기능의 기준으로 쓰지 않는다. `docs/sceneforge_PRD.md`도 현재 아키텍처가 아니다.
 
-- 중복 로직은 공통 모듈로 추출한다 — 현 `apps/editor/src/core/`, 목표 `domain/`·`application/` (PRD §15 매핑).
-- UI 전용 state와 도메인 state를 이중으로 두지 않는다 — 노드/그래프/Asset이 source of truth. Project 재로드 시 복원할 수 없는 상태를 UI에만 저장하지 않는다.
-- MVP 범위 밖 추상화·플러그인 레이어는 만들지 않는다 (PRD §16 MVP Boundary, §18 Phase 순서 준수).
+## DRY와 KISS
 
-## Command & State
+- 중복 로직은 `domain/` 또는 `application/`에 둔다. `apps/editor/src/core/`에 있는 코드를 이 문장 때문에 한 번에 옮기지 않는다. 그 코드를 고칠 때 새 로직은 위 계층에 둔다.
+- UI state와 scene state를 이중으로 두지 않는다. 원본은 로드맵 §4.1이다. Project를 다시 열었을 때 복원되지 않는 값을 UI에만 저장하지 않는다.
+- 로드맵 §3.2 밖의 추상화와 플러그인 레이어는 만들지 않는다. 순서는 §7이다.
 
-- 모든 상태 변경은 Command를 거친다. UI Component가 Domain Store를 직접 수정하지 않는다.
-- 파일 경로 대신 ID로 참조한다. Node params에는 직렬화 가능한 값만 저장한다.
-- 비동기 작업(connector 실행, render job)은 취소 가능해야 한다 (`AbortSignal`).
+## Command와 상태
 
-## Security-First
+- 모든 상태 변경은 Command를 거친다. UI component가 domain store를 직접 수정하지 않는다.
+- 파일 경로 대신 persistent ID로 참조한다.
+- 저장하는 값은 직렬화할 수 있어야 한다.
+- connector 실행과 render job은 `AbortSignal`로 취소할 수 있어야 한다.
 
-- 외부 입력(JSON import, connector 응답, IPC, chat 명령)은 런타임 검증한다. TypeScript `as` 단독 캐스팅 금지.
-- Zod(또는 동등 스키마)로 `deserializeProject`, connector payload, 사용자 입력을 검증한다.
-- 사용자-facing 에러는 일반 메시지 — stack trace, DB/서버 원문, 내부 artifact 경로 노출 금지.
+## 새 기능 전에 답할 것
+
+로드맵 §4와 §3.2에 맞춰 답한다. 답하기 전에는 UI를 만들지 않는다.
+
+1. 이 데이터는 Asset, ActorInstance, ObjectInstance, MotionClip, ContactGraph, CameraTrack, Shot, Dependency 중 어디인가?
+2. 원본은 3D scene state인가, 생성 영상인가?
+3. 어떤 persistent ID로 참조하는가?
+4. 수정할 때 유지할 항목과 다시 계산할 항목은 각각 무엇인가?
+5. 확정 렌더인가, 생성 렌더인가?
+6. 저장한 뒤 같은 scene과 camera로 복원되는가?
+7. 특정 생성 모델의 스키마가 domain에 들어오는가?
+8. 지금 단계가 §3.2인가, §7의 이후 phase인가?
+
+## 보안
+
+- 외부 입력은 런타임에 검증한다. 대상은 JSON import, connector 응답, IPC, chat 명령이다. TypeScript `as`만으로 캐스팅하지 않는다.
+- Zod 또는 같은 수준의 스키마로 `deserializeProject`, connector payload, 사용자 입력을 검증한다.
+- 사용자에게 보이는 에러는 일반 문장이다. stack trace, DB 원문, 서버 원문, 내부 artifact 경로를 보여 주지 않는다.
 
 ```typescript
-// ❌ BAD — JSON.parse + as
+// 이렇게 하지 않는다
 const parsed = JSON.parse(raw) as ProjectEnvelope;
 
-// ✅ GOOD — schema parse, safe client message
+// 스키마로 검증하고, 사용자에게는 안전한 문장을 보여 준다
 const parsed = projectEnvelopeSchema.parse(JSON.parse(raw));
 ```
 
-## Persistence
+## 저장
 
-- 대용량 바이너리를 JSON에 넣지 않는다 — ID, URI, hash, metadata만 저장.
-- Project 저장은 atomic write. 모든 최상위 문서에 schema version 포함.
-- Asset·Node ID는 파일 경로가 변경되어도 유지한다.
+- 큰 바이너리를 JSON에 넣지 않는다. ID, URI, hash, metadata만 저장한다.
+- Project 저장은 atomic write다. 최상위 문서마다 schema version을 둔다.
+- Asset ID와 actor ID, object ID는 파일 경로가 바뀌어도 유지한다.
 
-## Documentation
+## 문서화
 
-- 코드는 이름·타입으로 의도를 드러낸다. obvious한 주석은 피한다.
-- domain public 함수·connector interface에는 JSDoc — invalidation 범위, downstream 영향, side effect 명시.
+- 코드는 이름과 타입으로 의도를 드러낸다. 당연한 주석은 쓰지 않는다.
+- domain의 public 함수와 connector interface에는 JSDoc을 단다. 유지하는 상태, 다시 계산하는 상태, side effect를 적는다.
 
-## Error Handling
+## 에러
 
-- 빈 `catch`, silent fail 금지. 실패는 로그 + 호출자/UX에 전달 가능한 도메인 에러로 변환.
-- connector job / render queue 실패는 `status: failed` + 구조화 로그. 재시도 가능·불가능 구분.
-- connector adapter(현 `core/lyra/`)에서 외부 예외를 도메인 에러로 변환 — UI·IPC에 raw error 전달하지 않는다. Connector 실패가 Project State를 손상시키면 안 된다.
+- 빈 `catch`와 silent fail을 두지 않는다. 실패는 로그로 남기고, 호출자 또는 UX에 전달할 수 있는 domain 에러로 바꾼다.
+- connector job과 render queue가 실패하면 `status: failed`와 구조화 로그를 남긴다. 재시도할 수 있는 실패와 없는 실패를 구분한다.
+- connector adapter는 외부 예외를 domain 에러로 바꾼다. 현재 위치는 `core/lyra/`다. UI와 IPC에 raw error를 넘기지 않는다. Connector 실패가 project state를 손상시키지 않는다.
 
-## Testing
+## 테스트
 
-- 순수 domain 로직에 unit test 우선:
-  - dependency 전파 (`core/clipgraph/dependency.ts`, `core/dependency/`) — downstream만 dirty
-  - cache invalidation (`core/cache/invalidation.ts`) — 연결 안 된 clip cache 유지
-  - serialization (`core/project/serialization.ts`) — schema version, round-trip, ID 유지
-  - cache key — UI 위치·표시 이름 변경이 캐시를 무효화하지 않음
-- connector, Electron IPC, Stage 렌더는 mock/stub.
-- PRD §21 Acceptance Tests를 회귀 기준으로 사용한다. UI smoke는 MVP 이후.
+순수 domain 로직의 unit test를 먼저 쓴다. 회귀로 볼 기존 테스트는 아래에 있다.
+
+- `domain/project/serialization.test.ts`. schema version, round-trip, ID 유지.
+- `domain/speech2motion/pipeline.test.ts`와 `domain/speech2motion/producer.test.ts`. actor ID, 유지 목록, 다시 계산할 목록.
+- `domain/shot/mobileCamera.test.ts`. camera take 복원.
+- `domain/worlds/packageRoundTrip.test.ts`. world package 저장과 로드.
+
+connector, Electron IPC, viewport 렌더는 mock 또는 stub으로 둔다.
+
+새 기능의 완료 조건은 로드맵 §7의 exit criterion이다. 아카이브 §21을 그 조건으로 쓰지 않는다.
+
+`core/dependency/`와 `core/cache/`의 기존 테스트는 그 코드가 남아 있는 동안 깨뜨리지 않는다. 그 테스트를 새 기능의 완료 조건으로 쓰지 않는다.

@@ -35,6 +35,9 @@ import {
 import type { SceneObject } from "../../domain/worlds/sceneObjects";
 import { subjectDraftFromObject } from "./subjectDraft";
 import { InteractionPreview } from "../../presentation/scene/InteractionPreview";
+import { ProductionPreview } from "../../presentation/scene/ProductionPreview";
+import { PHASE1_SHOT_ID } from "../../domain/sceneAuthoring/phase1Demo";
+import { resolveShotWorldRevision } from "../../domain/worlds/importedShotWorld";
 import { HANDSHAKE_SHOT_ID } from "../../domain/sceneAuthoring";
 import { gltfRiggedActorCommand, rigImportAlreadyApplied } from "../../application/commands/gltfRiggedActor";
 import { rigWarningsForActors } from "../../presentation/viewport/skinnedMeshBones";
@@ -64,9 +67,11 @@ const typing = (target: EventTarget | null) => target instanceof HTMLElement &&
 export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; alwaysActive?: boolean }) => {
   const { state: { project, ui }, dispatch } = useEditorStore();
   const clip = ui.selectedClipId ? project.clips[ui.selectedClipId] : undefined;
+  const shot = clip ? project.shots?.[clip.id] : undefined;
   const sequence = project.sequences[project.activeSequenceId];
-  const world = (ui.previewWorldId ? project.worlds[ui.previewWorldId] : undefined) ?? (clip?.linkedWorldId ? project.worlds[clip.linkedWorldId] : undefined);
-  const previewOnly = Boolean(world && world.id !== clip?.linkedWorldId);
+  const worldId = shot?.environment?.worldId ?? clip?.linkedWorldId;
+  const world = (ui.previewWorldId ? project.worlds[ui.previewWorldId] : undefined) ?? (worldId ? project.worlds[worldId] : undefined);
+  const previewOnly = Boolean(world && world.id !== worldId);
   const recording = ui.viewportWorkspace === "record";
   const [drawer, setDrawer] = useState<Drawer>(null);
   const [selectedId, setSelectedId] = useState<string>("camera");
@@ -74,6 +79,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [showPreview, setShowPreview] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [interaction, setInteraction] = useState(false);
+  const [production, setProduction] = useState<"active" | "demo" | null>(null);
   const [directionText, setDirectionText] = useState("A와 B가 악수하고 A가 컵을 테이블에 내려놓는다");
   const [listening, setListening] = useState(false);
   const speechUnsub = useRef<(() => void) | undefined>(undefined);
@@ -95,7 +101,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [load, setLoad] = useState<{ state: ViewportLoadState; message?: string }>({ state: "idle" });
   const [notice, setNotice] = useState("");
   const [selectedFrames, setSelectedFrames] = useState<number[]>([]);
-  const shot = clip ? project.shots?.[clip.id] : undefined;
+  const productionShot = production === "demo" ? project.shots?.[PHASE1_SHOT_ID] : production === "active" ? shot : undefined;
+  const productionWorld = productionShot?.environment && project.worlds[productionShot.environment.worldId];
   const shotRef = useRef(shot);
   shotRef.current = shot;
   const duration = shot?.time.durationFrames ?? 1;
@@ -158,19 +165,22 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const selected = sceneObjects.find((object) => object.id === selectedId);
   const canEdit = Boolean(shot && clip && !previewOnly);
   const cameraView = recording && !freeView && selectedId === "camera";
-  const previewPlan = useMemo(() => resolveViewportRepresentation(world), [world]);
+  const pinnedWorld = !previewOnly && shot?.environment?.revisionId ? resolveShotWorldRevision(world, shot.environment.revisionId) : undefined;
+  const previewPlan = useMemo(() => resolveViewportRepresentation(world && pinnedWorld
+    ? { ...world, rootUri: pinnedWorld.uri, surfaceMeshPath: pinnedWorld.uri, previewPath: pinnedWorld.uri, previewUri: pinnedWorld.uri }
+    : world), [world, pinnedWorld?.uri]);
   const rigWarnings = useMemo(() => {
     if (!world) return [];
     const actors = project.sceneStates?.[world.id]?.actors ?? {};
     const live = new Set(Object.values(actors).filter((actor) => !actor.deletedAt).map((actor) => actor.id));
     return rigWarningsForActors(ui.commandBus.events, world.id, live);
   }, [world, project.sceneStates, ui.commandBus.events]);
-  const importRiggedModel = useCallback((payload: GlbRigRead & { objectId: string }) => {
-    if (!world || !shot) return;
-    const subject = subjects.find((item) => item.id === payload.objectId);
+  const importRiggedModel = useCallback((payload: GlbRigRead & { objectId: string }, targetShot = shot, targetWorld = world) => {
+    if (!targetWorld || !targetShot) return;
+    const subject = targetShot.subjects.find((item) => item.id === payload.objectId);
     if (!subject || subject.kind !== "human" || !subject.assetRef) return;
     const command = gltfRiggedActorCommand({
-      worldId: world.id,
+      worldId: targetWorld.id,
       assetId: subject.assetRef.assetId,
       revisionId: subject.assetRef.revisionId,
       sourcePath: subject.uri,
@@ -181,13 +191,13 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       restRotation: payload.restRotation,
       restScale: payload.restScale,
       legacySubjectId: subject.id,
-      shotId: shot.id,
+      shotId: targetShot.id,
       legacyAssetId: subject.assetId,
     });
     if (!command || command.type !== "IMPORT_RIGGED_ACTOR") return;
-    if (rigImportAlreadyApplied(project.sceneStates?.[world.id], command.source)) return;
+    if (rigImportAlreadyApplied(project.sceneStates?.[targetWorld.id], command.source)) return;
     dispatch({ type: "agent-execute-commands", commands: [command], logMessage: "리깅된 액터를 가져왔습니다." });
-  }, [world, shot, subjects, project.sceneStates, dispatch]);
+  }, [world, shot, project.sceneStates, dispatch]);
   const fallbackImageUri = useMemo(() => firstViewportImageUri(world, project.assets), [world, project.assets]);
   const pathSamples = useMemo(() => (shot ? sampleCameraPathPositions(shot, 64) : []).map(tuple3), [shot]);
   const pathColors = useMemo(
@@ -384,6 +394,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
     if (takeRecording) finishTakeRecording("stop");
     setPlaying(false); setDraft(undefined); setDrawer(null); setNotice(""); setSelectedFrames([]);
     setInteraction(false);
+    setProduction(null);
     dispatch({ type: "set-viewport-workspace", workspace: mode });
   };
   const openInteraction = () => {
@@ -524,7 +535,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   });
   const exportScene = () => {
     if (!shot || !canEdit) return;
-    const prepared = prepareModelInput(shot, environmentFromWorld(world), ui.outputAspect);
+    const prepared = prepareModelInput(shot, environmentFromWorld(world, shot.environment?.revisionId), ui.outputAspect);
     const body = prepared.ok ? prepared.input : { blocked: prepared.blocker };
     const url = URL.createObjectURL(new Blob([JSON.stringify(body, null, 2)], { type: "application/json" }));
     const link = document.createElement("a"); link.href = url; link.download = `${shot.id}.scene.json`; link.click();
@@ -545,7 +556,13 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       <div className="scene-mode-switch" role="group" aria-label="Workspace mode">
         <button aria-pressed={!recording} onClick={() => switchMode("build")}>Scene</button>
         <button aria-pressed={recording} onClick={() => switchMode("record")}>Motion</button>
-        <button aria-pressed={interaction} onClick={() => (interaction ? setInteraction(false) : openInteraction())}>상호작용</button>
+        <button aria-pressed={interaction} onClick={() => { setProduction(null); if (interaction) setInteraction(false); else openInteraction(); }}>상호작용</button>
+        <button aria-pressed={production === "active"} disabled={!shot} onClick={() => { setInteraction(false); setProduction(production === "active" ? null : "active"); }}>3D 모션</button>
+        <button aria-pressed={production === "demo"} onClick={() => {
+          setInteraction(false);
+          if (production === "demo") setProduction(null);
+          else { dispatch({ type: "agent-execute-commands", commands: [{ type: "INSTALL_PHASE1_DEMO" }] }); setProduction("demo"); }
+        }}>Phase 1 검증 샷</button>
       </div>
       <form className="scene-direction" onSubmit={(event) => { event.preventDefault(); applyDirection(); }}>
         <label>동작 지시
@@ -559,7 +576,11 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       {interaction && (
         <InteractionPreview project={project} onClose={() => setInteraction(false)} onChangeHand={changeHandshakeHand} />
       )}
-      <div className={`scene-stage-canvas ${cameraView ? "is-camera-view" : ""}`} style={{ "--scene-aspect": outputAspectRatio(ui.outputAspect) } as React.CSSProperties}>
+      {productionShot && <ProductionPreview key={productionShot.id} shot={productionShot} world={productionWorld} aspect={ui.outputAspect}
+        onCommand={(command) => dispatch({ type: "agent-execute-commands", commands: [command] })}
+        onRiggedActor={(objectId, rig) => { if (productionWorld) importRiggedModel({ objectId, ...rig }, productionShot, productionWorld); }}
+        onClose={() => setProduction(null)} />}
+      {!productionShot && <div className={`scene-stage-canvas ${cameraView ? "is-camera-view" : ""}`} style={{ "--scene-aspect": outputAspectRatio(ui.outputAspect) } as React.CSSProperties}>
         <StageViewport world={world} worldName={world?.name} previewPlan={previewPlan} fallbackImageUri={fallbackImageUri}
           overlays={ui.viewportOverlays} tool={ui.viewportTool} workspace={cameraView ? "record" : "build"}
           outputAspect={outputAspectRatio(ui.outputAspect)} outputAspectLabel={ui.outputAspect}
@@ -608,7 +629,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
             livePoseRef.current = { position: camera.position, quaternion };
           }}
           captureSignal={captureSignal} focusSignal={focusSignal} resetSignal={resetSignal} />
-      </div>
+      </div>}
       <nav className="scene-rail" aria-label="Scene tools">
         {([["assets", "plus", "Add assets"], ["layers", "layers", "Subjects"], ["camera", "camera", "Camera trajectory"]] as const).map(([id, icon, title]) =>
           <button key={id} className={drawer === id ? "is-active" : ""} aria-label={title} title={title} aria-expanded={drawer === id} onClick={() => toggleDrawer(id)}><SceneIcon name={icon} /></button>)}

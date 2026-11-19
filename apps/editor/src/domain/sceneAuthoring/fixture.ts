@@ -95,12 +95,15 @@ const rx = (radians: number): Quat => quatFromAxisAngle([1, 0, 0], radians);
 const ry = (radians: number): Quat => quatFromAxisAngle([0, 1, 0], radians);
 const key = (frame: number, rotation: Quat): RotationKey => ({ frame, rotation });
 
+const APARTMENT_MESH = "worlds/apartment_livingroom/preview.glb";
+
 const world = (
   id: string,
   name: string,
   localized: { ko: string; en: string },
   aliases: string[],
   elementKind: "room" | "actor_mark" | "socket",
+  meshPath?: string,
 ): WorldAsset =>
   normalizeWorldAsset({
     id,
@@ -111,6 +114,8 @@ const world = (
     representation: "mesh",
     coordinateSystem: "Y_UP",
     unitScaleMeters: 1,
+    rootUri: `worlds/${id}`,
+    ...(meshPath ? { surfaceMeshPath: meshPath, previewPath: meshPath } : {}),
     createdAt: FIXTURE_CLOCK,
     updatedAt: FIXTURE_CLOCK,
     elements: [
@@ -128,7 +133,7 @@ const world = (
 
 /** Worlds so TargetResolver can tell A, B, the cup, and the table apart by `WorldAsset.id`. */
 export const createHandshakeWorlds = (): WorldAsset[] => [
-  world(HANDSHAKE_WORLD_IDS.set, "Indoor Set", { ko: "실내 세트", en: "Indoor Set" }, ["배경", "background"], "room"),
+  world(HANDSHAKE_WORLD_IDS.set, "Indoor Set", { ko: "실내 세트", en: "Indoor Set" }, ["배경", "background"], "room", APARTMENT_MESH),
   world(HANDSHAKE_WORLD_IDS.actorA, "A", { ko: "A", en: "A" }, ["인물 A"], "actor_mark"),
   world(HANDSHAKE_WORLD_IDS.actorB, "B", { ko: "B", en: "B" }, ["인물 B"], "actor_mark"),
   world(HANDSHAKE_WORLD_IDS.cup, "Cup", { ko: "컵", en: "Cup" }, ["cup"], "socket"),
@@ -249,9 +254,9 @@ export const createHandshakeShot = (): Shot => parseShot({
       assetId: HANDSHAKE_WORLD_IDS.actorA,
       assetVersion: 1,
       name: "A",
-      uri: `worlds/${HANDSHAKE_WORLD_IDS.actorA}`,
+      uri: "meshes/phase0/actor-a.glb",
       kind: "human",
-      representation: "marker",
+      representation: "mesh",
       visible: true,
       locked: false,
       placement: { position: [...ACTOR_A_ROOT], rotationEuler: ROOT_EULER, scale: [1, 1, 1] },
@@ -271,9 +276,9 @@ export const createHandshakeShot = (): Shot => parseShot({
       assetId: HANDSHAKE_WORLD_IDS.actorB,
       assetVersion: 1,
       name: "B",
-      uri: `worlds/${HANDSHAKE_WORLD_IDS.actorB}`,
+      uri: "meshes/phase0/actor-b.glb",
       kind: "human",
-      representation: "marker",
+      representation: "mesh",
       visible: true,
       locked: false,
       placement: { position: [...ACTOR_B_ROOT], rotationEuler: ROOT_EULER, scale: [1, 1, 1] },

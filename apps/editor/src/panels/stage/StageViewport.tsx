@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { readImportedShotWorld } from "../../application/services/importShotWorld";
 import {
   overlayKindForElement,
   viewportPreviewBadge,
@@ -1264,29 +1265,26 @@ export const StageViewport = ({
 
     const loader = new GLTFLoader();
     const uri = resolveMediaUri(previewUri);
-    loader.load(
-      uri,
-      (gltf) => {
+    void readImportedShotWorld(previewUri).then((bytes) => bytes ? loader.parseAsync(bytes, "") : loader.loadAsync(uri)).then((gltf) => {
         if (token !== loadTokenRef.current || !sceneApiRef.current) {
+          disposeObject(gltf.scene);
           return;
         }
         setShowingImageProxy(false);
         attachWorldRoot(gltf.scene);
         onLoadStateChangeRef.current?.("ready");
-      },
-      undefined,
-      () => {
+      }).catch((error: unknown) => {
         if (token !== loadTokenRef.current || !sceneApiRef.current) {
           return;
         }
+        console.error("World mesh failed to load", error);
         if (fallbackImageUri) {
           attachImageProxy(fallbackImageUri, "Mesh artifact missing; showing image proxy.");
           return;
         }
         setShowingImageProxy(false);
         onLoadStateChangeRef.current?.("missing_artifact", "메시 artifact를 찾을 수 없습니다.");
-      },
-    );
+      });
     return () => {
       loadTokenRef.current += 1;
     };

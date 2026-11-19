@@ -1,0 +1,199 @@
+{
+  "schemaVersion": 2,
+  "source": "editable_scene",
+  "rasterKeyframes": "forbidden",
+  "shotId": "shot-phase1-edit-review",
+  "time": {
+    "fps": 30,
+    "durationFrames": 120,
+    "origin": "clip_local"
+  },
+  "coordinateContract": {
+    "handedness": "right",
+    "upAxis": "Y",
+    "forwardAxis": "+Z",
+    "unit": "meter",
+    "metersPerUnit": 1,
+    "cameraLocalFrame": "gl",
+    "exportCameraFrame": "opencv",
+    "rotationStorage": "quaternion_xyzw",
+    "matrixLayout": "row_major_nested",
+    "timeBase": "shot_local_frame"
+  },
+  "outputAspect": "16:9",
+  "subjects": [
+    {
+      "id": "inst_fixture_actor_a",
+      "assetId": "world-handshake-actor-a",
+      "kind": "human",
+      "uri": "/meshes/phase1/actor-a.glb",
+      "placement": {
+        "position": [
+          0.82,
+          0,
+          -1.6
+        ],
+        "rotationEuler": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "canonicalPlacement": {
+        "translation": [
+          0.82,
+          0,
+          -1.6
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "motion": {
+        "channel": "unset"
+      }
+    },
+    {
+      "id": "inst_fixture_actor_b",
+      "assetId": "world-handshake-actor-b",
+      "kind": "human",
+      "uri": "/meshes/phase1/actor-b.glb",
+      "placement": {
+        "position": [
+          1.88,
+          0,
+          0.08
+        ],
+        "rotationEuler": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "canonicalPlacement": {
+        "translation": [
+          1.88,
+          0,
+          0.08
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "motion": {
+        "channel": "unset"
+      }
+    }
+  ],
+  "camera": {
+    "takeId": "cam_legacy_shot_phase1_edit_review__cam_phase1_classroom",
+    "interpolation": "linear",
+    "keys": [
+      {
+        "frame": 0,
+        "position": [
+          1.17,
+          1.28,
+          4.1
+        ],
+        "rotation": [
+          -0.04997916927067833,
+          0,
+          0,
+          0.9987502603949663
+        ],
+        "focalLengthMm": 28
+      }
+    ],
+    "lens": {
+      "focalLengthMm": 28
+    }
+  },
+  "environment": {
+    "worldId": "world-phase1-classroom",
+    "revisionId": "sha256-3732f28bbc05f47512648abc5f5877bb4af004394676a90f301139e3ddb80e6c",
+    "geometryUri": "worlds/phase1-classroom/room.glb",
+    "coordinateSystem": "Y_UP",
+    "unitScaleMeters": 1
+  },
+  "motionConditions": {
+    "schemaVersion": 1,
+    "targets": [
+      {
+        "subjectId": "inst_fixture_actor_a",
+        "instanceId": "act_legacy_shot_phase1_edit_review__inst_fixture_actor_a",
+        "assetId": "ast_demo_a",
+        "revisionId": "rev_demo_a_v2"
+      },
+      {
+        "subjectId": "inst_fixture_actor_b",
+        "instanceId": "act_legacy_shot_phase1_edit_review__inst_fixture_actor_b",
+        "assetId": "ast_demo_b",
+        "revisionId": "rev_demo_b_v2"
+      }
+    ],
+    "sources": {
+      "a97210e55ed739286ba94fb6cb09760c20771571ebe69ffdfb77b5401fdf9424": {
+        "model": "Kimodo-SOMA-RP-ArdyRep-v1.2",
+        "prompt": "A person waves with the left hand and walks forward.",
+        "seed": 0,
+        "fps": 30,
+        "uri": "/motions/wave-walk.json",
+        "sha256": "a97210e55ed739286ba94fb6cb09760c20771571ebe69ffdfb77b5401fdf9424",
+        "frameCount": 60
+      },
+      "2907575eb24256d00b64c47bc0a2ebf421a861895421254d44a3f76b724ef9b2": {
+        "model": "Kimodo-SOMA-RP-ArdyRep-v1.2",
+        "prompt": "A person stands with hands at their sides, makes a deep polite forward bow, then slowly stands straight again.",
+        "seed": 3,
+        "fps": 30,
+        "uri": "/motions/step-and-bow.json",
+        "sha256": "2907575eb24256d00b64c47bc0a2ebf421a861895421254d44a3f76b724ef9b2",
+        "frameCount": 120
+      }
+    },
+    "spans": [
+      {
+        "subjectId": "inst_fixture_actor_a",
+        "sourceId": "a97210e55ed739286ba94fb6cb09760c20771571ebe69ffdfb77b5401fdf9424",
+        "startFrame": 0,
+        "endFrame": 120
+      },
+      {
+        "subjectId": "inst_fixture_actor_b",
+        "sourceId": "2907575eb24256d00b64c47bc0a2ebf421a861895421254d44a3f76b724ef9b2",
+        "startFrame": 0,
+        "endFrame": 120
+      }
+    ]
+  },
+  "recipe": {
+    "generateHash": "60a608e9"
+  }
+}

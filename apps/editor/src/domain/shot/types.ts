@@ -1,5 +1,6 @@
 import type { Mat4, SceneCoordinateContract } from "../worlds/coordinates";
 import type { LegacyRef, RigPart } from "../worlds/sceneState";
+import type { MotionConditionGraph, MotionEdit, MotionSource, MotionSpan } from "./motionConditions";
 
 export type ShotId = string & { readonly __brand: "ShotId" };
 export type SubjectId = string & { readonly __brand: "SubjectId" };
@@ -310,6 +311,7 @@ export type ShotRevision = {
   createdAt: string;
   overrides: readonly ShotOverrideEvent[];
   assetRefs: readonly ShotAssetRef[];
+  motionSpans?: readonly MotionSpan[];
 };
 
 export type ShotApproval = {
@@ -331,13 +333,14 @@ export type Shot = {
   coordinateContract?: SceneCoordinateContract;
   subjects: readonly Subject[];
   camera: ShotCamera;
-  environment?: { worldId: string };
+  environment?: { worldId: string; revisionId?: string };
   renders: readonly ShotRender[];
   /** Base contacts. Override events do not replace this list. */
   contacts?: readonly ShotContact[];
   overrides?: readonly ShotOverrideEvent[];
   revisions?: readonly ShotRevision[];
   headRevisionId?: string;
+  motionSources?: Record<string, MotionSource>;
   /** Data only. No approval UI. */
   approvals?: readonly ShotApproval[];
 };
@@ -401,6 +404,7 @@ export type ShotModelInput = {
   };
   environment?: {
     worldId: string;
+    revisionId?: string;
     geometryUri: string;
     /** Source-file up axis. Not the canonical frame. */
     coordinateSystem: "Y_UP" | "Z_UP";
@@ -408,6 +412,7 @@ export type ShotModelInput = {
     /** Present when the source file is not already the canonical scene, including `Z_UP`. */
     importTransform?: Mat4;
   };
+  motionConditions?: MotionConditionGraph;
   recipe: { generateHash: string };
 };
 
@@ -482,4 +487,5 @@ export type ShotCommand =
     }
   | { type: "UPDATE_SHOT_OVERRIDE"; shotId: ShotId; eventId: string; newEffector: string }
   | { type: "REMOVE_SHOT_OVERRIDE"; shotId: ShotId; eventId: string }
+  | { type: "SET_TIMELINE_MOTION"; shotId: ShotId; edits: readonly MotionEdit[] }
   | { type: "REVERT_SHOT_REVISION"; shotId: ShotId; revisionId: string };

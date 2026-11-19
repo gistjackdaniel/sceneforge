@@ -2717,7 +2717,7 @@ export const EditorStoreProvider = ({ children }: { children: ReactNode }) => {
       const world = shot?.environment?.worldId ? current.project.worlds[shot.environment.worldId] : undefined;
       void startShotRender({
         shot,
-        environment: environmentFromWorld(world),
+        environment: environmentFromWorld(world, shot?.environment?.revisionId),
         outputAspect: action.outputAspect,
         lyraCloudUrl: import.meta.env.VITE_LYRA_CLOUD_URL,
         signal: controller.signal,

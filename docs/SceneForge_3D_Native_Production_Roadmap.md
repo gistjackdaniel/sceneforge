@@ -1,17 +1,19 @@
 ---
-title: "SceneForge — 3D-Native Generative Production 전략 및 연구 로드맵"
-version: "0.1"
-status: "Working Draft / 논의용"
-updated: "2026-10-30"
+title: "SceneForge — 3D-Native Generative Production 최소 기능 PRD"
+version: "0.2"
+status: "현재 기준 / 최소 기능 PRD"
+updated: "2026-11-17"
 source: "2026-10-29~30 SceneForge 아키텍처 및 경쟁 제품에 관한 대화"
 ---
 
-# SceneForge — 3D-Native Generative Production 전략 및 연구 로드맵
+# SceneForge — 3D-Native Generative Production 최소 기능 PRD
+
+이 문서가 현재 기준이다. 이전 통합 계획(노드 그래프, 부분 재렌더, 멀티컷 IDE)은 [docs/archive/sceneforge_PRD_full.md](archive/sceneforge_PRD_full.md)에 보관한다. 최소 기능이 되기 전에는 그 범위를 구현하지 않는다.
 
 > **North Star**  
 > SceneForge는 **3D 제작 데이터의 편집 가능성과 수정 재현성을 유지하면서**, 음성으로 복수 인물·에셋의 행동을 연출하고 휴대폰으로 촬영한 카메라 움직임을 결합해, 생성형 모델로 최종 영상을 완성하는 **3D-native AI production system**을 지향한다.
 
-**문서 목적:** 이 대화에서 도출한 판단을 향후 제품 설계, 모델 연구, 기술 검증, 개발 우선순위의 기준으로 정리한다.  
+**문서 목적:** 이 문서가 제품 설계, 모델 연구, 기술 검증, 개발 우선순위의 기준이다.  
 **주의:** 아래의 `[확정 원칙]`은 대화에서 정리한 지향점이지 구현 완료를 뜻하지 않는다. `[설계 제안]`과 `[미결정]`은 실험 및 팀 논의를 통해 확정한다.
 
 ---

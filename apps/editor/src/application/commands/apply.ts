@@ -25,6 +25,13 @@ import {
 } from "../../domain/sceneAuthoring";
 import { ActionGraphSchema } from "../../domain/speech2motion/actionGraph";
 import { applyImportRiggedActor, applyRestoreSceneState } from "./importRiggedActor";
+import { createPhase1DemoShot, PHASE1_SHOT_ID, PHASE1_WORLD_ID } from "../../domain/sceneAuthoring/phase1Demo";
+import { PHASE1_CLASSROOM_WORLD, importedShotWorldSchema, registerShotWorld, resolveShotWorldRevision, shotWorldRevisionId } from "../../domain/worlds/importedShotWorld";
+import { createPersistentIdFactory, ID_PREFIX, persistentIdSchema } from "../../domain/worlds/ids";
+import type { WorldAsset } from "../../domain/worlds/types";
+import type { SceneState } from "../../domain/worlds/sceneState";
+import { mergeShotSubjects } from "../../domain/project/sceneLink";
+import { migrateWorldToSceneState } from "../../domain/worlds/migrateInstances";
 
 const event = (type: DomainEvent["type"], payload: Record<string, unknown>, timestamp: string): DomainEvent => ({
   type,
@@ -1171,6 +1178,73 @@ export const applyCommand = (
           command,
           inverse: edited.inverse ? { type: "SHOT", command: edited.inverse } : undefined,
           events: [event("ShotChanged", { shotId: edited.shot.id }, timestamp)],
+        },
+      };
+    }
+    case "INSTALL_PHASE1_DEMO":
+    case "REGISTER_SHOT_WORLD":
+    case "PIN_SHOT_WORLD":
+    case "RESTORE_SHOT_WORLD": {
+      const installing = command.type === "INSTALL_PHASE1_DEMO";
+      const shotId = installing ? PHASE1_SHOT_ID : command.shotId;
+      const previousShot = project.shots?.[shotId] ?? null;
+      let worldId = installing ? PHASE1_WORLD_ID : command.worldId;
+      if (!persistentIdSchema.safeParse(worldId).success) return fail("Invalid world id.");
+      if (command.type === "REGISTER_SHOT_WORLD" && project.worlds[worldId]) {
+        const pin = previousShot?.environment;
+        if (pin?.worldId !== worldId || !pin.revisionId || !resolveShotWorldRevision(project.worlds[worldId], pin.revisionId)) {
+          worldId = `world-${createPersistentIdFactory().mint(ID_PREFIX.asset)}`;
+        }
+      }
+      const previousWorld = project.worlds[worldId] ?? null;
+      const previousScene = project.sceneStates?.[worldId] ?? null;
+      let shot = previousShot;
+      let world: WorldAsset | null = previousWorld;
+      let scene: SceneState | null = previousScene;
+      if (installing) {
+        if (previousShot) return { project, result: { ok: true, command, events: [] } };
+        shot = createPhase1DemoShot(timestamp);
+        world = registerShotWorld(worldId, PHASE1_CLASSROOM_WORLD, timestamp, previousWorld ?? undefined);
+      } else if (command.type === "RESTORE_SHOT_WORLD") {
+        shot = command.shot;
+        world = command.world;
+        scene = command.scene;
+      } else {
+        if (!shot) return fail("Shot not found.");
+        let revisionId: string;
+        if (command.type === "REGISTER_SHOT_WORLD") {
+          const imported = importedShotWorldSchema.safeParse(command.imported);
+          if (!imported.success) return fail("Invalid imported background.");
+          world = registerShotWorld(worldId, imported.data, timestamp, previousWorld ?? undefined);
+          revisionId = shotWorldRevisionId(imported.data);
+        } else {
+          if (!world || !resolveShotWorldRevision(world, command.revisionId)) return fail("Background revision not found.");
+          revisionId = command.revisionId;
+        }
+        if (world === previousWorld && shot.environment?.worldId === worldId && shot.environment.revisionId === revisionId) {
+          return { project, result: { ok: true, command, events: [] } };
+        }
+        shot = { ...shot, environment: { worldId, revisionId } };
+      }
+      const shots = { ...project.shots };
+      const worlds = { ...project.worlds };
+      const sceneStates = { ...project.sceneStates };
+      if (shot) shots[shotId] = shot;
+      else delete shots[shotId];
+      if (world) worlds[worldId] = world;
+      else delete worlds[worldId];
+      if (world && shot && command.type !== "RESTORE_SHOT_WORLD") {
+        scene = mergeShotSubjects(scene ?? migrateWorldToSceneState(world), [shot], timestamp);
+      }
+      if (scene) sceneStates[worldId] = scene;
+      else delete sceneStates[worldId];
+      return {
+        project: { ...project, shots, worlds, sceneStates },
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "RESTORE_SHOT_WORLD", shotId, worldId, shot: previousShot, world: previousWorld, scene: previousScene },
+          events: [event("SceneAuthoringChanged", { shotId, worldId }, timestamp)],
         },
       };
     }

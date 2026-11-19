@@ -7,6 +7,9 @@ import type { ShotCommand } from "../../domain/shot";
 import type { ActionGraph } from "../../domain/speech2motion/actionGraph";
 import type { RiggedActorImportSource } from "../../domain/worlds/riggedActorImport";
 import type { RigPart, SceneState } from "../../domain/worlds/sceneState";
+import type { ImportedShotWorld } from "../../domain/worlds/importedShotWorld";
+import type { WorldAsset } from "../../domain/worlds/types";
+import type { Shot } from "../../domain/shot/types";
 
 /** PRD §13.1 — domain commands. UI-only actions are not commands. */
 export type DomainCommand =
@@ -174,6 +177,10 @@ export type DomainCommand =
   | { type: "SET_DRAFT_IMAGE_MODE"; clipId: string; referenceId: string; mode: "reference" | "hard" }
   | { type: "SET_DRAFT_IMAGE_GUIDANCE"; clipId: string; referenceId: string; guidance: number }
   | { type: "SHOT"; command: ShotCommand }
+  | { type: "INSTALL_PHASE1_DEMO" }
+  | { type: "REGISTER_SHOT_WORLD"; shotId: string; worldId: string; imported: ImportedShotWorld }
+  | { type: "PIN_SHOT_WORLD"; shotId: string; worldId: string; revisionId: string }
+  | { type: "RESTORE_SHOT_WORLD"; shotId: string; worldId: string; shot: Shot | null; world: WorldAsset | null; scene: SceneState | null }
   | { type: "INSTALL_INTERACTION_SCENE" }
   | {
       type: "UNINSTALL_INTERACTION_SCENE";
