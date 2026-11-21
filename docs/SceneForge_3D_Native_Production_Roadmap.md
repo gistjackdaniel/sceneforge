@@ -312,13 +312,14 @@ flowchart TD
 
 ### Phase 1 — Editable 3D Core + Voice-directed Motion
 
-- 임포트한 Geometry Buffer를 가진 textured rigged actor mesh에 persistent ID 할당.
-- 음성 명령을 구조화된 action/event와 pose sequence로 변환. 이때 pose란 표정도 포함한다.
-- 웹캠의 표정을 리얼타임으로 지정한 rigged actor에 적용.
-- IK/contact graph를 통해 악수와 컵 내려놓기를 프리뷰에서 수행.
+- photo realistic 3d scene을 하나 import 해온다. 추후에 image to location 기능을 개발한다.
+- 임포트한 photo realistic 3d scene에 Geometry Buffer를 가진 textured rigged actor mesh에 persistent ID 할당.
+- Kimodo-SOMA-RP-ArdyRep-v1.2를 이용하여 임의의 행동에 대하여 생성한 SMPL-X 또는 SOMA 스켈레톤 애니메이션을 캐릭터 리깅에 적용.
+- 생성한 SMPL-X 또는 SOMA 스켈레톤 애니메이션은 Generative AI에 condition으로 들어갈 수 있도록 타임라인 프레임, persistent ID 등에 대응되는 graph로 저장된다.
+- Kimodo로 만든 전신 모션에 실시간으로 표정을 입힐건데 NVIDIA Audio2Face-3D를 이용하여 음성을 통해 표정을 또는 실시간 웹캠의 표정을 rigged actor에 적용.
 - shot/asset versioning + undo/revert + 타임라인 오버라이드 구현.
 
-**Exit criterion**: actor B의 접촉 손을 수정해도 지정된 카메라, 배경, A의 root motion 원본이 유지되는 것을 3D scene state에서 확인한다.
+**Exit criterion**: actor B의 행동을 수정해도 지정된 카메라, 배경, A의 root motion 원본이 유지되는 것을 3D scene state에서 확인한다.
 
 ### Phase 2 — Mobile Camera Integration + Deterministic Rendering
 
