@@ -16,6 +16,7 @@
     "@mediapipe/tasks-vision": "0.10.32",
     "@types/three": "^0.185.0",
     "electron": "latest",
+    "humanforge": "0.8.1",
     "react": "latest",
     "react-dom": "latest",
     "three": "^0.185.0",

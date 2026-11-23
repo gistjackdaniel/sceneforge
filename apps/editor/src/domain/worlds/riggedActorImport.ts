@@ -113,7 +113,8 @@ const SIDELESS: Record<string, readonly RigPart[]> = {
 const normalizeBoneName = (name: string): string => {
   const lowered = name.normalize("NFKC").trim().toLowerCase();
   const underscored = lowered.replace(/[:.\-\s]+/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "");
-  return underscored.replace(/^(mixamorig|bip001|bip01)_/, "");
+  // three.js drops ":" from node names, so "mixamorig:Hips" loads as "mixamorigHips".
+  return underscored.replace(/^(?:mixamorig\d*_?|(?:bip001|bip01)_)/, "");
 };
 
 const aliasToPart = (): Map<string, RigPart> => {

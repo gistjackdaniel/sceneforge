@@ -257,6 +257,7 @@ describe("rig part mapping", () => {
     expect(mapped.partMap.left_hand).toBe("mixamorig:LeftHand");
     expect(mapped.partMap.right_hand).toBe("mixamorig:RightHand");
     expect(mapped.partMap.left_foot).toBe("Bip001 L Foot");
+    expect(mapImportedRigParts([{ name: "mixamorigLeftHand" }]).partMap.left_hand).toBe("mixamorigLeftHand");
     expect(mapImportedRigParts([{ name: "오른손" }]).partMap.right_hand).toBe("오른손");
     expect(mapImportedRigParts([{ name: "왼손" }]).partMap.left_hand).toBe("왼손");
     expect(mapped.diagnostics).toEqual([

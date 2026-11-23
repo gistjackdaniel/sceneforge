@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { geometrySha256, readGeometry, writeGeometry } from "../../infrastructure/persistence/geometryStore";
 import {
   importedShotWorldSchema, importedWorldHash, importedWorldUri, SHOT_WORLD_MAX_BYTES,
   type ImportedShotWorld,
@@ -74,30 +75,6 @@ export const inspectShotWorldGlb = (bytes: ArrayBuffer): Pick<ImportedShotWorld,
   return { meshCount: gltf.meshes.length, texturedMaterialCount };
 };
 
-const databaseName = "sceneforge-shot-worlds";
-const storeName = "geometry";
-
-const openWorldDatabase = () => new Promise<IDBDatabase>((resolve, reject) => {
-  const request = indexedDB.open(databaseName, 1);
-  request.onupgradeneeded = () => request.result.createObjectStore(storeName);
-  request.onsuccess = () => resolve(request.result);
-  request.onerror = () => reject(new Error("로컬 씬 저장소를 열 수 없습니다."));
-});
-
-const withWorldStore = async <T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> => {
-  const database = await openWorldDatabase();
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      const transaction = database.transaction(storeName, mode);
-      const request = action(transaction.objectStore(storeName));
-      transaction.oncomplete = () => resolve(request.result);
-      transaction.onabort = () => reject(new Error("로컬 씬 저장소에서 메시를 읽거나 기록할 수 없습니다."));
-    });
-  } finally {
-    database.close();
-  }
-};
-
 const downloadGlb = async (source: string, signal?: AbortSignal): Promise<Blob> => {
   const url = new URL(source, document.baseURI);
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("HTTP 또는 HTTPS 씬 주소를 사용하세요.");
@@ -121,13 +98,12 @@ export const importShotWorld = async (
   const bytes = await blob.arrayBuffer();
   signal?.throwIfAborted();
   const geometry = inspectShotWorldGlb(bytes);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  const contentHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const contentHash = await geometrySha256(bytes);
   const imported = importedShotWorldSchema.parse({
     name, uri: importedWorldUri(contentHash), contentHash, byteLength: bytes.byteLength, ...geometry,
   });
   signal?.throwIfAborted();
-  await withWorldStore("readwrite", (store) => store.put(bytes, contentHash));
+  await writeGeometry(contentHash, bytes);
   signal?.throwIfAborted();
   return imported;
 };
@@ -136,7 +112,5 @@ export const importShotWorld = async (
 export const readImportedShotWorld = async (uri: string): Promise<ArrayBuffer | undefined> => {
   const hash = importedWorldHash(uri);
   if (!hash) return undefined;
-  const bytes: unknown = await withWorldStore("readonly", (store) => store.get(hash));
-  if (!(bytes instanceof ArrayBuffer)) throw new Error("이 브라우저에 해당 씬 GLB가 없습니다.");
-  return bytes;
+  return readGeometry(hash);
 };

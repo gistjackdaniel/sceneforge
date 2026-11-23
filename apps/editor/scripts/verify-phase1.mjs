@@ -26,12 +26,20 @@ try {
     await page.route("https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", (route) =>
       route.fulfill({ path: process.env.SCENEFORGE_FACE_MODEL, contentType: "application/octet-stream" }));
   }
-  const stage = page.getByRole("region", { name: "3D 모션 편집" });
+  const stage = page.getByRole("region", { name: "Scene workspace" });
+  const tools = stage.getByRole("group", { name: "Workspace mode" });
+  const picker = stage.getByRole("combobox", { name: "샷 선택" });
+  const controls = stage.getByRole("complementary", { name: "샷 편집" });
+  const canvas = stage.getByLabel("편집 가능한 3D 샷", { exact: true });
+  const ready = (timeout = 45_000) => stage.locator(".production-controls[data-ready='true']:visible").waitFor({ timeout });
+  const demoId = "shot-phase1-edit-review";
   const open = async () => {
     await page.goto(origin);
-    await page.getByRole("button", { name: "Phase 1 검증 샷" }).click();
-    await stage.locator(".production-viewport canvas").waitFor({ state: "visible" });
-    await page.locator(".production-preview[data-ready='true']").waitFor({ timeout: 45_000 });
+    assert.deepEqual(await tools.getByRole("button").allTextContents(), ["Scene", "Motion"]);
+    await tools.getByRole("button", { name: "Scene", exact: true }).click();
+    if (await picker.inputValue() !== demoId) await picker.selectOption(demoId);
+    await canvas.waitFor({ state: "visible" });
+    await ready();
   };
   const getJson = async (button, name) => {
     const downloaded = page.waitForEvent("download");
@@ -56,7 +64,6 @@ try {
     if (!capture) return;
     const directory = resolve(captureFolder, name);
     await mkdir(directory, { recursive: true });
-    const canvas = stage.locator(".production-viewport canvas");
     for (let index = 0; index < 32; index += 1) {
       await seek(Math.floor(index * 120 / 32));
       await canvas.screenshot({ type: "jpeg", quality: 89, path: resolve(directory, `${String(index).padStart(3, "0")}.jpg`) });
@@ -135,7 +142,7 @@ try {
     await stage.getByRole("button", { name: "모션 생성 및 적용" }).click();
     await stage.getByText("Kimodo 모션 생성 중").waitFor();
     await stage.getByText("Kimodo 모션 생성 중").waitFor({ state: "hidden", timeout: 180_000 });
-    await page.locator(".production-preview[data-ready='true']").waitFor({ timeout: 20_000 });
+    await ready(20_000);
     await stage.getByText("B 동작 변경", { exact: true }).waitFor();
     const generated = await state("new-motion");
     const span = generated.actorB.spans.find((item) => item.startFrame === 60 && item.endFrame === 105);
@@ -155,7 +162,7 @@ try {
     const worldPicker = stage.getByRole("combobox", { name: "배경 버전" });
     await worldPicker.locator("option").last().waitFor({ state: "attached" });
     await page.waitForFunction(() => document.querySelectorAll(".production-controls select")[2]?.options.length === 3);
-    await page.locator(".production-preview[data-ready='true']").waitFor({ timeout: 20_000 });
+    await ready(20_000);
     const replacement = await state("background-v2");
     const expectedHash = createHash("sha256").update(await readFile(fixture)).digest("hex");
     assert.equal(replacement.background.revision.contentHash, expectedHash);
@@ -163,10 +170,73 @@ try {
     await open();
     assert.equal(await worldPicker.inputValue(), replacement.background.environment.revisionId);
     await worldPicker.selectOption(after.background.environment.revisionId);
-    await page.locator(".production-preview[data-ready='true']").waitFor({ timeout: 20_000 });
+    await ready(20_000);
+    assert.equal(await worldPicker.locator("option:checked").textContent(), "Classroom v1");
     assert.deepEqual((await state("background-reverted")).background, after.background);
     backgroundVersions = [after.background.revision.contentHash, expectedHash];
   }
+  await seek(45);
+  const cameraBaseline = await state("scene-camera-before");
+  await screenshot("scene-workspace");
+  const canvasHandle = await canvas.elementHandle();
+  await tools.getByRole("button", { name: "Motion", exact: true }).click();
+  await controls.waitFor({ state: "hidden" });
+  assert.equal(await picker.inputValue(), demoId);
+  assert(await canvasHandle.evaluate((element) => element.isConnected));
+  await stage.getByRole("button", { name: "Camera view" }).waitFor();
+  await canvas.click({ position: { x: 35, y: 40 } });
+  await page.keyboard.down("w");
+  try {
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(done)))));
+  } finally {
+    await page.keyboard.up("w");
+  }
+  await page.keyboard.press("k");
+  await page.waitForFunction((shotId) => {
+    const saved = JSON.parse(localStorage.getItem("sceneforge-editor-state-v3"));
+    const shot = JSON.parse(saved.project).project.shots[shotId];
+    return shot.camera.takes.find((take) => take.id === shot.camera.selectedTakeId).keys.some((key) => key.frame === 45);
+  }, demoId);
+  await screenshot("motion-workspace");
+  await tools.getByRole("button", { name: "Scene", exact: true }).click();
+  await ready();
+  assert.equal(await picker.inputValue(), demoId);
+  assert.equal(await stage.getByRole("slider", { name: "샷 프레임" }).inputValue(), "45");
+  assert(await canvasHandle.evaluate((element) => element.isConnected));
+  const cameraEdited = await state("scene-camera-after");
+  const added = cameraEdited.camera.take.keys.find((key) => key.frame === 45);
+  assert(added);
+  assert.notDeepEqual(added.position, cameraBaseline.camera.take.keys[0].position);
+  assert.deepEqual(cameraEdited.actorB, cameraBaseline.actorB);
+  assert.deepEqual(cameraEdited.actorA, cameraBaseline.actorA);
+  assert.deepEqual(cameraEdited.background, cameraBaseline.background);
+  const originalId = await picker.locator("option").first().getAttribute("value");
+  assert(originalId && originalId !== demoId);
+  await picker.selectOption(originalId);
+  await controls.waitFor({ state: "hidden" });
+  await stage.getByRole("button", { name: "샷 편집", exact: true }).click();
+  await controls.getByText("3D 배경 가져오기").waitFor();
+  assert.equal(await controls.getByRole("button", { name: "B 인사하기" }).count(), 0);
+  await picker.selectOption(demoId);
+  await ready();
+  assert.deepEqual(await state("reopened"), cameraEdited);
+  await page.evaluate(({ shotId, previousId }) => {
+    const key = "sceneforge-editor-state-v3";
+    const saved = JSON.parse(localStorage.getItem(key));
+    const envelope = JSON.parse(saved.project);
+    const project = envelope.project;
+    const clip = project.clips[shotId];
+    for (const id of project.clipGraphs[clip.clipGraphId].nodeIds) delete project.nodes[id];
+    delete project.clipGraphs[clip.clipGraphId];
+    delete project.clips[shotId];
+    const sequence = project.sequences[project.activeSequenceId];
+    sequence.clipIds = sequence.clipIds.filter((id) => id !== shotId);
+    saved.ui.selectedClipId = previousId;
+    saved.project = JSON.stringify(envelope);
+    localStorage.setItem(key, JSON.stringify(saved));
+  }, { shotId: demoId, previousId: originalId });
+  await open();
+  assert.deepEqual(await state("restored-standalone-shot"), cameraEdited);
   assert.deepEqual(errors, []);
   const report = {
     beforeRevision: before.revisionId, afterRevision: after.revisionId,
@@ -174,6 +244,7 @@ try {
     actorARawRootFramesUnchanged: before.actorA.original[0].raw.length, actorAEvaluatedFramesUnchanged: before.time.durationFrames,
     actorBSkeletonChangedAtFrame: 45, conditionGraphExported: true, persistentRiggedActors: storedActors.map(({ id, assetRef }) => ({ id, assetRef })),
     undo: true, redo: true, revert: true, browserReload: true, webcamTracked, generatedPartialMotion, backgroundVersions,
+    workspaceTabs: ["Scene", "Motion"], sharedViewport: true, motionCameraKeyOnSameShot: added.frame, ordinarySceneControls: true, standaloneShotRestored: true,
   };
   await writeFile(resolve(output, "verification.json"), JSON.stringify(report, null, 2) + "\n");
   console.log(JSON.stringify(report, null, 2));

@@ -1,5 +1,6 @@
 import type { AssetRecord } from "../assets/types";
 import { createPersistentIdFactory, type PersistentIdFactory } from "../worlds/ids";
+import { importedActorHash } from "../worlds/photoActor";
 import { editShotEditorial } from "./editorial";
 import {
   identityCalibration,
@@ -61,7 +62,7 @@ const assetFor = (draft: SubjectDraft): { assetId: AssetId; uri: string; name: s
     const id = draft.primitive === "box" ? "primitive:box" : "primitive:sphere";
     return { assetId: brandId<AssetId>(id), uri: id, name: draft.primitive === "box" ? "Box" : "Sphere", type: "prop" };
   }
-  const assetId = brandId<AssetId>(`file:${hashText(draft.fileUri)}`);
+  const assetId = brandId<AssetId>(`file:${importedActorHash(draft.fileUri) ?? hashText(draft.fileUri)}`);
   return { assetId, uri: draft.fileUri, name: draft.name, type: draft.kind === "human" ? "actor" : "mesh" };
 };
 
@@ -72,7 +73,7 @@ const assetRecord = (draft: SubjectDraft, stamped: string): AssetRecord => {
     type: asset.type,
     name: asset.name,
     uri: asset.uri,
-    contentHash: asset.assetId,
+    contentHash: importedActorHash(asset.uri) ?? asset.assetId,
     metadata: {},
     semanticTags: ["shot"],
     version: 1,

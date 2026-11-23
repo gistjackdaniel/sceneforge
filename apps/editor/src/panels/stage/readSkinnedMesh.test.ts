@@ -31,6 +31,13 @@ describe("readGlbRig", () => {
     });
   });
 
+  it("reads joints once when glTF skins give each mesh its own Skeleton of the same bones", () => {
+    const joints = [bone("mixamorigHips"), bone("mixamorigHead")];
+    const root = new THREE.Group();
+    root.add(skinned(new THREE.Skeleton(joints), "body"), skinned(new THREE.Skeleton(joints), "hair"));
+    expect(readGlbRig(root).bones).toEqual([{ name: "mixamorigHips" }, { name: "mixamorigHead" }]);
+  });
+
   it("returns no bones for a model without SkinnedMesh", () => {
     const root = new THREE.Group();
     root.add(new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial()));

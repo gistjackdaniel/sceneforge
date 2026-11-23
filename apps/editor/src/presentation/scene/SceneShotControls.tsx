@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { importShotWorld } from "../../application/services/importShotWorld";
 import { generateKimodoMotion, loadKimodoMotion } from "../../application/services/kimodoMotion";
 import { environmentFromWorld } from "../../application/services/shotEnvironment";
@@ -8,21 +8,28 @@ import { PHASE1_ACTORS, PHASE1_MOTIONS, PHASE1_SHOT_ID } from "../../domain/scen
 import { compareMotionEdit, reviewMotionState, type MotionReviewState } from "../../domain/sceneAuthoring/reviewMotionEdit";
 import type { SomaMotion } from "../../domain/sceneAuthoring/somaMotion";
 import { motionConditionGraph, motionSpanAt, type MotionSource } from "../../domain/shot/motionConditions";
-import { environmentImportTransform, prepareModelInput } from "../../domain/shot";
+import { prepareModelInput } from "../../domain/shot";
 import type { Shot, ShotCommand } from "../../domain/shot/types";
 import { resolveShotWorldRevision } from "../../domain/worlds/importedShotWorld";
 import type { WorldAsset } from "../../domain/worlds/types";
-import type { GlbRigRead } from "../../panels/stage/readSkinnedMesh";
 import { WebcamFaceControl } from "./faceControl";
 import type { LiveFaceFrame } from "./faceRig";
-import { ProductionViewport, type ActorSupport } from "./productionViewport";
 
-interface ProductionPreviewProps {
+type ActorSupport = { body: boolean; face: boolean };
+
+interface SceneShotControlsProps {
   shot: Shot;
   world?: WorldAsset;
   aspect: OutputAspectPreset;
+  frame: number;
+  active: boolean;
+  ready: boolean;
+  motion: ReturnType<typeof useShotMotion>;
+  support: ReadonlyMap<string, ActorSupport>;
+  liveFace: RefObject<LiveFaceFrame | null>;
+  selectedId: string;
   onCommand: (command: DomainCommand) => void;
-  onRiggedActor: (id: string, rig: GlbRigRead) => void;
+  onPause: () => void;
   onClose: () => void;
 }
 
@@ -35,36 +42,11 @@ const downloadJson = (name: string, data: unknown) => {
   window.setTimeout(() => URL.revokeObjectURL(uri), 1000);
 };
 
-export const ProductionPreview = ({ shot, world, aspect, onCommand, onRiggedActor, onClose }: ProductionPreviewProps) => {
-  const demo = shot.id === PHASE1_SHOT_ID;
-  const actors = shot.subjects.filter((item) => item.kind === "human" && item.representation === "mesh");
-  const [selected, setSelected] = useState(demo ? PHASE1_ACTORS.b : "");
-  const actor = actors.find((item) => item.id === selected) ?? actors[0];
-  const [frame, setFrame] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const [start, setStart] = useState(0);
-  const [end, setEnd] = useState(shot.time.durationFrames);
-  const [prompt, setPrompt] = useState("");
-  const [worldUrl, setWorldUrl] = useState("");
-  const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
+export const useShotMotion = (shot: Shot | undefined) => {
+  const [clips, setClips] = useState<ReadonlyMap<string, SomaMotion>>(() => new Map());
   const [clipError, setClipError] = useState("");
-  const [ready, setReady] = useState(false);
-  const [support, setSupport] = useState<ActorSupport>({ body: [], face: [] });
-  const [clips, setClips] = useState<ReadonlyMap<string, SomaMotion>>(new Map());
-  const [baseline, setBaseline] = useState<MotionReviewState>();
-  const liveFace = useRef<LiveFaceFrame | null>(null);
-  const request = useRef<AbortController | null>(null);
-  const graph = useMemo(() => motionConditionGraph(shot), [shot]);
-  const pinned = shot.environment?.revisionId;
-  const environment = environmentFromWorld(world, pinned);
+  const graph = useMemo(() => shot && motionConditionGraph(shot), [shot]);
   const allClips = Object.keys(graph?.sources ?? {}).every((id) => clips.has(id));
-  const review = useMemo(() => demo && allClips && ready ? reviewMotionState(shot, world, clips) : undefined, [demo, allClips, ready, shot, world, clips]);
-  const checks = baseline && review ? compareMotionEdit(baseline, review) : undefined;
-  const active = actor && motionSpanAt(graph, actor.id, frame);
-  const shotCommand = (command: ShotCommand) => onCommand({ type: "SHOT", command });
-
-  useEffect(() => () => request.current?.abort(), []);
   useEffect(() => {
     const controller = new AbortController();
     const sources = Object.entries(graph?.sources ?? {}).filter(([id]) => !clips.has(id));
@@ -78,18 +60,33 @@ export const ProductionPreview = ({ shot, world, aspect, onCommand, onRiggedActo
     });
     return () => controller.abort();
   }, [graph, clips]);
+  return { graph, clips, clipError, allClips };
+};
 
-  useEffect(() => {
-    if (!playing) return;
-    const started = performance.now() - frame * 1000 / shot.time.fps;
-    let handle = 0;
-    const tick = (now: number) => {
-      setFrame(Math.floor((now - started) * shot.time.fps / 1000) % shot.time.durationFrames);
-      handle = requestAnimationFrame(tick);
-    };
-    handle = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(handle);
-  }, [playing, shot.time]);
+export const SceneShotControls = ({ shot, world, aspect, frame, active, ready, motion, support, liveFace, selectedId, onCommand, onPause, onClose }: SceneShotControlsProps) => {
+  const demo = shot.id === PHASE1_SHOT_ID;
+  const actors = shot.subjects.filter((item) => item.kind === "human" && item.representation === "mesh");
+  const [selected, setSelected] = useState(demo ? PHASE1_ACTORS.b : "");
+  const actor = actors.find((item) => item.id === selected) ?? actors[0];
+  const [start, setStart] = useState(0);
+  const [end, setEnd] = useState(shot.time.durationFrames);
+  const [prompt, setPrompt] = useState("");
+  const [worldUrl, setWorldUrl] = useState("");
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [baseline, setBaseline] = useState<MotionReviewState>();
+  const request = useRef<AbortController | null>(null);
+  const { graph, clips, clipError, allClips } = motion;
+  const pinned = shot.environment?.revisionId;
+  const environment = environmentFromWorld(world, pinned);
+  const review = useMemo(() => demo && allClips && ready ? reviewMotionState(shot, world, clips) : undefined, [demo, allClips, ready, shot, world, clips]);
+  const checks = baseline && review ? compareMotionEdit(baseline, review) : undefined;
+  const activeSpan = actor && motionSpanAt(graph, actor.id, frame);
+  const actorSupport = actor && support.get(actor.id);
+  const shotCommand = (command: ShotCommand) => onCommand({ type: "SHOT", command });
+
+  useEffect(() => () => request.current?.abort(), []);
+  useEffect(() => { if (support.has(selectedId)) setSelected(selectedId); }, [selectedId, support.has(selectedId)]);
 
   const run = async (message: string, work: (signal: AbortSignal) => Promise<void>) => {
     const controller = new AbortController();
@@ -110,7 +107,7 @@ export const ProductionPreview = ({ shot, world, aspect, onCommand, onRiggedActo
   };
 
   const changeMotion = (subjectId: string, source: MotionSource, startFrame: number, endFrame: number) => {
-    setPlaying(false);
+    onPause();
     if (!baseline && review) setBaseline(review);
     shotCommand({ type: "SET_TIMELINE_MOTION", shotId: shot.id, edits: [{ subjectId, source, startFrame, endFrame }] });
   };
@@ -119,34 +116,26 @@ export const ProductionPreview = ({ shot, world, aspect, onCommand, onRiggedActo
     const imported = await importShotWorld(source, { name, signal });
     onCommand({ type: "REGISTER_SHOT_WORLD", shotId: shot.id, worldId: world?.id ?? `world-${crypto.randomUUID()}`, imported });
   });
-  const versions = world?.versions?.filter((item) => resolveShotWorldRevision(world, item.jobId)) ?? [];
-  return <section className="production-preview" aria-label="3D 모션 편집" data-ready={ready && allClips}>
-    <div className="production-shot">
-      <div className="production-title"><strong>{shot.name}</strong><span>{demo ? "Phase 1 검증 샷" : "3D 모션"}</span><button onClick={onClose}>닫기</button></div>
-      <ProductionViewport shot={shot} frame={frame} graph={graph} clips={clips} geometryUri={environment?.geometryUri}
-        importTransform={environment && environmentImportTransform(environment)} aspect={aspect} liveFace={liveFace} onReady={setReady}
-        onActorSupport={setSupport} onRiggedActor={onRiggedActor} />
-      <div className="production-timeline">
-        <button onClick={() => setPlaying(!playing)}>{playing ? "일시정지" : "재생"}</button>
-        <input type="range" min={0} max={shot.time.durationFrames - 1} value={frame} aria-label="샷 프레임" onChange={(event) => { setPlaying(false); setFrame(Number(event.target.value)); }} />
-        <output>{frame} / {shot.time.durationFrames - 1}f</output>
-      </div>
-    </div>
-    <aside className="production-controls">
+  const versions = world?.versions?.flatMap(({ jobId, version }) => {
+    const revision = resolveShotWorldRevision(world, jobId);
+    return revision ? [{ jobId, version, name: revision.name }] : [];
+  }) ?? [];
+  return <aside className="production-controls" aria-label="샷 편집" data-ready={ready && allClips} hidden={!active}>
+      <div className="scene-drawer-heading"><strong>샷 편집</strong><button onClick={onClose}>닫기</button></div>
       <div className="production-section">
         <label>액터<select aria-label="모션 액터" value={actor?.id ?? ""} onChange={(event) => setSelected(event.target.value)}>
           {actors.length === 0 && <option value="">리깅된 액터를 추가하세요</option>}
           {actors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
         </select></label>
         {actor?.kind === "human" && <small>{actor.instanceId ?? actor.id}</small>}
-        <p>{active && graph ? graph.sources[active.sourceId].prompt : "이 프레임에 연결된 Kimodo 모션이 없습니다."}</p>
+        <p>{activeSpan && graph ? graph.sources[activeSpan.sourceId].prompt : "이 프레임에 연결된 Kimodo 모션이 없습니다."}</p>
         {demo && <div className="production-row">
           <button disabled={!ready || !allClips || Boolean(busy)} onClick={() => changeMotion(PHASE1_ACTORS.b, PHASE1_MOTIONS.wave, 0, 120)}>B 손 흔들기</button>
           <button disabled={!ready || !allClips || Boolean(busy)} onClick={() => changeMotion(PHASE1_ACTORS.b, PHASE1_MOTIONS.bow, 0, 120)}>B 인사하기</button>
         </div>}
         <form className="production-generation" onSubmit={(event) => {
           event.preventDefault();
-          if (!actor || !support.body.includes(actor.id)) return;
+          if (!actor || !actorSupport?.body) return;
           const duration = (end - start) / shot.time.fps;
           void run("Kimodo 모션 생성 중", async (signal) => {
             const source = await generateKimodoMotion(prompt, Math.max(0.5, duration), signal);
@@ -158,10 +147,10 @@ export const ProductionPreview = ({ shot, world, aspect, onCommand, onRiggedActo
             <label>시작 프레임<input type="number" min={0} max={shot.time.durationFrames - 1} value={start} onChange={(event) => setStart(Number(event.target.value))} /></label>
             <label>끝 프레임 미포함<input type="number" min={start + 1} max={shot.time.durationFrames} value={end} onChange={(event) => setEnd(Number(event.target.value))} /></label>
           </div>
-          <button type="submit" disabled={!actor || actor.locked || !support.body.includes(actor.id) || !prompt.trim() || end <= start || (end - start) / shot.time.fps > 10 || Boolean(busy)}>모션 생성 및 적용</button>
-          {actor && ready && !support.body.includes(actor.id) && <small>이 액터에서 SOMA에 대응되는 몸통 본을 찾지 못했습니다.</small>}
+          <button type="submit" disabled={!actor || actor.locked || !actorSupport?.body || !prompt.trim() || end <= start || (end - start) / shot.time.fps > 10 || Boolean(busy)}>모션 생성 및 적용</button>
+          {actor && ready && actorSupport && !actorSupport.body && <small>이 액터에서 SOMA에 대응되는 몸통 본을 찾지 못했습니다.</small>}
         </form>
-        {actor && <WebcamFaceControl subjectId={actor.id} available={support.face.includes(actor.id)} liveFace={liveFace} />}
+        {active && actor && <WebcamFaceControl subjectId={actor.id} available={Boolean(actorSupport?.face)} liveFace={liveFace} />}
       </div>
       <div className="production-section">
         <label>샷 모션 버전<select aria-label="샷 모션 버전" value={shot.headRevisionId ?? ""} onChange={(event) => shotCommand({ type: "REVERT_SHOT_REVISION", shotId: shot.id, revisionId: event.target.value })}>
@@ -175,7 +164,7 @@ export const ProductionPreview = ({ shot, world, aspect, onCommand, onRiggedActo
           </form>
         </details>
         {world && versions.length > 0 && <label>배경 버전<select value={pinned ?? ""} onChange={(event) => onCommand({ type: "PIN_SHOT_WORLD", shotId: shot.id, worldId: world.id, revisionId: event.target.value })}>
-          <option value="" disabled>버전 없음</option>{versions.map((item) => <option key={item.jobId} value={item.jobId}>{world.name} v{item.version}</option>)}
+          <option value="" disabled>버전 없음</option>{versions.map((item) => <option key={item.jobId} value={item.jobId}>{item.name} v{item.version}</option>)}
         </select></label>}
         <button onClick={() => {
           const prepared = prepareModelInput(shot, environment, aspect);
@@ -192,6 +181,5 @@ export const ProductionPreview = ({ shot, world, aspect, onCommand, onRiggedActo
       </ul>}
       {busy && <div className="production-row" role="status">{busy}<button onClick={() => { request.current?.abort(); setBusy(""); }}>취소</button></div>}
       {(clipError || error) && <p role="alert">{clipError || error}</p>}
-    </aside>
-  </section>;
+  </aside>;
 };

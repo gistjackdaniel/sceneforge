@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { readImportedShotWorld } from "../../application/services/importShotWorld";
+import { importedActorHash } from "../../domain/worlds/photoActor";
+import { readGeometry } from "../../infrastructure/persistence/geometryStore";
+import { disposeMeshResources } from "../../infrastructure/renderers/disposeMeshResources";
 import {
   overlayKindForElement,
   viewportPreviewBadge,
@@ -25,6 +28,8 @@ import { quaternionToAxisAngle } from "../../domain/utils/quaternion";
 import type { JointTarget } from "../../domain/performance/poseTrack";
 import { smplxJointForRigPart } from "../../domain/performance/rigJoints";
 import { JointPickPriority } from "../../presentation/pose/pickPriority";
+import type { LiveFaceFrame } from "../../presentation/scene/faceRig";
+import { bindViewportActorMotion, type ViewportActorMotion } from "../../presentation/viewport/actorMotionBinding";
 import { readGlbRig, type GlbRigRead } from "./readSkinnedMesh";
 
 export interface StageObjectTransform {
@@ -68,6 +73,7 @@ interface StageSceneApi {
   renderer: THREE.WebGLRenderer;
   objects: Map<string, THREE.Object3D>;
   objectKinds: Map<string, "actor" | "prop" | "light" | "camera">;
+  actorBindings: Map<string, ReturnType<typeof bindViewportActorMotion>>;
   worldRoot: THREE.Object3D | null;
   shotCamera: THREE.Object3D;
   shotBody: THREE.Object3D;
@@ -88,6 +94,9 @@ interface StageSceneApi {
 
 interface StageViewportProps {
   sceneObjects?: SceneObject[];
+  actorMotion?: ReadonlyMap<string, ViewportActorMotion>;
+  liveFace?: RefObject<LiveFaceFrame | null>;
+  onActorSupport?: (id: string, support: { body: boolean; face: boolean } | null) => void;
   selectedId?: string;
   showCameraPreview?: boolean;
   readOnly?: boolean;
@@ -103,6 +112,7 @@ interface StageViewportProps {
   outputAspectLabel?: string;
   cameraViz: CameraVizState;
   cameraPose?: StageCameraPose;
+  cameraLocked?: boolean;
   objectTransforms?: StageObjectTransform[];
   keyframes?: CameraKeyframe[];
   pathSamples?: Array<[number, number, number]>;
@@ -267,6 +277,9 @@ const applyRecordLook = (camera: THREE.PerspectiveCamera, dx: number, dy: number
 
 export const StageViewport = ({
   sceneObjects = [], selectedId, showCameraPreview = false, readOnly = false,
+  actorMotion,
+  liveFace,
+  onActorSupport,
   lighting = { intensity: 1.2, color: "#ffffff" },
   world,
   worldName,
@@ -284,6 +297,7 @@ export const StageViewport = ({
     keyframeMarkers: true,
   },
   cameraPose,
+  cameraLocked = false,
   objectTransforms = [],
   keyframes = [],
   pathSamples = [],
@@ -316,6 +330,10 @@ export const StageViewport = ({
   const onCapturePoseRef = useRef(onCapturePose);
   const onJointRotateCommitRef = useRef(onJointRotateCommit);
   const onLiveCameraPoseRef = useRef(onLiveCameraPose);
+  const actorMotionRef = useRef(actorMotion);
+  const liveFaceRef = useRef(liveFace);
+  const onActorSupportRef = useRef(onActorSupport);
+  const cameraLockedRef = useRef(cameraLocked);
   onTransformCommitRef.current = onTransformCommit;
   onSelectionChangeRef.current = onSelectionChange;
   onLoadStateChangeRef.current = onLoadStateChange;
@@ -323,6 +341,10 @@ export const StageViewport = ({
   onCapturePoseRef.current = onCapturePose;
   onJointRotateCommitRef.current = onJointRotateCommit;
   onLiveCameraPoseRef.current = onLiveCameraPose;
+  actorMotionRef.current = actorMotion;
+  liveFaceRef.current = liveFace;
+  onActorSupportRef.current = onActorSupport;
+  cameraLockedRef.current = cameraLocked;
   const workspaceRef = useRef(workspace);
   const toolRef = useRef(tool);
   const outputAspectRef = useRef(outputAspect);
@@ -359,6 +381,7 @@ export const StageViewport = ({
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.domElement.setAttribute("aria-label", "편집 가능한 3D 샷");
     container.appendChild(renderer.domElement);
 
     const orbit = new OrbitControls(camera, renderer.domElement);
@@ -473,6 +496,7 @@ export const StageViewport = ({
       renderer,
       objects,
       objectKinds,
+      actorBindings: new Map(),
       worldRoot: null,
       shotCamera,
       shotBody,
@@ -668,7 +692,7 @@ export const StageViewport = ({
 
     const setFlyKey = (event: KeyboardEvent, pressed: boolean) => {
       // Keyup always clears so stuck look/move cannot happen after focus changes.
-      if (pressed && (isTypingTarget(event.target) || workspaceRef.current !== "record")) {
+      if (pressed && (isTypingTarget(event.target) || workspaceRef.current !== "record" || cameraLockedRef.current)) {
         return;
       }
       const key = event.key.toLowerCase();
@@ -696,12 +720,12 @@ export const StageViewport = ({
       lookingRef.current = false;
     };
     const onContextMenu = (event: Event) => {
-      if (workspaceRef.current === "record") {
+      if (workspaceRef.current === "record" && !cameraLockedRef.current) {
         event.preventDefault();
       }
     };
     const onPointerDownLook = (event: PointerEvent) => {
-      if (workspaceRef.current !== "record" || event.button !== 2) {
+      if (workspaceRef.current !== "record" || cameraLockedRef.current || event.button !== 2) {
         return;
       }
       lookingRef.current = true;
@@ -713,7 +737,7 @@ export const StageViewport = ({
       }
     };
     const onPointerMoveLook = (event: PointerEvent) => {
-      if (!lookingRef.current || workspaceRef.current !== "record") {
+      if (!lookingRef.current || workspaceRef.current !== "record" || cameraLockedRef.current) {
         return;
       }
       applyRecordLook(camera, event.movementX, event.movementY);
@@ -735,7 +759,7 @@ export const StageViewport = ({
       const now = performance.now();
       const delta = Math.min(0.05, (now - lastFrame) / 1000);
       lastFrame = now;
-      if (workspaceRef.current === "record") {
+      if (workspaceRef.current === "record" && !cameraLockedRef.current) {
         const moved = applyRecordFly(camera, flyKeysRef.current, delta);
         if (moved) {
           liveOverrideRef.current = true;
@@ -753,8 +777,14 @@ export const StageViewport = ({
             focalLength: 35,
           });
         }
-      } else {
+      } else if (workspaceRef.current === "build") {
         orbit.update();
+      }
+      if (!api.dragging) {
+        const expression = liveFaceRef.current?.current ?? null;
+        for (const [id, binding] of api.actorBindings) {
+          binding.update(id, actorMotionRef.current?.get(id), expression);
+        }
       }
       const size = renderer.getSize(new THREE.Vector2());
       renderer.setViewport(0, 0, size.x, size.y);
@@ -822,6 +852,7 @@ export const StageViewport = ({
     }
     const recording = workspace === "record";
     flyKeysRef.current = emptyFlyKeys();
+    lookingRef.current = false;
     if (recording) {
       if (!buildViewRef.current) {
         buildViewRef.current = {
@@ -858,7 +889,7 @@ export const StageViewport = ({
       api.transform.detach();
       api.transform.enabled = false;
     }
-  }, [tool, workspace, readOnly]);
+  }, [tool, workspace, readOnly, cameraLocked]);
 
   useEffect(() => {
     const api = sceneApiRef.current;
@@ -960,7 +991,7 @@ export const StageViewport = ({
     if (!api || !cameraPose || api.dragging) {
       return;
     }
-    if (workspace === "record" && playheadFrame !== lastPlayheadRef.current) {
+    if (workspace === "record" && (cameraLocked || playheadFrame !== lastPlayheadRef.current)) {
       liveOverrideRef.current = false;
     }
     lastPlayheadRef.current = playheadFrame;
@@ -999,7 +1030,7 @@ export const StageViewport = ({
       api.camera.fov = 55;
       api.camera.updateProjectionMatrix();
     }
-  }, [cameraPose, workspace, fovDegrees, lookAtTargetId, playheadFrame, outputAspect]);
+  }, [cameraPose, workspace, fovDegrees, lookAtTargetId, playheadFrame, outputAspect, cameraLocked]);
 
   useEffect(() => {
     const api = sceneApiRef.current;
@@ -1082,6 +1113,7 @@ export const StageViewport = ({
     }
     let disposed = false;
     const loaded: THREE.Object3D[] = [];
+    const actorIds: string[] = [];
     sceneObjects.forEach((item) => {
       const group = new THREE.Group();
       group.name = item.id;
@@ -1094,20 +1126,31 @@ export const StageViewport = ({
       group.add(mesh);
       if (item.kind === "light") group.add(new THREE.PointLight(item.color, item.intensity, 20));
       if (item.representation === "mesh" && item.uri) {
-        new GLTFLoader().load(resolveMediaUri(item.uri), (gltf) => {
-          if (disposed) { disposeObject(gltf.scene); return; }
+        const hash = importedActorHash(item.uri);
+        const loader = new GLTFLoader();
+        const glb = hash ? readGeometry(hash).then((bytes) => loader.parseAsync(bytes, "")) : loader.loadAsync(resolveMediaUri(item.uri));
+        void glb.then((gltf) => {
+          if (disposed) { disposeMeshResources(gltf.scene); return; }
           group.remove(mesh);
           mesh.geometry.dispose();
           (mesh.material as THREE.Material).dispose();
-          group.add(gltf.scene);
-          if (item.kind !== "actor") return;
+          if (item.kind !== "actor") { group.add(gltf.scene); return; }
+          const binding = bindViewportActorMotion(group, gltf.scene);
+          api.actorBindings.set(item.id, binding);
+          onActorSupportRef.current?.(item.id, binding.support);
           const rig = readGlbRig(gltf.scene);
           if (rig.bones.length === 0) return;
           onRiggedModelLoadedRef.current?.({ objectId: item.id, ...rig });
-        }, undefined, () => {
-          if (!disposed) onLoadStateChangeRef.current?.("missing_artifact", `${item.name}: 3D 에셋을 불러올 수 없습니다.`);
+        }).catch(() => {
+          if (!disposed) {
+            if (item.kind === "actor") onActorSupportRef.current?.(item.id, { body: false, face: false });
+            onLoadStateChangeRef.current?.("missing_artifact", `${item.name}: 3D 에셋을 불러올 수 없습니다.`);
+          }
         });
+      } else if (item.kind === "actor") {
+        onActorSupportRef.current?.(item.id, { body: false, face: false });
       }
+      if (item.kind === "actor") actorIds.push(item.id);
       group.position.set(...item.position);
       group.rotation.order = EULER_ORDER;
       group.rotation.set(...item.rotation);
@@ -1122,7 +1165,11 @@ export const StageViewport = ({
     return () => {
       disposed = true;
       api.transform.detach();
-      loaded.forEach((object) => { api.scene.remove(object); disposeObject(object); });
+      for (const id of actorIds) {
+        api.actorBindings.delete(id);
+        onActorSupportRef.current?.(id, null);
+      }
+      loaded.forEach((object) => { api.scene.remove(object); disposeMeshResources(object); });
     };
   }, [sceneObjects.map((item) => `${item.id}:${item.representation}:${item.uri}:${item.kind}`).join("|"), world?.id]);
 
@@ -1378,7 +1425,7 @@ export const StageViewport = ({
     <div className="stage-viewport" ref={containerRef}>
       <div className="viewport-overlay">
         <span className={workspace === "record" ? "rec-badge mode-record" : "mode-build"}>
-          {workspace === "record" ? "RECORD" : "BUILD"}
+          {cameraLocked ? "CAMERA" : recording ? "RECORD" : "BUILD"}
         </span>
         {workspace === "record" && <span className="record-aspect-hud">{outputAspectLabel}</span>}
         <span>{hud}</span>
