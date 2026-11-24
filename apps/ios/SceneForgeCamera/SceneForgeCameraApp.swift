@@ -6,7 +6,7 @@ import SwiftUI
 struct SceneForgeCameraApp: App {
     @StateObject private var recorder = CameraRecorder()
 
-    var body: some Scene {
+    var body: some SwiftUI.Scene {
         WindowGroup {
             ZStack(alignment: .bottom) {
                 Color(red: 0.06, green: 0.09, blue: 0.07).ignoresSafeArea()
