@@ -1,0 +1,41 @@
+{
+  "beforeRevision": "shr_shot-phase1-edit-review_1",
+  "afterRevision": "shr_shot-phase1-edit-review_2",
+  "cameraTakeUnchanged": true,
+  "backgroundSha256Unchanged": "3732f28bbc05f47512648abc5f5877bb4af004394676a90f301139e3ddb80e6c",
+  "actorARawRootFramesUnchanged": 60,
+  "actorAEvaluatedFramesUnchanged": 120,
+  "actorBSkeletonChangedAtFrame": 45,
+  "conditionGraphExported": true,
+  "persistentRiggedActors": [
+    {
+      "id": "act_legacy_shot_phase1_edit_review__inst_fixture_actor_a",
+      "assetRef": {
+        "assetId": "ast_demo_a",
+        "revisionId": "rev_demo_a_v2"
+      }
+    },
+    {
+      "id": "act_legacy_shot_phase1_edit_review__inst_fixture_actor_b",
+      "assetRef": {
+        "assetId": "ast_demo_b",
+        "revisionId": "rev_demo_b_v2"
+      }
+    }
+  ],
+  "undo": true,
+  "redo": true,
+  "revert": true,
+  "browserReload": true,
+  "webcamTracked": true,
+  "generatedPartialMotion": {
+    "sha256": "bdcb9167ced02d3e8218191a30ee6561d0d9878d07b9eaeb457f2712004f8b02",
+    "uri": "/api/kimodo/clips/bdcb9167ced02d3e8218191a30ee6561d0d9878d07b9eaeb457f2712004f8b02.json",
+    "startFrame": 60,
+    "endFrameExclusive": 105
+  },
+  "backgroundVersions": [
+    "3732f28bbc05f47512648abc5f5877bb4af004394676a90f301139e3ddb80e6c",
+    "975bede59bbaa17f2b9311ceec0173aafe1753d23bd2f1d20bbe9722b27d7c0d"
+  ]
+}

@@ -1,0 +1,16 @@
+actor-a.glb
+Quaternius Ultimate Animated Characters, Casual Female.
+CC0 1.0. No attribution required.
+SHA-256 A0B909564AC37E27BDBF8589E44FA40CCA2D890F6F1EA4BABCE6FA6EA8FDDF72
+Copied from https://github.com/Yametech12/ghostname-3d-assets models/Casual_Female.glb
+Original pack: https://quaternius.com
+
+actor-b.glb
+Quaternius Ultimate Animated Characters, Casual Male.
+CC0 1.0. No attribution required.
+SHA-256 C23137C46A8734A8DCD2058ACF9ACD9796EAB0F025C719AAEB82C5E26F0DF18C
+Copied from https://github.com/Yametech12/ghostname-3d-assets models/Casual_Male.glb
+Original pack: https://quaternius.com
+
+Both files are skinned meshes with surface materials (skin, shirt, pants, belt, face, hair) and no image textures.
+Hand joints are Fist.L and Fist.R. Pelvis is Hips. Head is Head. Feet are Foot.L and Foot.R.

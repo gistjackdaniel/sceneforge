@@ -1,0 +1,43 @@
+name: iPhone camera build
+
+on:
+  push:
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios-camera.yml'
+  pull_request:
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios-camera.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build SceneForge Camera for the iOS simulator
+        run: >-
+          xcodebuild
+          -project apps/ios/SceneForgeCamera.xcodeproj
+          -scheme SceneForgeCamera
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/sceneforge-ios"
+          CODE_SIGNING_ALLOWED=NO
+          build
+      - name: Launch the camera app in the simulator
+        run: |
+          device=$(xcrun simctl list devices available --json | jq -er '[.devices[][] | select(.name | startswith("iPhone")) | .udid][0]')
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" "$RUNNER_TEMP/sceneforge-ios/Build/Products/Debug-iphonesimulator/SceneForgeCamera.app"
+          xcrun simctl launch "$device" io.github.gistjackdaniel.sceneforge.camera
+          sleep 3
+          xcrun simctl io "$device" screenshot "$RUNNER_TEMP/sceneforge-ios.png"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-camera-simulator
+          path: ${{ runner.temp }}/sceneforge-ios.png

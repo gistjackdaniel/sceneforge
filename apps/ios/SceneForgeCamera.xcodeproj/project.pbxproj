@@ -1,0 +1,130 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		9A4600000000000000000001 /* SceneForgeCameraApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A4600000000000000000011; };
+		9A4600000000000000000002 /* CameraRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A4600000000000000000012; };
+		9A4600000000000000000003 /* PhoneTake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A4600000000000000000013; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		9A4600000000000000000011 /* SceneForgeCameraApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneForgeCameraApp.swift; sourceTree = "<group>"; };
+		9A4600000000000000000012 /* CameraRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraRecorder.swift; sourceTree = "<group>"; };
+		9A4600000000000000000013 /* PhoneTake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneTake.swift; sourceTree = "<group>"; };
+		9A4600000000000000000014 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		9A4600000000000000000015 /* SceneForgeCamera.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SceneForgeCamera.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		9A4600000000000000000020 = {
+			isa = PBXGroup;
+			children = (9A4600000000000000000021, 9A4600000000000000000022);
+			sourceTree = "<group>";
+		};
+		9A4600000000000000000021 /* SceneForgeCamera */ = {
+			isa = PBXGroup;
+			children = (9A4600000000000000000011, 9A4600000000000000000012, 9A4600000000000000000013, 9A4600000000000000000014);
+			path = SceneForgeCamera;
+			sourceTree = "<group>";
+		};
+		9A4600000000000000000022 /* Products */ = {
+			isa = PBXGroup;
+			children = (9A4600000000000000000015);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		9A4600000000000000000030 /* SceneForgeCamera */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9A4600000000000000000061;
+			buildPhases = (9A4600000000000000000041, 9A4600000000000000000042, 9A4600000000000000000043);
+			buildRules = ();
+			dependencies = ();
+			name = SceneForgeCamera;
+			productName = SceneForgeCamera;
+			productReference = 9A4600000000000000000015;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9A4600000000000000000040 /* Project object */ = {
+			isa = PBXProject;
+			attributes = { LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; };
+			buildConfigurationList = 9A4600000000000000000060;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base);
+			mainGroup = 9A4600000000000000000020;
+			productRefGroup = 9A4600000000000000000022;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (9A4600000000000000000030);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		9A4600000000000000000041 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (9A4600000000000000000001, 9A4600000000000000000002, 9A4600000000000000000003); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		9A4600000000000000000042 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXResourcesBuildPhase section */
+		9A4600000000000000000043 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		9A4600000000000000000051 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = { ALWAYS_SEARCH_USER_PATHS = NO; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 16.0; SWIFT_VERSION = 5.0; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; };
+			name = Debug;
+		};
+		9A4600000000000000000052 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = { ALWAYS_SEARCH_USER_PATHS = NO; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 16.0; SWIFT_VERSION = 5.0; SWIFT_COMPILATION_MODE = wholemodule; };
+			name = Release;
+		};
+		9A4600000000000000000053 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = SceneForgeCamera/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.gistjackdaniel.sceneforge.camera;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		9A4600000000000000000054 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = SceneForgeCamera/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.gistjackdaniel.sceneforge.camera;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		9A4600000000000000000060 = {isa = XCConfigurationList; buildConfigurations = (9A4600000000000000000051, 9A4600000000000000000052); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		9A4600000000000000000061 = {isa = XCConfigurationList; buildConfigurations = (9A4600000000000000000053, 9A4600000000000000000054); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = 9A4600000000000000000040;
+}

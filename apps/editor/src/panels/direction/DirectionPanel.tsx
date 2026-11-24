@@ -45,6 +45,7 @@ const SOURCE_LABELS: Record<PerformanceSourceType, string> = {
   live_action: "Live-action performance",
   motion_capture: "Motion capture",
   key_animation_2d: "Hand-drawn 2D keys",
+  generated: "Generated motion",
 };
 
 const CUE_LABELS: Record<PerformanceCueKind, string> = {

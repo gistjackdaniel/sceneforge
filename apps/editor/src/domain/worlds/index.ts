@@ -38,6 +38,10 @@ export {
   type TargetKind,
   type TargetMatch,
   type ResolveContext,
+  type MentionCandidate,
+  type MentionContext,
+  type MentionEntityKind,
+  type MentionResolution,
 } from "./query";
 export { WorldDomainError } from "./errors";
 export {
@@ -68,6 +72,7 @@ export {
   quatSchema,
   sceneCoordinateContractSchema,
   sourceAxesFromWorldAsset,
+  shotFps,
   sourceAxesSchema,
   transformSchema,
   vec3Schema,
@@ -75,6 +80,7 @@ export {
   type SceneCoordinateContract,
   type ShotFpsRef,
   type ShotLocalFrame,
+  type ShotTimeSource,
   type SourceAxes,
   type Transform,
 } from "./coordinates";
@@ -93,9 +99,11 @@ export {
   jointForRigPart,
   objectInstanceSchema,
   pinInstanceRevision,
+  matchRigParts,
   renameInstance,
   resolveRigPart,
   restoreInstance,
+  stripRigPartWords,
   retargetInstanceAsset,
   rigPartSchema,
   scenePersistentIds,
@@ -118,6 +126,20 @@ export {
   instanceIdsForLegacyProp,
   migrateWorldToSceneState,
 } from "./migrateInstances";
+export {
+  collectImportedBones,
+  convertSourceRotation,
+  importRiggedActor,
+  invertImportTransform,
+  mapImportedRigParts,
+  riggedActorImportTransform,
+  riggedActorSourceKey,
+  type ImportedSkeletonNode,
+  type RiggedActorImportResult,
+  type RiggedActorImportSource,
+  type RiggedActorSourceAxes,
+  type RigPartDiagnostic,
+} from "./riggedActorImport";
 export {
   createPreservationCheck,
   projectSceneSelector,

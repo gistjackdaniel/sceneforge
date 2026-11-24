@@ -3,22 +3,40 @@ import { WorldDomainError } from "./errors";
 import type { WorldAsset, WorldFrontAxis, WorldHandedness } from "./types";
 
 /**
- * Integer frame on the shot-local clock. Seconds are `frame / fps`.
- * This lane does not store fps and does not fill a default.
- *
- * Canonical fps belongs to the Timeline lane's `Shot.fps`. That document is not
- * in the tree: `domain/timeline/types.ts` has optional `Sequence.fps` and clip
- * frame fields, and no `Shot` type. `ShotFpsRef` is only a reference until then.
+ * Integer frame on the shot-local clock. Seconds are `frame / Shot.time.fps`.
+ * This module does not store fps and does not fill a default.
+ * The single source is `Shot.time.fps` in `domain/shot`.
  */
 export type ShotLocalFrame = number;
 
-/** Points at the Timeline shot that owns fps. World does not read the number. */
+/**
+ * Structural clock. Matches `Shot.time`. Callers read `fps` from the shot;
+ * world documents do not copy it.
+ */
+export type ShotTimeSource = {
+  fps: number;
+  durationFrames: number;
+};
+
+/**
+ * Names the shot whose clock is `Shot.time.fps`.
+ * This ref does not copy fps.
+ */
 export type ShotFpsRef = {
   shotId: string;
 };
 
+/** Read the single fps. The number stays on the shot. */
+export const shotFps = (shot: { time: ShotTimeSource }): number => {
+  if (!(shot.time.fps > 0) || !Number.isFinite(shot.time.fps)) {
+    throw new WorldDomainError("invalid_fps", "Shot.time.fps must be positive.");
+  }
+  return shot.time.fps;
+};
+
 /**
- * Canonical scene frame. Source files keep their own axes on `WorldAsset`
+ * Canonical scene frame. `timeBase` counts integer frames and is divided by `Shot.time.fps`.
+ * Source files keep their own axes on `WorldAsset`
  * (`coordinateSystem`, `unitScaleMeters`, `handedness`, `frontAxis`) and on
  * each asset revision's `sourceAxes`. Import converts them into this frame once.
  *

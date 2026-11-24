@@ -1,17 +1,19 @@
 ---
-title: "SceneForge — 3D-Native Generative Production 전략 및 연구 로드맵"
-version: "0.1"
-status: "Working Draft / 논의용"
-updated: "2026-10-30"
+title: "SceneForge — 3D-Native Generative Production 최소 기능 PRD"
+version: "0.2"
+status: "현재 기준 / 최소 기능 PRD"
+updated: "2026-11-17"
 source: "2026-10-29~30 SceneForge 아키텍처 및 경쟁 제품에 관한 대화"
 ---
 
-# SceneForge — 3D-Native Generative Production 전략 및 연구 로드맵
+# SceneForge — 3D-Native Generative Production 최소 기능 PRD
+
+이 문서가 현재 기준이다. 이전 통합 계획(노드 그래프, 부분 재렌더, 멀티컷 IDE)은 [docs/archive/sceneforge_PRD_full.md](archive/sceneforge_PRD_full.md)에 보관한다. 최소 기능이 되기 전에는 그 범위를 구현하지 않는다.
 
 > **North Star**  
 > SceneForge는 **3D 제작 데이터의 편집 가능성과 수정 재현성을 유지하면서**, 음성으로 복수 인물·에셋의 행동을 연출하고 휴대폰으로 촬영한 카메라 움직임을 결합해, 생성형 모델로 최종 영상을 완성하는 **3D-native AI production system**을 지향한다.
 
-**문서 목적:** 이 대화에서 도출한 판단을 향후 제품 설계, 모델 연구, 기술 검증, 개발 우선순위의 기준으로 정리한다.  
+**문서 목적:** 이 문서가 제품 설계, 모델 연구, 기술 검증, 개발 우선순위의 기준이다.  
 **주의:** 아래의 `[확정 원칙]`은 대화에서 정리한 지향점이지 구현 완료를 뜻하지 않는다. `[설계 제안]`과 `[미결정]`은 실험 및 팀 논의를 통해 확정한다.
 
 ---
@@ -310,12 +312,14 @@ flowchart TD
 
 ### Phase 1 — Editable 3D Core + Voice-directed Motion
 
-- 임포트한 rigged actor에 persistent ID 할당.
-- 음성 명령을 구조화된 action/event와 pose sequence로 변환.
-- IK/contact graph를 통해 악수와 컵 내려놓기를 프리뷰에서 수행.
+- photo realistic 3d scene을 하나 import 해온다. 추후에 image to location 기능을 개발한다.
+- 임포트한 photo realistic 3d scene에 Geometry Buffer를 가진 textured rigged actor mesh에 persistent ID 할당.
+- Kimodo-SOMA-RP-ArdyRep-v1.2를 이용하여 임의의 행동에 대하여 생성한 SMPL-X 또는 SOMA 스켈레톤 애니메이션을 캐릭터 리깅에 적용.
+- 생성한 SMPL-X 또는 SOMA 스켈레톤 애니메이션은 Generative AI에 condition으로 들어갈 수 있도록 타임라인 프레임, persistent ID 등에 대응되는 graph로 저장된다.
+- Kimodo로 만든 전신 모션에 실시간으로 표정을 입힐건데 NVIDIA Audio2Face-3D를 이용하여 음성을 통해 표정을 또는 실시간 웹캠의 표정을 rigged actor에 적용.
 - shot/asset versioning + undo/revert + 타임라인 오버라이드 구현.
 
-**Exit criterion**: actor B의 접촉 손을 수정해도 지정된 카메라, 배경, A의 root motion 원본이 유지되는 것을 3D scene state에서 확인한다.
+**Exit criterion**: actor B의 행동을 수정해도 지정된 카메라, 배경, A의 root motion 원본이 유지되는 것을 3D scene state에서 확인한다.
 
 ### Phase 2 — Mobile Camera Integration + Deterministic Rendering
 

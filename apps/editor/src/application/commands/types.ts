@@ -2,7 +2,14 @@ import type { NodeBase } from "../../domain/graph/types";
 import type { NodeReference, ReferenceType } from "../../domain/graph/references";
 import type { GraphEdge } from "../../domain/graph/types";
 import type { CameraRigPreset } from "../../domain/graph/cameraRig";
+import type { JointTarget } from "../../domain/performance/poseTrack";
 import type { ShotCommand } from "../../domain/shot";
+import type { ActionGraph } from "../../domain/speech2motion/actionGraph";
+import type { RiggedActorImportSource } from "../../domain/worlds/riggedActorImport";
+import type { RigPart, SceneState } from "../../domain/worlds/sceneState";
+import type { ImportedShotWorld } from "../../domain/worlds/importedShotWorld";
+import type { WorldAsset } from "../../domain/worlds/types";
+import type { Shot } from "../../domain/shot/types";
 
 /** PRD §13.1 — domain commands. UI-only actions are not commands. */
 export type DomainCommand =
@@ -13,6 +20,37 @@ export type DomainCommand =
       nodeId: string;
       patch: Record<string, unknown>;
       previous?: Record<string, unknown>;
+    }
+  // SMPL-X pose commands. Same DomainCommand bus and undo stack as *_CAMERA_KEYFRAME.
+  | {
+      type: "ADD_POSE_KEYFRAME";
+      nodeId: string;
+      frame: number;
+      pose: {
+        global_orient: [number, number, number];
+        transl: [number, number, number];
+        body_pose: number[];
+        left_hand_pose: number[];
+        right_hand_pose: number[];
+        jaw_pose: [number, number, number];
+        expression: number[];
+      };
+    }
+  | { type: "REMOVE_POSE_KEYFRAME"; nodeId: string; frame: number }
+  | { type: "MOVE_POSE_KEYFRAME"; nodeId: string; from: number; to: number }
+  | {
+      type: "APPLY_POSE_PRESET";
+      nodeId: string;
+      frame: number;
+      presetId: "t_pose" | "a_pose" | "idle" | "walk_contact" | "sit" | "point";
+      hand?: { side: "left" | "right"; preset: "open" | "fist" | "point" | "relaxed" };
+    }
+  | {
+      type: "SET_JOINT_ROTATION";
+      nodeId: string;
+      frame: number;
+      target: JointTarget;
+      axisAngle: [number, number, number];
     }
   | { type: "UPDATE_NODE_UI"; nodeId: string; ui: NonNullable<NodeBase["ui"]>; previous?: NodeBase["ui"] }
   | { type: "RENAME_NODE"; nodeId: string; name: string; previous?: string }
@@ -103,7 +141,94 @@ export type DomainCommand =
       /** Optional message for logs/UI; callers may log separately. */
       logMessage?: string;
     }
-  | { type: "SHOT"; command: ShotCommand };
+  // ClipDraft commands — generation drafts are separate from blocking plan
+  | {
+      type: "CREATE_CLIP_DRAFT";
+      clipId: string;
+      modelId?: string;
+      /** Present on the inverse of DISCARD_CLIP_DRAFT so undo restores the authored draft. */
+      restore?: {
+        prompt: string;
+        references: import("../../domain/generation/clipDraft").DraftReference[];
+      };
+    }
+  | {
+      type: "UPDATE_CLIP_DRAFT";
+      clipId: string;
+      patch: Partial<{
+        prompt: string;
+        width: number;
+        height: number;
+        fps: number;
+        durationSeconds: number;
+        outputCount: number;
+        cameraMovementSuggestion?: string;
+        references: import("../../domain/generation/clipDraft").DraftReference[];
+      }>;
+    }
+  | { type: "DISCARD_CLIP_DRAFT"; clipId: string }
+  | {
+      type: "ADD_DRAFT_REFERENCE";
+      clipId: string;
+      reference: import("../../domain/generation/clipDraft").DraftReference;
+    }
+  | { type: "REMOVE_DRAFT_REFERENCE"; clipId: string; referenceId: string }
+  | { type: "SET_DRAFT_MODEL"; clipId: string; modelId: string }
+  | { type: "SET_DRAFT_IMAGE_MODE"; clipId: string; referenceId: string; mode: "reference" | "hard" }
+  | { type: "SET_DRAFT_IMAGE_GUIDANCE"; clipId: string; referenceId: string; guidance: number }
+  | { type: "SHOT"; command: ShotCommand }
+  | { type: "INSTALL_PHASE1_DEMO" }
+  | { type: "REGISTER_SHOT_WORLD"; shotId: string; worldId: string; imported: ImportedShotWorld }
+  | { type: "PIN_SHOT_WORLD"; shotId: string; worldId: string; revisionId: string }
+  | { type: "RESTORE_SHOT_WORLD"; shotId: string; worldId: string; shot: Shot | null; world: WorldAsset | null; scene: SceneState | null }
+  | { type: "INSTALL_INTERACTION_SCENE" }
+  | {
+      type: "UNINSTALL_INTERACTION_SCENE";
+      shotId: string;
+      removeShot: boolean;
+      removePreview: boolean;
+      worldIds: string[];
+    }
+  | {
+      /** Point one contact effector at another rig part. One undo restores the previous override list. */
+      type: "CHANGE_CONTACT_EFFECTOR";
+      shotId: string;
+      subjectRef: string;
+      locale: "ko" | "en";
+      contactId: string;
+      rigPart: RigPart;
+    }
+  | {
+      type: "SET_INTERACTION_OVERRIDES";
+      shotId: string;
+      overrides: Array<{
+        contactId: string;
+        worldAssetId: string;
+        subjectId: string;
+        rigPart: RigPart;
+      }>;
+    }
+  | {
+      /** Import one rigged actor. Undo restores the previous world scene. */
+      type: "IMPORT_RIGGED_ACTOR";
+      worldId: string;
+      source: RiggedActorImportSource;
+    }
+  | {
+      /** Replace one world scene with a snapshot. Inverse of rig import. */
+      type: "RESTORE_SCENE_STATE";
+      worldId: string;
+      scene: SceneState;
+    }
+  | {
+      /**
+       * Store a ready speech2motion graph for one shot.
+       * `graph: null` drops a graph recorded earlier. This is the only write path for that document.
+       */
+      type: "RECORD_SPEECH2MOTION";
+      shotId: string;
+      graph: ActionGraph | null;
+    };
 
 export type DomainEventType =
   | "NodeCreated"
@@ -119,7 +244,10 @@ export type DomainEventType =
   | "RenderQueued"
   | "RenderCompleted"
   | "RenderFailed"
-  | "ShotChanged";
+  | "ShotChanged"
+  | "SceneAuthoringChanged"
+  | "RiggedActorImported"
+  | "Speech2MotionRecorded";
 
 export interface DomainEvent {
   type: DomainEventType;

@@ -3,6 +3,7 @@ import { useEditorStore } from "../../state/editorStore";
 import { useWorldGeneration } from "../world-generation/useWorldGeneration";
 import { reconstructSceneObject } from "../../infrastructure/connectors/sceneReconstruction";
 import type { SceneObject } from "../../domain/worlds/sceneObjects";
+import { PhotoActorAsset } from "./PhotoActorAsset";
 
 export const SceneAssets = ({ onAdd, disabled }: { onAdd: (object: SceneObject, source?: Record<string, unknown>) => void; disabled: boolean }) => {
   const { state: { ui } } = useEditorStore();
@@ -38,6 +39,7 @@ export const SceneAssets = ({ onAdd, disabled }: { onAdd: (object: SceneObject, 
     } finally { if (controller.current === abort) setBusy(false); }
   };
   return <div className="scene-assets">
+    <PhotoActorAsset onAdd={onAdd} disabled={disabled} />
     <p className="scene-note">원본은 보존하고, 객체마다 편집 가능한 3D 에셋을 만듭니다.</p>
     <label>Object name<input value={label} onChange={(event) => setLabel(event.target.value)} /></label>
     <div className="scene-button-group">

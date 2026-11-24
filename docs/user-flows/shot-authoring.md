@@ -107,6 +107,27 @@ World 선택·생성
 - Workflow의 Camera 또는 Next 버튼을 누르면 Stage Motion으로 이동한다.
 - Record / Play / `K` / Take 선택 바가 보인다.
 
+#### 휴대폰으로 카메라 테이크 기록
+
+1. 데스크톱의 `PATH`에 `cloudflared`를 설치하거나 Windows 실행 파일을 프로젝트의 `.local/cloudflared/cloudflared.exe`에 둔다. [Cloudflare 다운로드](https://developers.cloudflare.com/tunnel/downloads/)
+2. `apps/editor`에서 `npm run dev`를 실행하고 `http://localhost:4173`에서 에디터를 연다.
+3. 샷을 선택하고 **Camera trajectory → Connect phone with QR**을 누른다. 페어링할 때만 촬영 페이지와 해당 테이크 전송을 위한 임시 Cloudflare HTTPS 주소가 열린다.
+4. 휴대폰 기본 카메라로 QR을 스캔한다. Android는 Chrome에서 **Start AR**을 누른다. iPhone은 **Open SceneForge Camera**를 누른 뒤 앱에서 **Start AR**을 누른다. 처음에는 카메라 권한을 허용한다. [Android WebXR 요구사항](https://developers.google.com/ar/develop/webxr/requirements)
+5. 녹화가 시작될 때까지 시작 위치와 방향을 유지한다. **Stop and send**를 누르거나 샷 길이에 도달하면 테이크가 데스크톱으로 전송된다. 테이크가 도착할 때까지 데스크톱의 페어링 패널을 열어 둔다.
+6. 데스크톱에서 새 **Phone camera** 테이크를 재생한다. 첫 6DoF 포즈의 위치와 수평 방향이 기존 샷 카메라의 첫 프레임에 맞춰지고, 이후 이동은 미터 단위로 기록된다.
+
+USB로 연결하려면 Chrome DevTools에서 휴대폰 포트 `4173`을 데스크톱 에디터 포트로 포워딩한다. **Connect phone via USB**를 누르고 안내된 **Phone link**를 Android Chrome에서 연다. [Chrome USB 포트 포워딩](https://developers.google.com/ar/develop/webxr/requirements)
+
+##### iPhone 앱 설치
+
+1. Mac에서 [SceneForgeCamera.xcodeproj](../../apps/ios/SceneForgeCamera.xcodeproj)를 Xcode로 연다. ARKit 월드 추적을 지원하는 iOS 16 이상 iPhone을 연결한다.
+2. **Signing & Capabilities**에서 팀을 선택한다. iPhone을 실행 대상으로 선택하고 **Run**을 눌러 SceneForge Camera를 설치한다. 필요하면 iPhone에서 개발자 모드를 켠다. [Apple 기기에서 앱 실행](https://developer.apple.com/documentation/xcode/running-your-app-in-simulator-or-on-a-device)
+3. 앱 설치 후 데스크톱 에디터에서 새 QR을 만들고 iPhone으로 스캔한다. 촬영 중에는 세로 화면을 기준으로 위치, 회전, 렌즈 투영값, 추적 상태를 테이크에 기록한다. [Apple ARCamera](https://developer.apple.com/documentation/arkit/arcamera)
+
+추적이 끊기면 마지막 정상 포즈를 유지한다. 복구 직후 위치 점프는 추정 보정과 함께 저장한다. WebXR 추적 원점이 재설정되면 그 시점까지의 테이크를 전송한다.
+
+**Scene output → Export render passes**에서 선택된 테이크의 TAR를 받는다. `scene.json`은 샷 상태를, `camera.json`은 카메라 경로와 추적 이벤트를 담는다. `manifest.json`에서 해상도, 패스 순서, 인스턴스 ID 표를 확인한다. 바이너리 패스는 little-endian이며 프레임, 행, 열, 채널 순서로 저장된다. 표면 추적 패스에는 픽셀마다 프록시 파트 번호와 파트 로컬 좌표가 있다. 내보내기는 레퍼런스 프록시 지오메트리를 렌더링한다.
+
 ### 4. Performance
 
 사용자는 캐릭터 연기를 3D 블로킹과 분리해 작성한다. 텍스트, 라이브 액션, 모션 캡처, 2D 키 애니메이션이 외부 퍼포먼스 소스가 되고, 오디오 및 dialogue/reaction/action/hold 큐가 타이밍을 제공한다.

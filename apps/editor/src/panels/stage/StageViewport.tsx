@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { readImportedShotWorld } from "../../application/services/importShotWorld";
+import { importedActorHash } from "../../domain/worlds/photoActor";
+import { readGeometry } from "../../infrastructure/persistence/geometryStore";
+import { disposeMeshResources } from "../../infrastructure/renderers/disposeMeshResources";
 import {
   overlayKindForElement,
   viewportPreviewBadge,
@@ -18,7 +22,15 @@ import {
 import type { WorldAsset } from "../../domain/worlds/types";
 import type { ViewportTool, ViewportWorkspace, CameraVizState } from "../../state/editorStore";
 import type { CameraKeyframe } from "../../domain/graph/cameraPath";
+import { EULER_ORDER } from "../../domain/shot/euler";
 import type { SceneObject } from "../../domain/worlds/sceneObjects";
+import { quaternionToAxisAngle } from "../../domain/utils/quaternion";
+import type { JointTarget } from "../../domain/performance/poseTrack";
+import { smplxJointForRigPart } from "../../domain/performance/rigJoints";
+import { JointPickPriority } from "../../presentation/pose/pickPriority";
+import type { LiveFaceFrame } from "../../presentation/scene/faceRig";
+import { bindViewportActorMotion, type ViewportActorMotion } from "../../presentation/viewport/actorMotionBinding";
+import { readGlbRig, type GlbRigRead } from "./readSkinnedMesh";
 
 export interface StageObjectTransform {
   id: string;
@@ -31,8 +43,23 @@ export interface StageObjectTransform {
 export interface StageCameraPose {
   position: [number, number, number];
   rotation: [number, number, number];
+  /** Stored camera orientation. Wins over `rotation` so the Euler order cannot change the shot. */
+  quaternion?: [number, number, number, number];
   focalLength: number;
+  projection?: { width: number; height: number; fx: number; fy: number; cx: number; cy: number };
 }
+
+const updateCameraProjection = (camera: THREE.PerspectiveCamera, projection?: StageCameraPose["projection"]) => {
+  camera.updateProjectionMatrix();
+  if (!projection) return;
+  const { width, height, fx, fy, cx, cy } = projection;
+  const matrix = camera.projectionMatrix.elements;
+  matrix[0] = 2 * fx / width;
+  matrix[5] = 2 * fy / height;
+  matrix[8] = 1 - 2 * cx / width;
+  matrix[9] = 2 * cy / height - 1;
+  camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+};
 
 export interface ViewportSelection {
   id: string;
@@ -51,8 +78,38 @@ interface CameraDrag {
   startRotation: THREE.Euler;
 }
 
+interface StageSceneApi {
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  orbit: OrbitControls;
+  transform: TransformControls;
+  renderer: THREE.WebGLRenderer;
+  objects: Map<string, THREE.Object3D>;
+  objectKinds: Map<string, "actor" | "prop" | "light" | "camera">;
+  actorBindings: Map<string, ReturnType<typeof bindViewportActorMotion>>;
+  worldRoot: THREE.Object3D | null;
+  shotCamera: THREE.Object3D;
+  shotBody: THREE.Object3D;
+  helperCam: THREE.PerspectiveCamera;
+  frustumHelper: THREE.CameraHelper;
+  pathLine: THREE.Line;
+  lookAtLine: THREE.Line;
+  playheadMarker: THREE.Mesh;
+  keyframeGroup: THREE.Group;
+  stageFloor: THREE.Object3D;
+  grid: THREE.Object3D;
+  dragging: boolean;
+  keyLight: THREE.DirectionalLight;
+  jointGroup: THREE.Group | null;
+  cameraGizmo: THREE.Group;
+  cameraDrag: CameraDrag | null;
+}
+
 interface StageViewportProps {
   sceneObjects?: SceneObject[];
+  actorMotion?: ReadonlyMap<string, ViewportActorMotion>;
+  liveFace?: RefObject<LiveFaceFrame | null>;
+  onActorSupport?: (id: string, support: { body: boolean; face: boolean } | null) => void;
   selectedId?: string;
   showCameraPreview?: boolean;
   readOnly?: boolean;
@@ -68,9 +125,12 @@ interface StageViewportProps {
   outputAspectLabel?: string;
   cameraViz: CameraVizState;
   cameraPose?: StageCameraPose;
+  cameraLocked?: boolean;
   objectTransforms?: StageObjectTransform[];
   keyframes?: CameraKeyframe[];
   pathSamples?: Array<[number, number, number]>;
+  /** RGB 0..1, one color per path sample. Loss intervals use a different tint. */
+  pathColors?: Array<[number, number, number]>;
   lookAtTargetId?: string;
   fovDegrees?: number;
   playheadFrame?: number;
@@ -81,8 +141,18 @@ interface StageViewportProps {
     rotation: [number, number, number];
     scale?: [number, number, number];
   }) => void;
+  onJointRotateCommit?: (payload: {
+    actorElementId: string;
+    target: JointTarget;
+    axisAngle: [number, number, number];
+    frame: number;
+  }) => void;
   onSelectionChange?: (selection: ViewportSelection | undefined) => void;
   onLoadStateChange?: (state: ViewportLoadState, message?: string) => void;
+  /** Rigged glTF actor. Empty when the file has no SkinnedMesh. */
+  onRiggedModelLoaded?: (payload: GlbRigRead & { objectId: string }) => void;
+  /** Unmapped bones. Shown as warnings, not load errors. */
+  rigWarnings?: readonly string[];
   onCapturePose?: (payload: { camera: StageCameraPose; objects: StageObjectTransform[] }) => void;
   onLiveCameraPose?: (camera: StageCameraPose) => void;
   captureSignal?: number;
@@ -193,6 +263,23 @@ const applyRecordFly = (camera: THREE.PerspectiveCamera, keys: FlyKeys, delta: n
   return true;
 };
 
+const cameraGizmoHandle = (object: THREE.Object3D | undefined): CameraDrag["handle"] | undefined => {
+  let current = object;
+  while (current) {
+    const name = current.name;
+    if (name.includes("ring-x")) return "ring-x";
+    if (name.includes("ring-y")) return "ring-y";
+    if (name.includes("ring-z")) return "ring-z";
+    if (name.includes("axis-x")) return "axis-x";
+    if (name.includes("axis-y")) return "axis-y";
+    if (name.includes("axis-z")) return "axis-z";
+    if (name === "center" || name.endsWith("center")) return "center";
+    if (name === "camera-gizmo") return undefined;
+    current = current.parent ?? undefined;
+  }
+  return undefined;
+};
+
 const applyRecordLook = (camera: THREE.PerspectiveCamera, dx: number, dy: number): void => {
   const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, "YXZ");
   euler.y -= dx * 0.0022;
@@ -203,6 +290,9 @@ const applyRecordLook = (camera: THREE.PerspectiveCamera, dx: number, dy: number
 
 export const StageViewport = ({
   sceneObjects = [], selectedId, showCameraPreview = false, readOnly = false,
+  actorMotion,
+  liveFace,
+  onActorSupport,
   lighting = { intensity: 1.2, color: "#ffffff" },
   world,
   worldName,
@@ -220,15 +310,20 @@ export const StageViewport = ({
     keyframeMarkers: true,
   },
   cameraPose,
+  cameraLocked = false,
   objectTransforms = [],
   keyframes = [],
   pathSamples = [],
+  pathColors,
   lookAtTargetId,
   fovDegrees = 50,
   playheadFrame = 0,
   onTransformCommit,
+  onJointRotateCommit,
   onSelectionChange,
   onLoadStateChange,
+  onRiggedModelLoaded,
+  rigWarnings = [],
   onCapturePose,
   onLiveCameraPose,
   captureSignal = 0,
@@ -244,16 +339,29 @@ export const StageViewport = ({
   const onTransformCommitRef = useRef(onTransformCommit);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onLoadStateChangeRef = useRef(onLoadStateChange);
+  const onRiggedModelLoadedRef = useRef(onRiggedModelLoaded);
   const onCapturePoseRef = useRef(onCapturePose);
+  const onJointRotateCommitRef = useRef(onJointRotateCommit);
   const onLiveCameraPoseRef = useRef(onLiveCameraPose);
+  const actorMotionRef = useRef(actorMotion);
+  const liveFaceRef = useRef(liveFace);
+  const onActorSupportRef = useRef(onActorSupport);
+  const cameraLockedRef = useRef(cameraLocked);
   onTransformCommitRef.current = onTransformCommit;
   onSelectionChangeRef.current = onSelectionChange;
   onLoadStateChangeRef.current = onLoadStateChange;
+  onRiggedModelLoadedRef.current = onRiggedModelLoaded;
   onCapturePoseRef.current = onCapturePose;
+  onJointRotateCommitRef.current = onJointRotateCommit;
   onLiveCameraPoseRef.current = onLiveCameraPose;
+  actorMotionRef.current = actorMotion;
+  liveFaceRef.current = liveFace;
+  onActorSupportRef.current = onActorSupport;
+  cameraLockedRef.current = cameraLocked;
   const workspaceRef = useRef(workspace);
   const toolRef = useRef(tool);
   const outputAspectRef = useRef(outputAspect);
+  const shotProjectionRef = useRef(cameraPose?.projection);
   const flyKeysRef = useRef<FlyKeys>(emptyFlyKeys());
   const liveOverrideRef = useRef(false);
   const lastPlayheadRef = useRef(playheadFrame);
@@ -263,32 +371,10 @@ export const StageViewport = ({
   workspaceRef.current = workspace;
   toolRef.current = tool;
   outputAspectRef.current = outputAspect;
+  shotProjectionRef.current = cameraPose?.projection;
 
   const recording = workspace === "record";
-  const sceneApiRef = useRef<{
-    scene: THREE.Scene;
-    camera: THREE.PerspectiveCamera;
-    orbit: OrbitControls;
-    transform: TransformControls;
-    renderer: THREE.WebGLRenderer;
-    objects: Map<string, THREE.Object3D>;
-    objectKinds: Map<string, "actor" | "prop" | "light" | "camera">;
-    worldRoot: THREE.Object3D | null;
-    shotCamera: THREE.Object3D;
-    shotBody: THREE.Object3D;
-    helperCam: THREE.PerspectiveCamera;
-    frustumHelper: THREE.CameraHelper;
-    pathLine: THREE.Line;
-    lookAtLine: THREE.Line;
-    playheadMarker: THREE.Mesh;
-    keyframeGroup: THREE.Group;
-    stageFloor: THREE.Object3D;
-    grid: THREE.Object3D;
-    dragging: boolean;
-    keyLight: THREE.DirectionalLight;
-    cameraGizmo: THREE.Group;
-    cameraDrag: CameraDrag | null;
-  } | null>(null);
+  const sceneApiRef = useRef<StageSceneApi | null>(null);
   const loadTokenRef = useRef(0);
   const [hud, setHud] = useState(worldName ?? "No world");
 
@@ -310,6 +396,7 @@ export const StageViewport = ({
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.domElement.setAttribute("aria-label", "편집 가능한 3D 샷");
     container.appendChild(renderer.domElement);
 
     const orbit = new OrbitControls(camera, renderer.domElement);
@@ -336,6 +423,7 @@ export const StageViewport = ({
 
     const shotCamera = new THREE.Group();
     shotCamera.name = "shot-camera";
+    shotCamera.rotation.order = EULER_ORDER;
     shotCamera.position.set(2.5, 1.8, 3.2);
     const shotBody = new THREE.Mesh(
       new THREE.ConeGeometry(0.12, 0.28, 12),
@@ -415,7 +503,7 @@ export const StageViewport = ({
     cameraGizmo.add(center);
     shotCamera.add(cameraGizmo);
 
-    const api = {
+    const api: StageSceneApi = {
       scene,
       camera,
       orbit,
@@ -423,7 +511,8 @@ export const StageViewport = ({
       renderer,
       objects,
       objectKinds,
-      worldRoot: null as THREE.Object3D | null,
+      actorBindings: new Map(),
+      worldRoot: null,
       shotCamera,
       shotBody,
       helperCam,
@@ -436,8 +525,9 @@ export const StageViewport = ({
       grid,
       dragging: false,
       keyLight,
+      jointGroup: null,
       cameraGizmo,
-      cameraDrag: null as CameraDrag | null,
+      cameraDrag: null,
     };
     sceneApiRef.current = api;
 
@@ -448,52 +538,71 @@ export const StageViewport = ({
       if (readOnlyRef.current || api.dragging || workspaceRef.current === "record" || toolRef.current === "navigate" || event.button !== 0) {
         return;
       }
-      // Camera gizmo picking first
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
       const gizmoHits = raycaster.intersectObjects(api.cameraGizmo.children, true);
-      const gizmo = gizmoHits[0]?.object;
-      if (gizmo && workspaceRef.current === "build") {
-        const handleName =
-          gizmo.name.includes("ring-x") ? "ring-x" :
-          gizmo.name.includes("ring-y") ? "ring-y" :
-          gizmo.name.includes("ring-z") ? "ring-z" :
-          gizmo.name.includes("axis-x") ? "axis-x" :
-          gizmo.name.includes("axis-y") ? "axis-y" :
-          gizmo.name.includes("axis-z") ? "axis-z" :
-          gizmo.name.includes("center") ? "center" : undefined;
-        if (handleName) {
-          api.dragging = true;
-          api.orbit.enabled = false;
-          const mode: "rotate" | "translate" | "both" =
-            event.shiftKey ? "both" : handleName.startsWith("ring-") ? "rotate" : "translate";
-          api.cameraDrag = {
-            mode,
-            handle: handleName as any,
-            startX: event.clientX,
-            startY: event.clientY,
-            startPosition: api.shotCamera.position.clone(),
-            startRotation: new THREE.Euler().setFromQuaternion(api.shotCamera.quaternion),
-          };
+      const gizmoHit = gizmoHits.find((hit) => cameraGizmoHandle(hit.object));
+      const handleName = cameraGizmoHandle(gizmoHit?.object);
+      const jointChildren = api.jointGroup?.children ?? [];
+      const jointHits = jointChildren.length > 0 ? raycaster.intersectObjects(jointChildren, true) : [];
+      const objectPickables = Array.from(objects.values()).filter((object) => object.visible && !object.userData.locked);
+      const objectHits = raycaster.intersectObjects(objectPickables, true);
+      const winner = JointPickPriority.winner({
+        cameraGizmoDistance: handleName ? gizmoHit?.distance : undefined,
+        jointDistance: jointHits[0]?.distance,
+        objectDistance: objectHits[0]?.distance,
+        workspace: workspaceRef.current,
+        tool: toolRef.current,
+      });
+      if (winner === "camera-gizmo" && handleName) {
+        api.dragging = true;
+        api.orbit.enabled = false;
+        const mode: CameraDrag["mode"] =
+          event.shiftKey ? "both" : handleName.startsWith("ring-") ? "rotate" : "translate";
+        api.cameraDrag = {
+          mode,
+          handle: handleName,
+          startX: event.clientX,
+          startY: event.clientY,
+          startPosition: api.shotCamera.position.clone(),
+          startRotation: new THREE.Euler().setFromQuaternion(api.shotCamera.quaternion, EULER_ORDER),
+        };
+        return;
+      }
+      if (winner === "joint") {
+        let picked: THREE.Object3D | undefined = jointHits[0]?.object;
+        while (picked && !picked.userData?.joint && picked.parent) {
+          picked = picked.parent;
+        }
+        if (!picked?.userData?.joint) {
           return;
         }
+        transform.attach(picked);
+        const actorId = String(picked.userData.actorElementId ?? "");
+        if (actorId) {
+          onSelectionChangeRef.current?.({
+            id: actorId,
+            kind: "actor",
+            layer: "clip",
+            position: [0, 0, 0],
+            rotation: [0, 0, 0],
+          });
+        }
+        return;
       }
-      const pickables = Array.from(objects.values()).filter((object) => object.visible && !object.userData.locked);
-      const hits = raycaster.intersectObjects(pickables, true);
-      const raw = hits[0]?.object;
-      if (!raw) {
+      const raw = objectHits[0]?.object;
+      if (!raw || winner !== "object") {
         return;
       }
       let picked: THREE.Object3D | undefined = raw;
       while (picked && !objects.has(picked.name) && picked.parent) {
         picked = picked.parent;
       }
-      if (!picked || !objects.has(picked.name)) {
+      if (!picked || !objects.has(picked.name) || picked.userData.locked) {
         return;
       }
-      if (picked.userData.locked) return;
       transform.attach(picked);
       const id = picked.name;
       const kind = objectKinds.get(id);
@@ -514,24 +623,39 @@ export const StageViewport = ({
         !api.dragging && workspaceRef.current === "build" && toolRef.current === "navigate";
       if (!api.dragging) {
         const attached = transform.object;
-        if (!attached || !onTransformCommitRef.current) {
+        if (!attached) {
           return;
         }
-        const id = attached.name;
-        const kind = objectKinds.get(id);
-        if (!kind) {
-          return;
+        if (attached.userData?.joint && onJointRotateCommitRef.current) {
+          const q = attached.quaternion;
+          const axisAngle = quaternionToAxisAngle([q.x, q.y, q.z, q.w]);
+          const actorElementId = String(attached.userData.actorElementId ?? "");
+          const target = JointPickPriority.readJointTarget(attached.userData.target);
+          if (actorElementId && target) {
+            onJointRotateCommitRef.current({
+              actorElementId,
+              target,
+              axisAngle,
+              frame: lastPlayheadRef.current ?? 0,
+            });
+          }
+        } else if (onTransformCommitRef.current) {
+          const id = attached.name;
+          const kind = objectKinds.get(id);
+          if (!kind) {
+            return;
+          }
+          if (kind === "camera" && workspaceRef.current !== "build") {
+            return;
+          }
+          onTransformCommitRef.current({
+            worldElementId: id,
+            kind,
+            position: [attached.position.x, attached.position.y, attached.position.z],
+            rotation: [attached.rotation.x, attached.rotation.y, attached.rotation.z],
+            scale: [attached.scale.x, attached.scale.y, attached.scale.z],
+          });
         }
-        if (kind === "camera" && workspaceRef.current !== "build") {
-          return;
-        }
-        onTransformCommitRef.current({
-          worldElementId: id,
-          kind,
-          position: [attached.position.x, attached.position.y, attached.position.z],
-          rotation: [attached.rotation.x, attached.rotation.y, attached.rotation.z],
-          scale: [attached.scale.x, attached.scale.y, attached.scale.z],
-        });
       }
     });
     renderer.domElement.addEventListener("pointerdown", pickObject);
@@ -583,7 +707,7 @@ export const StageViewport = ({
 
     const setFlyKey = (event: KeyboardEvent, pressed: boolean) => {
       // Keyup always clears so stuck look/move cannot happen after focus changes.
-      if (pressed && (isTypingTarget(event.target) || workspaceRef.current !== "record")) {
+      if (pressed && (isTypingTarget(event.target) || workspaceRef.current !== "record" || cameraLockedRef.current)) {
         return;
       }
       const key = event.key.toLowerCase();
@@ -611,12 +735,12 @@ export const StageViewport = ({
       lookingRef.current = false;
     };
     const onContextMenu = (event: Event) => {
-      if (workspaceRef.current === "record") {
+      if (workspaceRef.current === "record" && !cameraLockedRef.current) {
         event.preventDefault();
       }
     };
     const onPointerDownLook = (event: PointerEvent) => {
-      if (workspaceRef.current !== "record" || event.button !== 2) {
+      if (workspaceRef.current !== "record" || cameraLockedRef.current || event.button !== 2) {
         return;
       }
       lookingRef.current = true;
@@ -628,7 +752,7 @@ export const StageViewport = ({
       }
     };
     const onPointerMoveLook = (event: PointerEvent) => {
-      if (!lookingRef.current || workspaceRef.current !== "record") {
+      if (!lookingRef.current || workspaceRef.current !== "record" || cameraLockedRef.current) {
         return;
       }
       applyRecordLook(camera, event.movementX, event.movementY);
@@ -650,24 +774,32 @@ export const StageViewport = ({
       const now = performance.now();
       const delta = Math.min(0.05, (now - lastFrame) / 1000);
       lastFrame = now;
-      if (workspaceRef.current === "record") {
+      if (workspaceRef.current === "record" && !cameraLockedRef.current) {
         const moved = applyRecordFly(camera, flyKeysRef.current, delta);
         if (moved) {
           liveOverrideRef.current = true;
         }
         api.shotCamera.position.copy(camera.position);
         api.shotCamera.quaternion.copy(camera.quaternion);
-        api.shotCamera.rotation.setFromQuaternion(camera.quaternion);
+        api.shotCamera.rotation.order = EULER_ORDER;
+        api.shotCamera.rotation.setFromQuaternion(camera.quaternion, EULER_ORDER);
         api.shotCamera.updateMatrixWorld(true);
         if (onLiveCameraPoseRef.current) {
           onLiveCameraPoseRef.current({
             position: [api.shotCamera.position.x, api.shotCamera.position.y, api.shotCamera.position.z],
             rotation: [api.shotCamera.rotation.x, api.shotCamera.rotation.y, api.shotCamera.rotation.z],
+            quaternion: [api.shotCamera.quaternion.x, api.shotCamera.quaternion.y, api.shotCamera.quaternion.z, api.shotCamera.quaternion.w],
             focalLength: 35,
           });
         }
-      } else {
+      } else if (workspaceRef.current === "build") {
         orbit.update();
+      }
+      if (!api.dragging) {
+        const expression = liveFaceRef.current?.current ?? null;
+        for (const [id, binding] of api.actorBindings) {
+          binding.update(id, actorMotionRef.current?.get(id), expression);
+        }
       }
       const size = renderer.getSize(new THREE.Vector2());
       renderer.setViewport(0, 0, size.x, size.y);
@@ -699,7 +831,7 @@ export const StageViewport = ({
       }
       camera.aspect =
         workspaceRef.current === "record" ? outputAspectRef.current : nextWidth / nextHeight;
-      camera.updateProjectionMatrix();
+      updateCameraProjection(camera, workspaceRef.current === "record" && !liveOverrideRef.current ? shotProjectionRef.current : undefined);
       renderer.setSize(nextWidth, nextHeight);
     };
     window.addEventListener("resize", handleResize);
@@ -735,6 +867,7 @@ export const StageViewport = ({
     }
     const recording = workspace === "record";
     flyKeysRef.current = emptyFlyKeys();
+    lookingRef.current = false;
     if (recording) {
       if (!buildViewRef.current) {
         buildViewRef.current = {
@@ -771,7 +904,7 @@ export const StageViewport = ({
       api.transform.detach();
       api.transform.enabled = false;
     }
-  }, [tool, workspace, readOnly]);
+  }, [tool, workspace, readOnly, cameraLocked]);
 
   useEffect(() => {
     const api = sceneApiRef.current;
@@ -779,13 +912,62 @@ export const StageViewport = ({
       return;
     }
     api.helperCam.aspect = outputAspect;
-    api.helperCam.updateProjectionMatrix();
+    updateCameraProjection(api.helperCam, cameraPose?.projection);
     api.frustumHelper.update();
     if (workspace === "record") {
       api.camera.aspect = outputAspect;
-      api.camera.updateProjectionMatrix();
+      updateCameraProjection(api.camera, liveOverrideRef.current ? undefined : cameraPose?.projection);
     }
-  }, [outputAspect, workspace]);
+  }, [outputAspect, workspace, cameraPose?.projection]);
+
+  // Build pickable joint helpers when an actor is selected
+  useEffect(() => {
+    const api = sceneApiRef.current;
+    if (!api) return;
+    // Clean up previous
+    if (api.jointGroup) {
+      api.scene.remove(api.jointGroup);
+      api.jointGroup.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      });
+      api.jointGroup = null;
+    }
+    if (!selectedId || workspace === "record") return;
+    const selected = api.objects.get(selectedId);
+    const kind = api.objectKinds.get(selectedId);
+    if (!selected || kind !== "actor") return;
+    const group = new THREE.Group();
+    group.position.copy(selected.position);
+    group.rotation.copy(selected.rotation);
+    const JOINTS: Array<{ name: string; target: JointTarget; pos: [number, number, number] }> = [
+      { name: smplxJointForRigPart("pelvis"), target: { kind: "global_orient" }, pos: [0, 0.9, 0] },
+      { name: "spine", target: { kind: "body", index: 0 }, pos: [0, 1.1, 0] },
+      { name: "neck", target: { kind: "body", index: 3 }, pos: [0, 1.45, 0] },
+      { name: "jaw", target: { kind: "jaw" }, pos: [0, 1.55, 0.08] },
+      { name: "shoulder_l", target: { kind: "body", index: 5 }, pos: [-0.18, 1.38, 0] },
+      { name: "shoulder_r", target: { kind: "body", index: 8 }, pos: [0.18, 1.38, 0] },
+      { name: "elbow_l", target: { kind: "body", index: 6 }, pos: [-0.45, 1.25, 0] },
+      { name: "elbow_r", target: { kind: "body", index: 9 }, pos: [0.45, 1.25, 0] },
+      { name: "hip_l", target: { kind: "body", index: 12 }, pos: [-0.12, 0.95, 0] },
+      { name: "hip_r", target: { kind: "body", index: 15 }, pos: [0.12, 0.95, 0] },
+      { name: "knee_l", target: { kind: "body", index: 13 }, pos: [-0.12, 0.55, 0] },
+      { name: "knee_r", target: { kind: "body", index: 16 }, pos: [0.12, 0.55, 0] },
+    ];
+    JOINTS.forEach((j, i) => {
+      const node = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 10), new THREE.MeshStandardMaterial({ color: 0x6cb6ff }));
+      node.position.set(...j.pos);
+      node.userData.joint = true;
+      node.userData.target = j.target;
+      node.userData.actorElementId = selectedId;
+      node.name = `joint-${j.name}-${i}`;
+      group.add(node);
+    });
+    api.scene.add(group);
+    api.jointGroup = group;
+  }, [selectedId, sceneObjects, workspace]);
 
   useEffect(() => {
     const api = sceneApiRef.current;
@@ -813,6 +995,7 @@ export const StageViewport = ({
         return;
       }
       object.position.set(...item.position);
+      object.rotation.order = EULER_ORDER;
       object.rotation.set(...item.rotation);
       if (item.scale) object.scale.set(...item.scale);
     });
@@ -823,7 +1006,7 @@ export const StageViewport = ({
     if (!api || !cameraPose || api.dragging) {
       return;
     }
-    if (workspace === "record" && playheadFrame !== lastPlayheadRef.current) {
+    if (workspace === "record" && (cameraLocked || playheadFrame !== lastPlayheadRef.current)) {
       liveOverrideRef.current = false;
     }
     lastPlayheadRef.current = playheadFrame;
@@ -833,11 +1016,13 @@ export const StageViewport = ({
       api.camera.updateProjectionMatrix();
       api.helperCam.fov = fovDegrees;
       api.helperCam.aspect = outputAspect;
-      api.helperCam.updateProjectionMatrix();
+      updateCameraProjection(api.helperCam, cameraPose.projection);
       return;
     }
     api.shotCamera.position.set(...cameraPose.position);
-    api.shotCamera.rotation.set(...cameraPose.rotation);
+    api.shotCamera.rotation.order = EULER_ORDER;
+    if (cameraPose.quaternion) api.shotCamera.quaternion.set(...cameraPose.quaternion);
+    else api.shotCamera.rotation.set(...cameraPose.rotation);
     const lookTarget = lookAtTargetId ? api.objects.get(lookAtTargetId) : undefined;
     if (lookTarget) {
       api.shotCamera.lookAt(lookTarget.position);
@@ -845,7 +1030,7 @@ export const StageViewport = ({
     api.shotCamera.updateMatrixWorld(true);
     api.helperCam.fov = fovDegrees;
     api.helperCam.aspect = outputAspect;
-    api.helperCam.updateProjectionMatrix();
+    updateCameraProjection(api.helperCam, cameraPose.projection);
     api.frustumHelper.update();
     // Keep gizmo aligned with camera
     api.cameraGizmo.position.set(0, 0, 0);
@@ -855,12 +1040,12 @@ export const StageViewport = ({
       api.camera.quaternion.copy(api.shotCamera.quaternion);
       api.camera.fov = fovDegrees;
       api.camera.aspect = outputAspect;
-      api.camera.updateProjectionMatrix();
+      updateCameraProjection(api.camera, cameraPose.projection);
     } else {
       api.camera.fov = 55;
       api.camera.updateProjectionMatrix();
     }
-  }, [cameraPose, workspace, fovDegrees, lookAtTargetId, playheadFrame, outputAspect]);
+  }, [cameraPose, workspace, fovDegrees, lookAtTargetId, playheadFrame, outputAspect, cameraLocked]);
 
   useEffect(() => {
     const api = sceneApiRef.current;
@@ -893,10 +1078,27 @@ export const StageViewport = ({
     }
 
     if (pathSamples.length > 0) {
-      api.pathLine.geometry.dispose();
-      api.pathLine.geometry = new THREE.BufferGeometry().setFromPoints(
+      const geometry = new THREE.BufferGeometry().setFromPoints(
         pathSamples.map((point) => new THREE.Vector3(...point)),
       );
+      const material = api.pathLine.material as THREE.LineBasicMaterial;
+      if (pathColors && pathColors.length === pathSamples.length) {
+        const colors = new Float32Array(pathColors.length * 3);
+        pathColors.forEach((color, index) => {
+          colors[index * 3] = color[0];
+          colors[index * 3 + 1] = color[1];
+          colors[index * 3 + 2] = color[2];
+        });
+        geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+        material.vertexColors = true;
+        material.color.setHex(0xffffff);
+      } else {
+        material.vertexColors = false;
+        material.color.setHex(0x79c0ff);
+      }
+      material.needsUpdate = true;
+      api.pathLine.geometry.dispose();
+      api.pathLine.geometry = geometry;
       const current = cameraPose?.position ?? pathSamples[0];
       api.playheadMarker.position.set(...current);
     }
@@ -909,7 +1111,7 @@ export const StageViewport = ({
         lookTarget.position.clone(),
       ]);
     }
-  }, [keyframes, playheadFrame, cameraViz, pathSamples, lookAtTargetId, workspace, cameraPose]);
+  }, [keyframes, playheadFrame, cameraViz, pathSamples, pathColors, lookAtTargetId, workspace, cameraPose]);
 
   useEffect(() => {
     const api = sceneApiRef.current;
@@ -926,6 +1128,7 @@ export const StageViewport = ({
     }
     let disposed = false;
     const loaded: THREE.Object3D[] = [];
+    const actorIds: string[] = [];
     sceneObjects.forEach((item) => {
       const group = new THREE.Group();
       group.name = item.id;
@@ -938,17 +1141,33 @@ export const StageViewport = ({
       group.add(mesh);
       if (item.kind === "light") group.add(new THREE.PointLight(item.color, item.intensity, 20));
       if (item.representation === "mesh" && item.uri) {
-        new GLTFLoader().load(resolveMediaUri(item.uri), (gltf) => {
-          if (disposed) { disposeObject(gltf.scene); return; }
+        const hash = importedActorHash(item.uri);
+        const loader = new GLTFLoader();
+        const glb = hash ? readGeometry(hash).then((bytes) => loader.parseAsync(bytes, "")) : loader.loadAsync(resolveMediaUri(item.uri));
+        void glb.then((gltf) => {
+          if (disposed) { disposeMeshResources(gltf.scene); return; }
           group.remove(mesh);
           mesh.geometry.dispose();
           (mesh.material as THREE.Material).dispose();
-          group.add(gltf.scene);
-        }, undefined, () => {
-          if (!disposed) onLoadStateChangeRef.current?.("missing_artifact", `${item.name}: 3D 에셋을 불러올 수 없습니다.`);
+          if (item.kind !== "actor") { group.add(gltf.scene); return; }
+          const binding = bindViewportActorMotion(group, gltf.scene);
+          api.actorBindings.set(item.id, binding);
+          onActorSupportRef.current?.(item.id, binding.support);
+          const rig = readGlbRig(gltf.scene);
+          if (rig.bones.length === 0) return;
+          onRiggedModelLoadedRef.current?.({ objectId: item.id, ...rig });
+        }).catch(() => {
+          if (!disposed) {
+            if (item.kind === "actor") onActorSupportRef.current?.(item.id, { body: false, face: false });
+            onLoadStateChangeRef.current?.("missing_artifact", `${item.name}: 3D 에셋을 불러올 수 없습니다.`);
+          }
         });
+      } else if (item.kind === "actor") {
+        onActorSupportRef.current?.(item.id, { body: false, face: false });
       }
+      if (item.kind === "actor") actorIds.push(item.id);
       group.position.set(...item.position);
+      group.rotation.order = EULER_ORDER;
       group.rotation.set(...item.rotation);
       group.scale.set(...item.scale);
       group.visible = item.visible;
@@ -961,7 +1180,11 @@ export const StageViewport = ({
     return () => {
       disposed = true;
       api.transform.detach();
-      loaded.forEach((object) => { api.scene.remove(object); disposeObject(object); });
+      for (const id of actorIds) {
+        api.actorBindings.delete(id);
+        onActorSupportRef.current?.(id, null);
+      }
+      loaded.forEach((object) => { api.scene.remove(object); disposeMeshResources(object); });
     };
   }, [sceneObjects.map((item) => `${item.id}:${item.representation}:${item.uri}:${item.kind}`).join("|"), world?.id]);
 
@@ -977,6 +1200,7 @@ export const StageViewport = ({
       object.userData.locked = item.locked;
       if (!api.dragging) {
         object.position.set(...item.position);
+        object.rotation.order = EULER_ORDER;
         object.rotation.set(...item.rotation);
         object.scale.set(...item.scale);
       }
@@ -1103,29 +1327,26 @@ export const StageViewport = ({
 
     const loader = new GLTFLoader();
     const uri = resolveMediaUri(previewUri);
-    loader.load(
-      uri,
-      (gltf) => {
+    void readImportedShotWorld(previewUri).then((bytes) => bytes ? loader.parseAsync(bytes, "") : loader.loadAsync(uri)).then((gltf) => {
         if (token !== loadTokenRef.current || !sceneApiRef.current) {
+          disposeObject(gltf.scene);
           return;
         }
         setShowingImageProxy(false);
         attachWorldRoot(gltf.scene);
         onLoadStateChangeRef.current?.("ready");
-      },
-      undefined,
-      () => {
+      }).catch((error: unknown) => {
         if (token !== loadTokenRef.current || !sceneApiRef.current) {
           return;
         }
+        console.error("World mesh failed to load", error);
         if (fallbackImageUri) {
           attachImageProxy(fallbackImageUri, "Mesh artifact missing; showing image proxy.");
           return;
         }
         setShowingImageProxy(false);
         onLoadStateChangeRef.current?.("missing_artifact", "메시 artifact를 찾을 수 없습니다.");
-      },
-    );
+      });
     return () => {
       loadTokenRef.current += 1;
     };
@@ -1154,11 +1375,13 @@ export const StageViewport = ({
     const shot = sceneApiRef.current.shotCamera;
     const source = workspaceRef.current === "record" ? sceneApiRef.current.camera : shot;
     source.updateMatrixWorld(true);
-    source.rotation.setFromQuaternion(source.quaternion);
+    source.rotation.order = EULER_ORDER;
+    source.rotation.setFromQuaternion(source.quaternion, EULER_ORDER);
     onCapturePose({
       camera: {
         position: [source.position.x, source.position.y, source.position.z],
         rotation: [source.rotation.x, source.rotation.y, source.rotation.z],
+        quaternion: [source.quaternion.x, source.quaternion.y, source.quaternion.z, source.quaternion.w],
         focalLength: cameraPose?.focalLength ?? 35,
       },
       objects: objectTransformsCaptured,
@@ -1191,7 +1414,9 @@ export const StageViewport = ({
       liveOverrideRef.current = false;
       if (cameraPose) {
         api.camera.position.set(...cameraPose.position);
-        api.camera.rotation.set(...cameraPose.rotation);
+        api.camera.rotation.order = EULER_ORDER;
+        if (cameraPose.quaternion) api.camera.quaternion.set(...cameraPose.quaternion);
+        else api.camera.rotation.set(...cameraPose.rotation);
         api.shotCamera.position.copy(api.camera.position);
         api.shotCamera.quaternion.copy(api.camera.quaternion);
       }
@@ -1215,12 +1440,17 @@ export const StageViewport = ({
     <div className="stage-viewport" ref={containerRef}>
       <div className="viewport-overlay">
         <span className={workspace === "record" ? "rec-badge mode-record" : "mode-build"}>
-          {workspace === "record" ? "RECORD" : "BUILD"}
+          {cameraLocked ? "CAMERA" : recording ? "RECORD" : "BUILD"}
         </span>
         {workspace === "record" && <span className="record-aspect-hud">{outputAspectLabel}</span>}
         <span>{hud}</span>
         <span>{viewportPreviewBadge(previewPlan, showingImageProxy)}</span>
       </div>
+      {rigWarnings.length > 0 && (
+        <div className="viewport-rig-warnings" role="status" aria-live="polite">
+          {rigWarnings.map((warning, index) => <p key={`${warning}:${index}`}>{warning}</p>)}
+        </div>
+      )}
       {showCameraPreview && workspace === "build" && (
         <div className="scene-camera-preview-label">Camera preview · {outputAspectLabel}</div>
       )}

@@ -60,6 +60,8 @@ import { runGenerativeRefinementStub } from "../core/render/refinementStub";
 import type { WorldAsset, WorldMode } from "../core/world/types";
 import { assetFromWorld } from "../domain/assets";
 import { projectWithShots } from "../domain/project/migrateToShot";
+import { PHASE1_SHOT_ID } from "../domain/sceneAuthoring/phase1Demo";
+import { applyCommand } from "../application/commands/apply";
 import type { ShotCommand } from "../domain/shot";
 import { environmentFromWorld } from "../application/services/shotEnvironment";
 import { startShotRender, type ShotRenderJobView } from "../application/services/runShotRender";
@@ -249,6 +251,8 @@ type EditorAction =
   | { type: "key-object"; clipId: string; elementId: string; pose: ObjectPose; frame: number }
   | { type: "delete-object-key"; clipId: string; elementId: string; frame: number }
   | { type: "add-empty-clip" }
+  | { type: "open-phase1-demo" }
+  | { type: "select-stage-shot"; clipId: string }
   | { type: "delete-clip"; clipId: string }
   | { type: "delete-node"; nodeId: string }
   | { type: "connect-nodes"; clipId: string; sourceNodeId: string; targetNodeId: string; label?: string }
@@ -923,33 +927,43 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         parameters: updated, timestamp: now(), downstreamNodeIds: [`node-${clip.id}-render`] });
       return runDomainCommand(state, { type: "CREATE_NODE", node, clipGraphId: clip.clipGraphId }, `Object track created at ${action.frame}f.`);
     }
+    case "open-phase1-demo":
     case "add-empty-clip": {
-      const clipId = makeId("clip");
+      const demo = action.type === "open-phase1-demo";
+      const clipId = demo ? PHASE1_SHOT_ID : makeId("clip");
+      if (demo && project.clips[clipId]) return reducer(state, { type: "select-stage-shot", clipId });
+      const installed = demo ? applyCommand(project, { type: "INSTALL_PHASE1_DEMO" }, { timestamp: now() }) : undefined;
+      if (installed && !installed.result.ok) return { ...state, ui: appendWorkflowLog(state.ui, "검증 샷을 열 수 없습니다.") };
+      const base = installed?.project ?? project;
+      const demoShot = demo ? base.shots?.[clipId] : undefined;
       const graphId = makeId("graph");
       const sourceClip = project.clips[state.ui.selectedClipId];
-      const inheritWorldId =
+      const inheritedWorldId =
         sourceClip?.linkedWorldId && project.worlds[sourceClip.linkedWorldId]
           ? sourceClip.linkedWorldId
           : undefined;
-      const clipNodes = createClipNodes(clipId, inheritWorldId);
-      const nodes = { ...project.nodes };
+      const linkedWorldId = demo ? demoShot?.environment?.worldId : inheritedWorldId;
+      const clipNodes = createClipNodes(clipId, linkedWorldId);
+      const nodes = { ...base.nodes };
       clipNodes.forEach((node) => {
         nodes[node.id] = node;
       });
+      const clipStart = activeSequence.visibleRange[1] + 12;
+      const clipDuration = demoShot?.time.durationFrames ?? 120;
       const clip: TimelineClip = {
         id: clipId,
-        name: `Empty Clip ${activeSequence.clipIds.length + 1}`,
+        name: demoShot?.name ?? `Empty Clip ${activeSequence.clipIds.length + 1}`,
         trackId: "V1",
-        start: activeSequence.visibleRange[1] + 12,
-        end: activeSequence.visibleRange[1] + 132,
-        duration: 120,
-        startFrame: activeSequence.visibleRange[1] + 12,
-        durationFrames: 120,
+        start: clipStart,
+        end: clipStart + clipDuration,
+        duration: clipDuration,
+        startFrame: clipStart,
+        durationFrames: clipDuration,
         sourceInFrame: 0,
         playbackRate: 1,
         sourceType: "empty",
-        linkedWorldId: inheritWorldId,
-        worldMode: inheritWorldId ? "referenced" : undefined,
+        linkedWorldId,
+        worldMode: linkedWorldId ? "referenced" : undefined,
         clipGraphId: graphId,
         cameraPathNodeId: cameraPathNodeIdForClip(clipId),
         performancePlanNodeId: performancePlanNodeIdForClip(clipId),
@@ -961,25 +975,25 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         variants: [{ id: "main", name: "Main", overridePatch: {} }],
       };
       const clipGraphs = {
-        ...project.clipGraphs,
+        ...base.clipGraphs,
         [graphId]: {
           id: graphId,
           clipId,
           rootNodeId: `node-${clipId}-clip`,
           nodeIds: clipNodes.map((node) => node.id),
           edges: createClipEdges(clipId),
-          previewFrames: ["Empty clip ready"],
+          previewFrames: demo ? [] : ["Empty clip ready"],
           finalFrames: [],
           keyframeNodeIds: [],
         },
       };
       let nextProject: Project = {
-        ...project,
-        clips: { ...project.clips, [clipId]: clip },
+        ...base,
+        clips: { ...base.clips, [clipId]: clip },
         clipGraphs,
         nodes,
         sequences: {
-          ...project.sequences,
+          ...base.sequences,
           [activeSequence.id]: {
             ...activeSequence,
             clipIds: [...activeSequence.clipIds, clipId],
@@ -987,21 +1001,22 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
           },
         },
       };
-      if (inheritWorldId) {
+      if (!demo && inheritedWorldId) {
         nextProject = linkWorldToClip(nextProject, {
           clipId,
-          worldId: inheritWorldId,
+          worldId: inheritedWorldId,
           timestamp: now(),
         }).project;
       }
       nextProject = updateProjectMetadata(nextProject);
-      const worldName = inheritWorldId ? nextProject.worlds[inheritWorldId]?.name : undefined;
+      if (demo) return reducer({ ...state, project: nextProject }, { type: "select-stage-shot", clipId });
+      const worldName = inheritedWorldId ? nextProject.worlds[inheritedWorldId]?.name : undefined;
       return {
         project: nextProject,
         ui: appendWorkflowLog(
           { ...state.ui, selectedClipId: clipId, selectedNodeId: `node-${clipId}-clip` },
-          inheritWorldId
-            ? `${clip.name} created and linked to shared world ${worldName ?? inheritWorldId}.`
+          inheritedWorldId
+            ? `${clip.name} created and linked to shared world ${worldName ?? inheritedWorldId}.`
             : `${clip.name} created with local ClipGraph stub.`,
         ),
       };
@@ -1167,6 +1182,17 @@ const reducer = (state: EditorState, action: EditorAction): EditorState => {
         };
       }
       return { ...state, ui: WorkspaceFocus.focusClipGraph(project, state.ui, action.clipId) };
+    }
+    case "select-stage-shot": {
+      const clip = project.clips[action.clipId];
+      if (!clip) return state;
+      const owner = activeSequence.clipIds.includes(clip.id) ? activeSequence
+        : Object.values(project.sequences).find((sequence) => sequence.clipIds.includes(clip.id));
+      if (!owner) return state;
+      const ui = WorkspaceFocus.focusClipGraph(project, state.ui, clip.id);
+      return reducer({ ...state, project: { ...project, activeSequenceId: owner.id }, ui: { ...ui, mainPanel: state.ui.mainPanel } }, {
+        type: "scrub-playhead", playhead: clipStartFrame(clip),
+      });
     }
     case "select-node":
       return { ...state, ui: { ...state.ui, selectedNodeId: action.nodeId } };
@@ -2717,7 +2743,7 @@ export const EditorStoreProvider = ({ children }: { children: ReactNode }) => {
       const world = shot?.environment?.worldId ? current.project.worlds[shot.environment.worldId] : undefined;
       void startShotRender({
         shot,
-        environment: environmentFromWorld(world),
+        environment: environmentFromWorld(world, shot?.environment?.revisionId),
         outputAspect: action.outputAspect,
         lyraCloudUrl: import.meta.env.VITE_LYRA_CLOUD_URL,
         signal: controller.signal,
