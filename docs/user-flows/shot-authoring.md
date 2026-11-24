@@ -107,14 +107,22 @@ World 선택·생성
 - Workflow의 Camera 또는 Next 버튼을 누르면 Stage Motion으로 이동한다.
 - Record / Play / `K` / Take 선택 바가 보인다.
 
-#### Android 휴대폰으로 카메라 테이크 기록
+#### 휴대폰으로 카메라 테이크 기록
 
-1. `apps/editor`에서 `npm run dev -- --host 127.0.0.1`을 실행한다. 데스크톱 Chrome에서 에디터를 연다.
-2. ARCore 지원 Android에서 Google Play Services for AR과 Chrome을 활성화한다. USB 디버깅을 켜고 휴대폰을 데스크톱에 연결한다.
-3. 데스크톱 Chrome의 `chrome://inspect/#devices`에서 **Port forwarding**을 열고 휴대폰 포트 `4173`을 `127.0.0.1:4173`에 연결한다. 에디터가 다른 포트를 사용 중이면 양쪽 포트를 맞춘다. [Google WebXR 요구사항](https://developers.google.com/ar/develop/webxr/requirements)
-4. 에디터에서 샷을 선택하고 **Camera trajectory → Connect phone camera**를 누른다. **Phone link**를 Android Chrome에서 열고 데스크톱 패널을 열어 둔다.
-5. 휴대폰에서 **Start AR**을 누른다. 녹화가 시작될 때까지 시작 위치와 방향을 유지한다. **Stop and send**를 누르거나 샷 길이에 도달하면 테이크가 데스크톱으로 전송된다.
+1. 데스크톱의 `PATH`에 `cloudflared`를 설치하거나 Windows 실행 파일을 프로젝트의 `.local/cloudflared/cloudflared.exe`에 둔다. [Cloudflare 다운로드](https://developers.cloudflare.com/tunnel/downloads/)
+2. `apps/editor`에서 `npm run dev`를 실행하고 `http://localhost:4173`에서 에디터를 연다.
+3. 샷을 선택하고 **Camera trajectory → Connect phone with QR**을 누른다. 페어링할 때만 촬영 페이지와 해당 테이크 전송을 위한 임시 Cloudflare HTTPS 주소가 열린다.
+4. 휴대폰 기본 카메라로 QR을 스캔한다. Android는 Chrome에서 **Start AR**을 누른다. iPhone은 **Open SceneForge Camera**를 누른 뒤 앱에서 **Start AR**을 누른다. 처음에는 카메라 권한을 허용한다. [Android WebXR 요구사항](https://developers.google.com/ar/develop/webxr/requirements)
+5. 녹화가 시작될 때까지 시작 위치와 방향을 유지한다. **Stop and send**를 누르거나 샷 길이에 도달하면 테이크가 데스크톱으로 전송된다. 테이크가 도착할 때까지 데스크톱의 페어링 패널을 열어 둔다.
 6. 데스크톱에서 새 **Phone camera** 테이크를 재생한다. 첫 6DoF 포즈의 위치와 수평 방향이 기존 샷 카메라의 첫 프레임에 맞춰지고, 이후 이동은 미터 단위로 기록된다.
+
+USB로 연결하려면 Chrome DevTools에서 휴대폰 포트 `4173`을 데스크톱 에디터 포트로 포워딩한다. **Connect phone via USB**를 누르고 안내된 **Phone link**를 Android Chrome에서 연다. [Chrome USB 포트 포워딩](https://developers.google.com/ar/develop/webxr/requirements)
+
+##### iPhone 앱 설치
+
+1. Mac에서 [SceneForgeCamera.xcodeproj](../../apps/ios/SceneForgeCamera.xcodeproj)를 Xcode로 연다. ARKit 월드 추적을 지원하는 iOS 16 이상 iPhone을 연결한다.
+2. **Signing & Capabilities**에서 팀을 선택한다. iPhone을 실행 대상으로 선택하고 **Run**을 눌러 SceneForge Camera를 설치한다. 필요하면 iPhone에서 개발자 모드를 켠다. [Apple 기기에서 앱 실행](https://developer.apple.com/documentation/xcode/running-your-app-in-simulator-or-on-a-device)
+3. 앱 설치 후 데스크톱 에디터에서 새 QR을 만들고 iPhone으로 스캔한다. 촬영 중에는 세로 화면을 기준으로 위치, 회전, 렌즈 투영값, 추적 상태를 테이크에 기록한다. [Apple ARCamera](https://developer.apple.com/documentation/arkit/arcamera)
 
 추적이 끊기면 마지막 정상 포즈를 유지한다. 복구 직후 위치 점프는 추정 보정과 함께 저장한다. WebXR 추적 원점이 재설정되면 그 시점까지의 테이크를 전송한다.
 

@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright-core");
 const origin = process.env.SCENEFORGE_ORIGIN || "http://localhost:4173";
+const ios = process.argv.includes("--ios");
+const qr = ios || process.argv.includes("--qr");
 const output = resolve(process.env.SCENEFORGE_EVIDENCE_DIR || fileURLToPath(new URL("../../../.local/phase2", import.meta.url)));
 await mkdir(output, { recursive: true });
 
@@ -35,21 +37,36 @@ try {
   await stage.getByRole("button", { name: "Scene", exact: true }).click();
   await picker.selectOption("shot-phase1-edit-review");
   await stage.getByRole("button", { name: "Camera trajectory" }).click();
-  await stage.getByRole("button", { name: "Connect phone camera" }).click();
+  await stage.getByRole("button", { name: "Connect phone via USB" }).click();
   const link = stage.getByRole("textbox", { name: "Phone link" });
   await link.waitFor();
   const cancelled = new URL(await link.inputValue());
   const metadata = `${origin}/api/mobile-camera/take`;
   await stage.getByRole("button", { name: "Cancel pairing" }).click();
-  await stage.getByRole("button", { name: "Connect phone camera" }).click();
-  await link.waitFor();
+  await stage.getByRole("button", { name: qr ? "Connect phone with QR" : "Connect phone via USB" }).click();
+  await link.waitFor({ timeout: 75_000 }).catch(async (error) => {
+    const detail = await stage.getByRole("region", { name: "Phone camera" }).innerText();
+    throw new Error(detail, { cause: error });
+  });
   assert.equal((await fetch(metadata, { headers: { Authorization: `Bearer ${cancelled.hash.slice(1)}` } })).status, 404);
   const connected = new URL(await link.inputValue());
+  if (qr) {
+    assert.equal(connected.protocol, "https:");
+    assert.match(connected.hostname, /\.trycloudflare\.com$/);
+    const image = stage.getByRole("img", { name: "Phone camera pairing QR code" });
+    await image.waitFor();
+    assert(await image.evaluate((element) => element.complete && element.naturalWidth > 0));
+    assert.equal((await fetch(connected.origin)).status, 404);
+    assert.equal((await fetch(`${connected.origin}/api/mobile-camera/pair`, { method: "POST" })).status, 404);
+  }
   assert.equal((await fetch(`${origin}/api/mobile-camera/pair`, { headers: { Authorization: `Bearer ${connected.hash.slice(1)}` } })).status, 404);
   await editor.screenshot({ path: resolve(output, "desktop-pairing.png"), mask: [link], maskColor: "#37463d" });
 
-  const mobile = await browser.newContext({ viewport: { width: 412, height: 800 }, isMobile: true, hasTouch: true });
-  await mobile.addInitScript(() => {
+  const mobile = await browser.newContext({
+    viewport: { width: 412, height: 800 }, isMobile: true, hasTouch: true,
+    ...(ios ? { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1" } : {}),
+  });
+  if (!ios) await mobile.addInitScript(() => {
     class SimulatedSession extends EventTarget {
       index = 0;
       ended = false;
@@ -88,10 +105,37 @@ try {
   const phone = await mobile.newPage();
   phone.on("pageerror", (error) => errors.push(error.message));
   await phone.goto(connected.href);
-  await phone.getByText(/Paired · .* fps/).waitFor();
-  await phone.screenshot({ path: resolve(output, "phone-paired.png") });
-  await phone.getByRole("button", { name: "Start AR" }).click();
-  await phone.getByRole("button", { name: "Take sent" }).waitFor({ timeout: 25_000 });
+  if (ios) {
+    const handoff = phone.getByRole("link", { name: "Open SceneForge Camera" });
+    const launch = new URL(await handoff.getAttribute("href"));
+    assert.equal(launch.protocol, "sceneforge-camera:");
+    assert.equal(launch.host, "pair");
+    assert.equal(launch.searchParams.get("link"), connected.href);
+    await phone.screenshot({ path: resolve(output, "phone-paired.png") });
+    const headers = { Authorization: `Bearer ${connected.hash.slice(1)}`, "Content-Type": "application/json" };
+    const takeUrl = `${connected.origin}/api/mobile-camera/take`;
+    const clockResponse = await fetch(takeUrl, { headers });
+    assert.equal(clockResponse.status, 200);
+    const clock = await clockResponse.json();
+    const frames = Array.from({ length: clock.durationFrames }, (_, index) => {
+      const angle = index * 0.002;
+      const c = Math.cos(angle);
+      const s = Math.sin(angle);
+      const z = 8 + (index >= 14 ? 0.4 : 0) + (index >= 25 ? 0.3 : 0);
+      return {
+        timestampNs: Math.round(index * 1e9 / clock.fps),
+        trackingState: index >= 10 && index < 14 || index >= 22 && index < 25 ? "not_available" : "normal",
+        pose: { kind: "matrix", transform: [c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 4 + index * 0.006, 2, z, 1] },
+      };
+    });
+    const take = { framework: "arkit", cameraLocal: "gl", frames, intrinsics: { imageSize: [1080, 1920], fx: 810, fy: 1968, cx: 594, cy: 1056 } };
+    assert.equal((await fetch(takeUrl, { method: "POST", headers, body: JSON.stringify(take) })).status, 204);
+  } else {
+    await phone.getByText(/Paired · .* fps/).waitFor();
+    await phone.screenshot({ path: resolve(output, "phone-paired.png") });
+    await phone.getByRole("button", { name: "Start AR" }).click();
+    await phone.getByRole("button", { name: "Take sent" }).waitFor({ timeout: 25_000 });
+  }
   await stage.getByText("Phone take saved. The shot camera is selected.").waitFor();
   await stage.getByRole("button", { name: "Close panel" }).click();
   await stage.getByRole("button", { name: "재생", exact: true }).click();
@@ -124,7 +168,7 @@ try {
   const shot = JSON.parse(files.get("scene.json"));
   const take = shot.camera.takes.find((take) => take.id === manifest.cameraId);
   assert.equal(take.name, "Phone camera");
-  assert.equal(take.calibration.arFramework, "webxr");
+  assert.equal(take.calibration.arFramework, ios ? "arkit" : "webxr");
   assert.equal(manifest.fps, shot.time.fps);
   assert.equal(take.samples[0].timecode, "00:00:00:00");
   assert.equal(camera.trajectory.length, shot.time.durationFrames);
@@ -144,7 +188,8 @@ try {
   }
   assert.deepEqual(errors, []);
   const summary = {
-    device: "Simulated WebXR poses in Android-sized Chromium viewport",
+    device: ios ? "iPhone browser handoff and synthetic ARKit poses" : "Simulated WebXR poses in Android-sized Chromium viewport",
+    pairing: qr ? "QR over Cloudflare HTTPS" : "USB localhost",
     cameraTake: take.id,
     fps: manifest.fps,
     frames: camera.trajectory.length,

@@ -9,11 +9,19 @@ export const mobilePairSettingsSchema = z.object({
   fps: z.number().int().positive(),
   durationFrames: z.number().int().positive(),
 });
-export const mobilePairSchema = z.object({
+export const mobilePairRequestSchema = mobilePairSettingsSchema.extend({
+  transport: z.enum(["qr", "usb"]).default("usb"),
+});
+const mobilePairBaseSchema = z.object({
   code: mobilePairCodeSchema,
   editorKey: mobilePairCodeSchema,
   settings: mobilePairSettingsSchema,
 });
+export const mobilePairSchema = z.discriminatedUnion("transport", [
+  mobilePairBaseSchema.extend({ transport: z.literal("qr"), phoneOrigin: z.url({ protocol: /^https$/ }) }),
+  mobilePairBaseSchema.extend({ transport: z.literal("usb") }),
+]);
 
 export type MobilePair = z.infer<typeof mobilePairSchema>;
 export type MobilePairSettings = z.infer<typeof mobilePairSettingsSchema>;
+export type MobilePairTransport = MobilePair["transport"];

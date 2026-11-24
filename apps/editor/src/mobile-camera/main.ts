@@ -7,11 +7,14 @@ type Intrinsics = NonNullable<MobileCameraSession["intrinsics"]>;
 
 const overlayElement = document.querySelector("#camera-overlay");
 const status = document.querySelector("#camera-status");
-const action = document.querySelector("#camera-action");
-if (!(overlayElement instanceof HTMLElement) || !(status instanceof HTMLElement) || !(action instanceof HTMLButtonElement)) {
+const actionElement = document.querySelector("#camera-action");
+const nativeLink = document.querySelector("#camera-native");
+if (!(overlayElement instanceof HTMLElement) || !(status instanceof HTMLElement) || !(actionElement instanceof HTMLButtonElement) || !(nativeLink instanceof HTMLAnchorElement)) {
   throw new Error("Phone camera controls are missing.");
 }
 const overlay = overlayElement;
+const action = actionElement;
+const iosApp = nativeLink;
 
 const message = (text: string) => { if (status.textContent !== text) status.textContent = text; };
 const button = (label: string, run?: () => void) => {
@@ -22,6 +25,7 @@ const button = (label: string, run?: () => void) => {
 
 const route = `${MOBILE_CAMERA_API}/take`;
 const code = mobilePairCodeSchema.safeParse(location.hash.slice(1));
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
 
 const viewIntrinsics = (view: XRView, viewport: XRViewport): Intrinsics => {
   const projection = view.projectionMatrix;
@@ -148,9 +152,20 @@ async function connect() {
   if (response.status === 404) return message("This pairing ended. Open a new phone link from the editor.");
   if (!response.ok) throw new Error("Couldn't reach the editor.");
   const settings = mobilePairSettingsSchema.parse(await response.json());
+  if (isIOS) {
+    action.hidden = true;
+    if (location.protocol !== "https:" || !/^[a-z0-9-]+\.trycloudflare\.com$/.test(location.hostname)) {
+      return message("Use Connect phone with QR in the editor to pair SceneForge Camera on iPhone.");
+    }
+    const handoff = new URL("sceneforge-camera://pair");
+    handoff.searchParams.set("link", location.href);
+    iosApp.href = handoff.href;
+    iosApp.hidden = false;
+    return message("Open the installed SceneForge Camera app to record this take with ARKit.");
+  }
   const xr = navigator.xr;
   if (!window.isSecureContext || !xr || !await xr.isSessionSupported("immersive-ar")) {
-    return message("6DoF needs Chrome on an ARCore-capable Android phone and a secure connection. Use USB port forwarding or trusted HTTPS.");
+    return message("Open the QR link in Chrome on an ARCore-capable Android phone with Google Play Services for AR enabled.");
   }
   message(`Paired · ${settings.durationFrames} frames at ${settings.fps} fps. Start AR to record.`);
   button("Start AR", () => void start(xr, settings, authorization));

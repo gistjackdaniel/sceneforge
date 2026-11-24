@@ -63,6 +63,7 @@
 .scene-drawer summary { cursor: pointer; color: #c4cec6; font-size: 11px; }
 .scene-phone-camera { padding-bottom: 12px; border-bottom: 1px solid var(--scene-border); }
 .scene-phone-camera button { width: 100%; }
+.scene-phone-qr { display: block; width: min(100%, 205px); height: auto; aspect-ratio: 1; margin: 0 auto; image-rendering: pixelated; }
 .scene-workspace .scene-layer { width: 100%; display: flex; align-items: center; gap: 3px; border-radius: 5px; min-height: 36px; margin: 3px 0; padding: 1px 3px; }
 .scene-layer.is-selected { background: #2e3b32; }
 .scene-layer > button:first-child { justify-content: flex-start; flex: 1; min-width: 0; }

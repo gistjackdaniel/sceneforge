@@ -1,11 +1,12 @@
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import qrcode from "qrcode-generator";
 import { mobileCameraTakeCommand } from "../../application/services/mobileCameraTake";
-import { MOBILE_CAMERA_API, MOBILE_CAMERA_PAGE, mobilePairSchema, type MobilePair } from "../../domain/shot/mobileCaptureProtocol";
+import { MOBILE_CAMERA_API, MOBILE_CAMERA_PAGE, mobilePairSchema, type MobilePair, type MobilePairTransport } from "../../domain/shot/mobileCaptureProtocol";
 import type { Shot, ShotCommand } from "../../domain/shot";
 
 const route = `${MOBILE_CAMERA_API}/pair`;
 const editorHeaders = ({ code, editorKey }: MobilePair) => ({ Authorization: `Bearer ${code}.${editorKey}` });
-const closePair = (pair: MobilePair) => fetch(route, { method: "DELETE", headers: editorHeaders(pair) }).catch(() => undefined);
+const closePair = (pair: MobilePair) => fetch(route, { method: "DELETE", headers: editorHeaders(pair), keepalive: true }).catch(() => undefined);
 
 type Connection = { kind: "idle" } | { kind: "linking" } | { kind: "waiting"; pair: MobilePair };
 
@@ -18,6 +19,19 @@ export function PhoneCameraControls({ shot, disabled, onTake }: {
   const [notice, setNotice] = useState("");
   const startRequest = useRef<AbortController | undefined>(undefined);
   const pair = connection.kind === "waiting" ? connection.pair : undefined;
+  const phone = useMemo(() => {
+    if (!pair) return undefined;
+    const url = new URL(MOBILE_CAMERA_PAGE, pair.transport === "qr" ? pair.phoneOrigin : window.location.href);
+    url.hash = pair.code;
+    if (pair.transport === "usb") {
+      if (url.hostname === "127.0.0.1" || url.hostname === "[::1]") url.hostname = "localhost";
+      return { url: url.href };
+    }
+    const qr = qrcode(0, "M");
+    qr.addData(url.href);
+    qr.make();
+    return { url: url.href, image: qr.createDataURL(5, 20) };
+  }, [pair]);
   const acceptTake = useEffectEvent((session: unknown, livePair: MobilePair) => {
     if (shot.time.fps !== livePair.settings.fps || shot.time.durationFrames !== livePair.settings.durationFrames) {
       throw new Error("The shot clock changed. Pair the phone again.");
@@ -31,6 +45,7 @@ export function PhoneCameraControls({ shot, disabled, onTake }: {
   useEffect(() => {
     if (!pair) return;
     const abort = new AbortController();
+    const release = () => { void closePair(pair); };
     let timer: number;
     const poll = async () => {
       try {
@@ -49,14 +64,16 @@ export function PhoneCameraControls({ shot, disabled, onTake }: {
       if (!abort.signal.aborted) setConnection({ kind: "idle" });
     };
     void poll();
+    window.addEventListener("pagehide", release);
     return () => {
       abort.abort();
       window.clearTimeout(timer);
-      void closePair(pair);
+      window.removeEventListener("pagehide", release);
+      release();
     };
   }, [pair]);
 
-  const createLink = async () => {
+  const createLink = async (transport: MobilePairTransport) => {
     const abort = new AbortController();
     startRequest.current = abort;
     setNotice("");
@@ -65,10 +82,14 @@ export function PhoneCameraControls({ shot, disabled, onTake }: {
       const result = await fetch(route, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fps: shot.time.fps, durationFrames: shot.time.durationFrames }),
+        body: JSON.stringify({ fps: shot.time.fps, durationFrames: shot.time.durationFrames, transport }),
         signal: abort.signal,
       });
-      if (!result.ok) throw new Error("Couldn't create a phone link. Use the SceneForge editor server.");
+      if (!result.ok) {
+        const problem: unknown = await result.json().catch(() => undefined);
+        throw new Error(problem && typeof problem === "object" && "message" in problem && typeof problem.message === "string"
+          ? problem.message : "Couldn't create a phone link. Use the SceneForge editor server.");
+      }
       const created = mobilePairSchema.parse(await result.json());
       if (!abort.signal.aborted) setConnection({ kind: "waiting", pair: created });
       else void closePair(created);
@@ -79,18 +100,27 @@ export function PhoneCameraControls({ shot, disabled, onTake }: {
     }
   };
 
-  const phoneUrl = pair ? new URL(MOBILE_CAMERA_PAGE, window.location.href) : undefined;
-  if (phoneUrl && pair) {
-    phoneUrl.hash = pair.code;
-    if (phoneUrl.hostname === "127.0.0.1" || phoneUrl.hostname === "[::1]") phoneUrl.hostname = "localhost";
-  }
+  const cancel = () => {
+    startRequest.current?.abort();
+    setConnection({ kind: "idle" });
+  };
 
   return <section className="scene-phone-camera" aria-label="Phone camera">
-    {phoneUrl ? <>
-      <label>Phone link<input readOnly value={phoneUrl.href} onFocus={(event) => event.target.select()} /></label>
-      <p className="scene-note">Open this link in Android Chrome using USB port forwarding. Keep this panel open until the take arrives.</p>
-      <button onClick={() => setConnection({ kind: "idle" })}>Cancel pairing</button>
-    </> : <button disabled={disabled || connection.kind === "linking"} onClick={() => void createLink()}>Connect phone camera</button>}
+    {phone ? <>
+      {phone.image && <img className="scene-phone-qr" src={phone.image} alt="Phone camera pairing QR code" />}
+      <p className="scene-note">{phone.image
+        ? "Scan with your phone’s camera. Open Chrome on Android or SceneForge Camera on iPhone. Keep this panel open."
+        : "Open the link in Android Chrome using USB port forwarding. Keep this panel open."}</p>
+      <label>Phone link<input readOnly value={phone.url} onFocus={(event) => event.target.select()} /></label>
+      <button onClick={cancel}>Cancel pairing</button>
+    </> : connection.kind === "linking" ? <>
+      <p className="scene-note" role="status">Creating phone link…</p>
+      <button onClick={cancel}>Cancel pairing</button>
+    </> : <>
+      <button className="scene-primary" disabled={disabled} onClick={() => void createLink("qr")}>Connect phone with QR</button>
+      <p className="scene-note">Uses a temporary Cloudflare HTTPS link for the phone camera.</p>
+      <button disabled={disabled} onClick={() => void createLink("usb")}>Connect phone via USB</button>
+    </>}
     {notice && <p className="scene-note" role="status">{notice}</p>}
   </section>;
 }
