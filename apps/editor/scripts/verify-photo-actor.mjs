@@ -9,6 +9,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright-core")
 const origin = process.env.SCENEFORGE_ORIGIN || "http://127.0.0.1:4173";
 const photo = process.env.SCENEFORGE_PHOTO;
 const webcam = process.env.SCENEFORGE_FAKE_CAMERA;
+const mode = process.env.SCENEFORGE_PHOTO_MODE || "face";
 const build = process.env.SCENEFORGE_PHOTO_BODY || "male";
 const prompt = process.env.SCENEFORGE_KIMODO_PROMPT || "A person raises both arms above the head";
 const output = resolve(process.env.SCENEFORGE_EVIDENCE_DIR || fileURLToPath(new URL("../../../artifacts/photo-actor", import.meta.url)));
@@ -19,7 +20,7 @@ await mkdir(output, { recursive: true });
 const args = ["--enable-unsafe-swiftshader", "--use-angle=swiftshader", "--use-fake-ui-for-media-stream",
   "--use-fake-device-for-media-stream", `--use-file-for-fake-video-capture=${webcam}`];
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH, headless: true, args });
-const report = { photo: basename(photo), body: build };
+const report = { photo: basename(photo), mode, ...(mode === "face" ? { body: build } : {}) };
 try {
   const page = await browser.newPage({ viewport: { width: 1496, height: 900 }, deviceScaleFactor: 1 });
   const errors = [];
@@ -115,17 +116,19 @@ try {
   await open();
   await stage.getByRole("button", { name: "Add assets" }).click();
   const asset = stage.getByRole("region", { name: "사진으로 3D 사람 만들기" });
-  await asset.getByLabel("체형").selectOption(build);
+  if (mode === "face") await asset.getByLabel("체형").selectOption(build);
+  else await asset.getByLabel("생성 방식").selectOption(mode);
   await asset.getByLabel("인물 사진").setInputFiles(photo);
   const started = Date.now();
   await asset.getByRole("button", { name: "3D 사람 추가" }).click();
-  await controls.waitFor({ state: "visible", timeout: 180_000 }).catch(async (cause) => {
-    const alert = await asset.getByRole("alert").textContent().catch(() => null);
-    throw new Error(alert ?? cause.message);
-  });
-  report.generationSeconds = Math.round((Date.now() - started) / 100) / 10;
   const name = basename(photo).replace(/\.[^.]+$/, "");
-  const actorId = await actorPicker.locator("option", { hasText: name }).getAttribute("value");
+  const added = actorPicker.locator("option", { hasText: name });
+  const failure = asset.getByRole("alert");
+  // Full-body reconstruction runs Pixal3D and CPU rigging on the editor server, bounded by its 20-minute job limit.
+  await added.or(failure).first().waitFor({ state: "attached", timeout: mode === "face" ? 180_000 : 1_200_000 });
+  if (await failure.count()) throw new Error(await failure.textContent());
+  report.generationSeconds = Math.round((Date.now() - started) / 100) / 10;
+  const actorId = await added.getAttribute("value");
   assert(actorId?.startsWith("actor-"), "The photo actor was not added to the shot.");
   await actorPicker.selectOption(actorId);
   report.actorId = actorId;

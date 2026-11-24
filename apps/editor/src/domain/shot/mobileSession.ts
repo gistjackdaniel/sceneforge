@@ -1,10 +1,9 @@
 import { z } from "zod";
-import { secondsToFrame } from "../timeline/timecode";
+import { isPositiveIntegerFps, secondsToFrame } from "../timeline/timecode";
 import { frameToTimecode } from "./timecode";
 import { normalizeQuat } from "./cameraRotation";
 import { CameraTrackInputError, type CameraTrackCapture, type CameraTrackInputAdapter } from "./cameraTrack";
-import { devicePoseToScenePose, devicePointToScene, poseFromColumnMajor, type DeviceFramework } from "./deviceFrame";
-import { readShotTimeFps } from "./queries";
+import { devicePoseToScenePose, poseFromColumnMajor, type DeviceFramework } from "./deviceFrame";
 import { trackingEventsForLoss } from "./trackingContinuity";
 import type { Shot, TrackingState, Vec3 } from "./types";
 
@@ -49,7 +48,7 @@ const mobilePoseSchema = z.discriminatedUnion("kind", [
 ]);
 
 /**
- * Recorded mobile session. No live device or network.
+ * Recorded mobile session from a device or a fixture.
  * Poses are camera-to-world in the device session frame. Timestamps are monotonic nanoseconds.
  */
 export const mobileCameraSessionSchema = z.object({
@@ -122,68 +121,58 @@ const poseOf = (framework: DeviceFramework, pose: MobileCameraSession["frames"][
   return devicePoseToScenePose(framework, device, cameraLocal);
 };
 
+type MobileSessionClock = { shot: Pick<Shot, "time"> } & (
+  | { originTimestampNs?: number; startAtFirstTracked?: never }
+  | { originTimestampNs?: never; startAtFirstTracked: true }
+);
+
 /**
  * Read a recorded ARKit, ARCore, or WebXR session as a `CameraTrackCapture`.
  * Axis conversion happens here. World calibration, loss fill, and drift stay layers.
- * The clock is `readShotTimeFps(shot)`. A missing rate fails the ingest.
+ * The clock is the shot's integer frame rate.
  * Elapsed device seconds go through `secondsToFrame` (nearest frame, half up).
  * Samples before the origin are dropped.
  */
-export const createMobileSessionAdapter = (
-  session: unknown,
-  options: {
-    shot: Pick<Shot, "time">;
-    originTimestampNs?: number;
-  },
-): CameraTrackInputAdapter => ({
+export const captureMobileSession = (session: MobileCameraSession, clock: MobileSessionClock): CameraTrackCapture => {
+  const fps = clock.shot.time?.fps;
+  if (!isPositiveIntegerFps(fps)) throw new CameraTrackInputError("Mobile session needs Shot.time.fps.");
+  const ordered = [...session.frames].sort((left, right) => left.timestampNs - right.timestampNs);
+  const first = clock.startAtFirstTracked ? ordered.find((frame) => TRACKING_STATE[frame.trackingState] === "normal") : ordered[0];
+  if (clock.startAtFirstTracked && !first) throw new CameraTrackInputError("The phone take has no tracked 6DoF pose.");
+  const origin = clock.originTimestampNs ?? first?.timestampNs ?? 0;
+  type SessionSample = CameraTrackCapture["samples"][number] & { trackingState: TrackingState };
+  const byFrame = new Map<number, SessionSample>();
+  for (const frame of ordered) {
+    const elapsedNs = frame.timestampNs - origin;
+    if (elapsedNs < 0) continue;
+    const index = secondsToFrame(elapsedNs / 1e9, fps);
+    if (clock.startAtFirstTracked && index === 0 && frame !== first) continue;
+    const scene = poseOf(session.framework, frame.pose, session.cameraLocal ?? "gl");
+    byFrame.set(index, {
+      frame: index,
+      position: [scene.position[0], scene.position[1], scene.position[2]],
+      rotation: normalizeQuat(scene.rotation),
+      deviceTimestampNs: frame.timestampNs,
+      timecode: frameToTimecode(index, fps),
+      trackingState: TRACKING_STATE[frame.trackingState],
+      focalLengthMm: frame.intrinsics?.focalLengthMm ?? session.intrinsics?.focalLengthMm,
+    });
+  }
+  const samples = [...byFrame.values()];
+  if (samples.length === 0) throw new CameraTrackInputError("Mobile session has no frames on the shot clock.");
+  return {
+    samples,
+    intrinsics: intrinsicsFrom(session.intrinsics ?? first?.intrinsics),
+    trackingEvents: trackingEventsForLoss(samples).map(({ kind, frame, deviceTimestampNs }) => ({ kind, frame, deviceTimestampNs })),
+  };
+};
+
+export const createMobileSessionAdapter = (session: unknown, clock: MobileSessionClock): CameraTrackInputAdapter => ({
   id: "mobile-session",
-  readCapture: (signal) => {
-    if (signal?.aborted) return Promise.reject(new CameraTrackInputError("Camera track capture was cancelled."));
+  readCapture: async (signal) => {
+    if (signal?.aborted) throw new CameraTrackInputError("Camera track capture was cancelled.");
     const parsed = mobileCameraSessionSchema.safeParse(session);
-    if (!parsed.success) return Promise.reject(new CameraTrackInputError("Mobile session did not match the scene contract."));
-    let fps: number;
-    try {
-      fps = readShotTimeFps(options.shot);
-    } catch {
-      return Promise.reject(new CameraTrackInputError("Mobile session needs Shot.time.fps."));
-    }
-    const cameraLocal = parsed.data.cameraLocal ?? "gl";
-    const ordered = [...parsed.data.frames].sort((left, right) => left.timestampNs - right.timestampNs);
-    const origin = options.originTimestampNs ?? ordered[0]?.timestampNs ?? 0;
-    type SessionSample = CameraTrackCapture["samples"][number] & { trackingState: TrackingState };
-    const byFrame = new Map<number, SessionSample>();
-    for (const frame of ordered) {
-      const elapsedNs = frame.timestampNs - origin;
-      if (elapsedNs < 0) continue;
-      let index: number;
-      try {
-        index = secondsToFrame(elapsedNs / 1e9, fps);
-      } catch {
-        return Promise.reject(new CameraTrackInputError("Mobile session needs Shot.time.fps."));
-      }
-      const scene = poseOf(parsed.data.framework, frame.pose, cameraLocal);
-      const point = devicePointToScene(parsed.data.framework, scene.position);
-      byFrame.set(index, {
-        frame: index,
-        position: [point[0], point[1], point[2]],
-        rotation: normalizeQuat(scene.rotation),
-        deviceTimestampNs: frame.timestampNs,
-        timecode: frameToTimecode(index, fps),
-        trackingState: TRACKING_STATE[frame.trackingState],
-        focalLengthMm: frame.intrinsics?.focalLengthMm ?? parsed.data.intrinsics?.focalLengthMm,
-      });
-    }
-    const samples = [...byFrame.values()].sort((left, right) => left.frame - right.frame);
-    if (samples.length === 0) return Promise.reject(new CameraTrackInputError("Mobile session has no frames on the shot clock."));
-    const capture: CameraTrackCapture = {
-      samples,
-      intrinsics: intrinsicsFrom(parsed.data.intrinsics ?? ordered[0]?.intrinsics),
-      trackingEvents: trackingEventsForLoss(samples).map((event) => ({
-        kind: event.kind,
-        frame: event.frame,
-        deviceTimestampNs: event.deviceTimestampNs,
-      })),
-    };
-    return Promise.resolve(capture);
+    if (!parsed.success) throw new CameraTrackInputError("Mobile session did not match the scene contract.");
+    return captureMobileSession(parsed.data, clock);
   },
 });

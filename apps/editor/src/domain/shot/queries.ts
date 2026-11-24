@@ -195,12 +195,28 @@ const asMat4 = (rows: number[][]): ResolvedCameraFrame["c2w"] => [
   [rows[3]?.[0] ?? 0, rows[3]?.[1] ?? 0, rows[3]?.[2] ?? 0, rows[3]?.[3] ?? 1],
 ];
 
+export const recordedCameraProjection = (take: CameraTake) => {
+  const { K, imageSize } = take.intrinsics ?? {};
+  return K && imageSize && K[0][0] > 0 && K[1][1] > 0 ? { K, imageSize } : undefined;
+};
+
 const intrinsicsFor = (
   take: CameraTake,
   shot: Pick<Shot, "camera">,
   focalLengthMm: number,
   imageSize: readonly [number, number] | undefined,
 ): ResolvedCameraIntrinsics => {
+  const measured = recordedCameraProjection(take);
+  if (measured) {
+    const [sourceWidth, sourceHeight] = measured.imageSize;
+    const [width, height] = imageSize ?? measured.imageSize;
+    const scale = Math.max(width / sourceWidth, height / sourceHeight);
+    const fx = measured.K[0][0] * scale;
+    const fy = measured.K[1][1] * scale;
+    const cx = (measured.K[0][2] - sourceWidth / 2) * scale + width / 2;
+    const cy = (measured.K[1][2] - sourceHeight / 2) * scale + height / 2;
+    return { fx, fy, cx, cy, K: [[fx, 0, cx], [0, fy, cy], [0, 0, 1]] };
+  }
   const size = imageSize ?? take.intrinsics?.imageSize;
   if (size) {
     const fit = take.intrinsics?.sensorFit;

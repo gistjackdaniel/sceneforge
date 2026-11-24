@@ -128,6 +128,8 @@ export const estimateRelocalizationDrift = (
   const events: TrackingEvent[] = [];
   const normal: LayerPose[] = [];
   let inLoss = false;
+  let activeRotation: Quat = [0, 0, 0, 1];
+  let activeTranslation: Vec3 = [0, 0, 0];
   poses.forEach((pose, index) => {
     const state: TrackingState = ordered[index]?.trackingState ?? "normal";
     if (state !== "normal") {
@@ -150,6 +152,8 @@ export const estimateRelocalizationDrift = (
         const correctionRotation = multiplyQuat(predictedRotation, inverseQuat(pose.rotation));
         const rotated = rotateVec3(correctionRotation, pose.position);
         const translation: [number, number, number] = sub(predictedPosition, rotated);
+        activeTranslation = add(rotateVec3(activeRotation, translation), activeTranslation);
+        activeRotation = multiplyQuat(activeRotation, correctionRotation);
         const timestamp = ordered[index]?.deviceTimestampNs;
         events.push({
           kind: "relocalized",
@@ -162,7 +166,7 @@ export const estimateRelocalizationDrift = (
           frame: pose.frame,
           deviceTimestampNs: timestamp,
           estimatedDriftM: jumpM,
-          correction: { translation, rotation: correctionRotation },
+          correction: { translation: activeTranslation, rotation: activeRotation },
         });
       }
     }

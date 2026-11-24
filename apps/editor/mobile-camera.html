@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>SceneForge phone camera</title>
+    <style>
+      :root { color-scheme: dark; font: 16px system-ui, sans-serif; background: #101713; color: #edf4ee; }
+      body { margin: 0; }
+      main { min-height: 100dvh; display: grid; align-items: end; }
+      section { box-sizing: border-box; width: min(100%, 32rem); margin: 0 auto; padding: 1.25rem 1.25rem max(1.25rem, env(safe-area-inset-bottom)); background: #17231eea; border-top: 1px solid #426352; border-radius: 16px 16px 0 0; }
+      h1 { font-size: 1.25rem; margin: 0; }
+      p { min-height: 2.8em; line-height: 1.4; color: #c3d3c9; }
+      button { width: 100%; min-height: 48px; border: 0; border-radius: 8px; font: inherit; font-weight: 650; color: #102017; background: #a0efbf; }
+      button:disabled { opacity: .55; }
+    </style>
+  </head>
+  <body>
+    <main id="camera-overlay">
+      <section>
+        <h1>SceneForge phone camera</h1>
+        <p id="camera-status" role="status">Connecting to the editor…</p>
+        <button id="camera-action" disabled>Start AR</button>
+      </section>
+    </main>
+    <script type="module" src="/src/mobile-camera/main.ts"></script>
+  </body>
+</html>

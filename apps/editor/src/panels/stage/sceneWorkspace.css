@@ -61,6 +61,8 @@
 .scene-button-group button { background: #252f28; flex: 1; white-space: nowrap; }
 .scene-drawer details { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--scene-border); }
 .scene-drawer summary { cursor: pointer; color: #c4cec6; font-size: 11px; }
+.scene-phone-camera { padding-bottom: 12px; border-bottom: 1px solid var(--scene-border); }
+.scene-phone-camera button { width: 100%; }
 .scene-workspace .scene-layer { width: 100%; display: flex; align-items: center; gap: 3px; border-radius: 5px; min-height: 36px; margin: 3px 0; padding: 1px 3px; }
 .scene-layer.is-selected { background: #2e3b32; }
 .scene-layer > button:first-child { justify-content: flex-start; flex: 1; min-width: 0; }

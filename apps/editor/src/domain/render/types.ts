@@ -36,6 +36,11 @@ export type RenderPassSpec = z.infer<typeof renderPassSpecSchema>;
 export const defaultRenderPassSpec = (width: number, height: number): RenderPassSpec =>
   renderPassSpecSchema.parse({ width, height, near: 0.05, far: 100 });
 
+export const shotPassSpec = (aspect: number): RenderPassSpec => defaultRenderPassSpec(
+  Math.round(128 * Math.min(1, aspect)),
+  Math.round(128 * Math.min(1, 1 / aspect)),
+);
+
 /** 0 is miss and is not an entry. Indices are stable for a given id set. */
 export type InstanceIdEntry = {
   index: number;
@@ -93,6 +98,8 @@ export type FramePasses = {
   normal: NormalPass;
   world_position: WorldPositionPass;
   instance_id: InstanceIdPass;
+  /** Reference backend only. Per pixel: shot-stable mesh index (0 for miss), then mesh-local XYZ. */
+  surfaceTracking?: Float32Array;
 };
 
 /** Bumped when proxy geometry, shading, or ray convention changes the pixels. */

@@ -27,6 +27,16 @@ function configuredFile(path: string): boolean {
   }
 }
 
+// A Python inside WSL is configured by its \\wsl.localhost\<distro>\ path and started through wsl.exe.
+const wslShare = /^[\\/]{2}wsl(?:\.localhost|\$)[\\/]([^\\/]+)(.*)$/i;
+
+function insideWsl(path: string): string {
+  const share = wslShare.exec(path);
+  if (share) return share[2].replace(/\\/g, '/') || '/';
+  const drive = /^([a-z]):[\\/](.*)$/i.exec(path);
+  return drive ? `/mnt/${drive[1].toLowerCase()}/${drive[2].replace(/\\/g, '/')}` : path;
+}
+
 function runStage(
   stage: string,
   python: string,
@@ -37,20 +47,29 @@ function runStage(
   device?: string,
 ): Promise<void> {
   signal.throwIfAborted();
+  const stageEnv = {
+    ...(device === undefined ? {} : { CUDA_VISIBLE_DEVICES: device }),
+    ATTN_BACKEND: process.env.ATTN_BACKEND ?? 'sdpa',
+    DO_NOT_TRACK: '1',
+    GRADIO_ANALYTICS_ENABLED: 'False',
+    HF_HUB_DISABLE_TELEMETRY: '1',
+    HF_HUB_OFFLINE: '1',
+    MPLBACKEND: 'Agg',
+    PYTHONDONTWRITEBYTECODE: '1',
+    TRANSFORMERS_OFFLINE: '1',
+  };
+  const distro = wslShare.exec(python)?.[1];
+  const wslEnv = [process.env.WSLENV, ...Object.keys(stageEnv), 'TMPDIR/p'].filter(Boolean).join(':');
+  const [command, argv]: [string, string[]] = distro
+    ? ['wsl.exe', ['-d', distro, '--cd', insideWsl(cwd), '--exec', insideWsl(python), ...args.map(insideWsl)]]
+    : [python, args];
   return new Promise((resolveStage, reject) => {
-    const child = spawn(python, args, {
-      cwd,
+    const child = spawn(command, argv, {
+      cwd: distro ? undefined : cwd,
       env: {
         ...process.env,
-        ...(device === undefined ? {} : { CUDA_VISIBLE_DEVICES: device }),
-        ATTN_BACKEND: process.env.ATTN_BACKEND ?? 'sdpa',
-        DO_NOT_TRACK: '1',
-        GRADIO_ANALYTICS_ENABLED: 'False',
-        HF_HUB_DISABLE_TELEMETRY: '1',
-        HF_HUB_OFFLINE: '1',
-        MPLBACKEND: 'Agg',
-        PYTHONDONTWRITEBYTECODE: '1',
-        TRANSFORMERS_OFFLINE: '1',
+        ...stageEnv,
+        ...(distro ? { WSLENV: wslEnv } : {}),
         TEMP: workDir,
         TMP: workDir,
         TMPDIR: workDir,
@@ -76,7 +95,7 @@ function runStage(
       } else {
         const lines = stderrTail.trim().split(/\r?\n/);
         const detail = lines[lines.length - 1] || spawnError?.message;
-        if (detail) console.error(`[photo avatar] ${stage}: ${detail.split(workDir).join('[job]')}`);
+        if (detail) console.error(`[photo avatar] ${stage}: ${detail.split(workDir).join('[job]').split(insideWsl(workDir)).join('[job]')}`);
         reject(new Error(`${stage} failed. See the editor server log.`));
       }
     });

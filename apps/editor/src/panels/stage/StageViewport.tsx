@@ -46,7 +46,20 @@ export interface StageCameraPose {
   /** Stored camera orientation. Wins over `rotation` so the Euler order cannot change the shot. */
   quaternion?: [number, number, number, number];
   focalLength: number;
+  projection?: { width: number; height: number; fx: number; fy: number; cx: number; cy: number };
 }
+
+const updateCameraProjection = (camera: THREE.PerspectiveCamera, projection?: StageCameraPose["projection"]) => {
+  camera.updateProjectionMatrix();
+  if (!projection) return;
+  const { width, height, fx, fy, cx, cy } = projection;
+  const matrix = camera.projectionMatrix.elements;
+  matrix[0] = 2 * fx / width;
+  matrix[5] = 2 * fy / height;
+  matrix[8] = 1 - 2 * cx / width;
+  matrix[9] = 2 * cy / height - 1;
+  camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+};
 
 export interface ViewportSelection {
   id: string;
@@ -348,6 +361,7 @@ export const StageViewport = ({
   const workspaceRef = useRef(workspace);
   const toolRef = useRef(tool);
   const outputAspectRef = useRef(outputAspect);
+  const shotProjectionRef = useRef(cameraPose?.projection);
   const flyKeysRef = useRef<FlyKeys>(emptyFlyKeys());
   const liveOverrideRef = useRef(false);
   const lastPlayheadRef = useRef(playheadFrame);
@@ -357,6 +371,7 @@ export const StageViewport = ({
   workspaceRef.current = workspace;
   toolRef.current = tool;
   outputAspectRef.current = outputAspect;
+  shotProjectionRef.current = cameraPose?.projection;
 
   const recording = workspace === "record";
   const sceneApiRef = useRef<StageSceneApi | null>(null);
@@ -816,7 +831,7 @@ export const StageViewport = ({
       }
       camera.aspect =
         workspaceRef.current === "record" ? outputAspectRef.current : nextWidth / nextHeight;
-      camera.updateProjectionMatrix();
+      updateCameraProjection(camera, workspaceRef.current === "record" && !liveOverrideRef.current ? shotProjectionRef.current : undefined);
       renderer.setSize(nextWidth, nextHeight);
     };
     window.addEventListener("resize", handleResize);
@@ -897,13 +912,13 @@ export const StageViewport = ({
       return;
     }
     api.helperCam.aspect = outputAspect;
-    api.helperCam.updateProjectionMatrix();
+    updateCameraProjection(api.helperCam, cameraPose?.projection);
     api.frustumHelper.update();
     if (workspace === "record") {
       api.camera.aspect = outputAspect;
-      api.camera.updateProjectionMatrix();
+      updateCameraProjection(api.camera, liveOverrideRef.current ? undefined : cameraPose?.projection);
     }
-  }, [outputAspect, workspace]);
+  }, [outputAspect, workspace, cameraPose?.projection]);
 
   // Build pickable joint helpers when an actor is selected
   useEffect(() => {
@@ -1001,7 +1016,7 @@ export const StageViewport = ({
       api.camera.updateProjectionMatrix();
       api.helperCam.fov = fovDegrees;
       api.helperCam.aspect = outputAspect;
-      api.helperCam.updateProjectionMatrix();
+      updateCameraProjection(api.helperCam, cameraPose.projection);
       return;
     }
     api.shotCamera.position.set(...cameraPose.position);
@@ -1015,7 +1030,7 @@ export const StageViewport = ({
     api.shotCamera.updateMatrixWorld(true);
     api.helperCam.fov = fovDegrees;
     api.helperCam.aspect = outputAspect;
-    api.helperCam.updateProjectionMatrix();
+    updateCameraProjection(api.helperCam, cameraPose.projection);
     api.frustumHelper.update();
     // Keep gizmo aligned with camera
     api.cameraGizmo.position.set(0, 0, 0);
@@ -1025,7 +1040,7 @@ export const StageViewport = ({
       api.camera.quaternion.copy(api.shotCamera.quaternion);
       api.camera.fov = fovDegrees;
       api.camera.aspect = outputAspect;
-      api.camera.updateProjectionMatrix();
+      updateCameraProjection(api.camera, cameraPose.projection);
     } else {
       api.camera.fov = 55;
       api.camera.updateProjectionMatrix();

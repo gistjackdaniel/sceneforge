@@ -37,6 +37,7 @@ export const traceFrame = (
   camera: CameraFrame,
   spec: RenderPassSpec,
   table: readonly InstanceIdEntry[],
+  includeSurfaceTracking = false,
 ): FramePasses => {
   const width = spec.width;
   const height = spec.height;
@@ -54,6 +55,8 @@ export const traceFrame = (
   const normal = new Float32Array(width * height * 3);
   const world = new Float32Array(width * height * 3);
   const ids = new Uint32Array(width * height);
+  const surfaceTracking = includeSurfaceTracking ? new Float32Array(width * height * 4) : undefined;
+  const partIndices = surfaceTracking ? new Map(meshes.map((mesh, index) => [mesh, index + 1])) : undefined;
 
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
@@ -82,6 +85,10 @@ export const traceFrame = (
         world[pixel * 3 + 1] = hit.point.y;
         world[pixel * 3 + 2] = hit.point.z;
         ids[pixel] = mesh.userData.instanceIndex;
+        if (surfaceTracking && partIndices) {
+          const local = mesh.worldToLocal(hit.point.clone());
+          surfaceTracking.set([partIndices.get(mesh) ?? 0, local.x, local.y, local.z], pixel * 4);
+        }
         break;
       }
     }
@@ -95,5 +102,6 @@ export const traceFrame = (
     normal: { kind: "normal", width, height, format: RENDER_PASS_FORMAT.normal, data: normal },
     world_position: { kind: "world_position", width, height, format: RENDER_PASS_FORMAT.world_position, data: world },
     instance_id: { kind: "instance_id", width, height, format: RENDER_PASS_FORMAT.instance_id, data: ids, table },
+    ...(surfaceTracking ? { surfaceTracking } : {}),
   };
 };

@@ -1,6 +1,6 @@
 import { computePassHash } from "../../core/dependency";
 import type { CameraTake, Lens, Quat, Shot, Subject, Vec3 } from "../shot/types";
-import { selectedTake } from "../shot/queries";
+import { recordedCameraProjection, selectedTake } from "../shot/queries";
 import type { InstanceIdEntry, RenderPassKind, RenderPassSpec } from "./types";
 import { RENDER_PASS_KINDS, RENDERER_VERSION } from "./types";
 
@@ -132,6 +132,7 @@ export const cameraLayerRecord = (take: CameraTake): Record<string, unknown> | u
 export const upstreamPassRecord = (shot: Shot, spec: RenderPassSpec): Record<string, unknown> => {
   const take = selectedTake(shot);
   const layers = take ? cameraLayerRecord(take) : undefined;
+  const recordedProjection = take ? recordedCameraProjection(take) : undefined;
   return {
     durationFrames: shot.time.durationFrames,
     subjects: shot.subjects.map(subjectContent),
@@ -149,6 +150,7 @@ export const upstreamPassRecord = (shot: Shot, spec: RenderPassSpec): Record<str
           }))
         : [],
       ...(layers ? { layers } : {}),
+      ...(recordedProjection ? { recordedProjection } : {}),
     },
     spec: { width: spec.width, height: spec.height, near: spec.near, far: spec.far },
   };

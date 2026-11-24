@@ -4,6 +4,8 @@ import { StageViewport, type StageCameraPose, type ViewportSelection } from "./S
 import { SceneIcon, type SceneIconName } from "./SceneIcon";
 import { SceneTimeline } from "./SceneTimeline";
 import { SceneAssets } from "./SceneAssets";
+import { PhoneCameraControls } from "./PhoneCameraControls";
+import { RenderPassExport } from "./RenderPassExport";
 import { type CameraKeyframe } from "../../domain/graph/cameraPath";
 import { verticalFovFromLens } from "../../domain/graph/lens";
 import { buildRigPreset, CAMERA_RIG_PRESETS, type CameraRigPreset } from "../../domain/graph/cameraRig";
@@ -15,6 +17,7 @@ import { eulerToQuaternionApprox, quaternionToEulerApprox } from "../../applicat
 import { environmentFromWorld } from "../../application/services/shotEnvironment";
 import { type ObjectPose } from "../../domain/worlds/sceneObjects";
 import { OUTPUT_ASPECT_PRESETS, outputAspectRatio, type OutputAspectPreset } from "../../domain/rendering";
+import { shotPassSpec } from "../../domain/render/types";
 import {
   detectTrackingLoss,
   prepareModelInput,
@@ -118,6 +121,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const fps = shot ? readShotTimeFps(shot) : undefined;
   playbackRef.current = { duration, start, fps: fps ?? 0, clipId: clip?.id ?? "", firstFrame: recording ? 0 : frame };
   const take = shot ? selectedTake(shot) : undefined;
+  const aspect = outputAspectRatio(ui.outputAspect);
   const sceneShotCamera = Boolean(!recording && !previewOnly && sceneCameraView && take);
   const evaluatePoseKeys = recording || sceneShotCamera || playing;
   const subjects = shot && !previewOnly ? shot.subjects : [];
@@ -171,7 +175,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   takeRecordingRef.current = takeRecording;
   const cameraPose = useMemo((): StageCameraPose | undefined => {
     if (!shot || !take || shot.camera.status !== "ready") return undefined;
-    const resolved = resolveCameraTakeFrames(take, shot, { frames: [frame] })[0];
+    const { width, height } = shotPassSpec(aspect);
+    const resolved = resolveCameraTakeFrames(take, shot, { frames: [frame], imageSize: [width, height] })[0];
     if (!resolved) return undefined;
     const rotation = tuple4(resolved.rotation);
     return {
@@ -179,8 +184,9 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       quaternion: rotation,
       rotation: quaternionToEulerApprox(rotation),
       focalLength: resolved.focalLengthMm || lens.focalLengthMm,
+      projection: { width, height, ...resolved.intrinsics },
     };
-  }, [shot, take, frame, lens.focalLengthMm]);
+  }, [shot, take, frame, lens.focalLengthMm, aspect]);
   const sceneObjects = useMemo(() => objects.map((object) => ({
     ...object,
     ...(draft?.id === object.id ? draft.pose : undefined),
@@ -588,7 +594,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       <div className={`scene-stage-canvas ${cameraView ? "is-camera-view" : ""}`} style={{ "--scene-aspect": outputAspectRatio(ui.outputAspect) } as React.CSSProperties}>
         <StageViewport world={world} worldName={worldName} previewPlan={previewPlan} fallbackImageUri={fallbackImageUri}
           overlays={ui.viewportOverlays} tool={ui.viewportTool} workspace={cameraView ? "record" : "build"}
-          actorMotion={actorMotion} liveFace={liveFace} onActorSupport={reportActorSupport} cameraLocked={sceneShotCamera}
+          actorMotion={actorMotion} liveFace={liveFace} onActorSupport={reportActorSupport} cameraLocked={sceneShotCamera || cameraView && playing && !takeRecording}
           outputAspect={outputAspectRatio(ui.outputAspect)} outputAspectLabel={ui.outputAspect}
           cameraViz={recording ? ui.cameraViz : { frustum: false, path: false, lookAtLine: false, keyframeMarkers: false }}
           cameraPose={takeRecording ? undefined : cameraPose} sceneObjects={sceneObjects} selectedId={selectedId === "camera" ? undefined : selectedId}
@@ -637,7 +643,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           captureSignal={captureSignal} focusSignal={focusSignal} resetSignal={resetSignal} />
       </div>
       <nav className="scene-rail" aria-label="Scene tools">
-        {([["assets", "plus", "Add assets"], ["layers", "layers", "Subjects"], ["camera", "camera", "Camera trajectory"]] as const).map(([id, icon, title]) =>
+        {([["assets", "plus", "Add assets"], ["layers", "layers", "Subjects"], ["camera", "camera", "Camera trajectory"], ["settings", "settings", "Scene output"]] as const).map(([id, icon, title]) =>
           <button key={id} className={drawer === id ? "is-active" : ""} aria-label={title} title={title} aria-expanded={drawer === id} onClick={() => toggleDrawer(id)}><SceneIcon name={icon} /></button>)}
       </nav>
       <div className="scene-view-controls">
@@ -691,6 +697,14 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
           <button disabled={!canEdit} onClick={() => setDrawer("assets")}>+ Add light</button>
         </>}
         {drawer === "camera" && <>
+          {shot && canEdit && !takeRecording && <PhoneCameraControls key={shot.id} shot={shot} disabled={playing} onTake={(command) => {
+            send(command);
+            setPlaying(false);
+            setSceneCameraView(true);
+            setFreeView(false);
+            setSelectedId("camera");
+            scrub(0);
+          }} />}
           <label>Lens · mm<input type="number" min="8" max="300" value={lens.focalLengthMm} disabled={!canEdit} onChange={(event) => updateLens("focalLengthMm", event.target.valueAsNumber)} /></label>
           <label>Focus · m<input type="number" min="0.1" step="0.1" value={lens.focusDistanceM ?? 3} disabled={!canEdit} onChange={(event) => updateLens("focusDistanceM", event.target.valueAsNumber)} /></label>
           <label>Aperture<input type="number" min="0.7" max="32" step="0.1" value={lens.aperture ?? 2.8} disabled={!canEdit} onChange={(event) => updateLens("aperture", event.target.valueAsNumber)} /></label>
@@ -710,6 +724,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         </>}
         {drawer === "settings" && <>
           <label>Output ratio<select value={ui.outputAspect} onChange={(event) => dispatch({ type: "set-output-aspect", aspect: event.target.value as OutputAspectPreset })}>{OUTPUT_ASPECT_PRESETS.map((aspect) => <option key={aspect.id} value={aspect.id}>{aspect.label}</option>)}</select></label>
+          {shot && <RenderPassExport key={shot.id} shot={shot} aspect={aspect} disabled={!canEdit || takeRecording} />}
           <div className="scene-pipeline"><span>Editable world</span><span>Camera + object tracks</span><span>3D encoder → video model</span></div>
           <p className="scene-note">키프레임은 이미지가 아닌 3D 포즈입니다. 프리뷰 픽셀은 생성 입력에 포함되지 않습니다.</p>
           <button disabled={!canEdit} onClick={exportScene}><SceneIcon name="export" />Export scene recipe</button>

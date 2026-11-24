@@ -23,6 +23,7 @@ export type RenderRequest = HashContext & {
   /** Integer frames to rasterize. Defaults to every frame in `frameRange`. */
   traceFrames?: readonly number[];
   backend?: "reference" | "gpu";
+  includeSurfaceTracking?: boolean;
 };
 
 export type RenderPassOutput = {
@@ -110,6 +111,7 @@ export class RenderPassRenderer {
     const hashes = renderPassHashes(shot, context, table.table);
     const backend = request.backend ?? "reference";
     if (backend === "gpu") {
+      if (request.includeSurfaceTracking) return { ok: false, reason: "Surface tracking requires the reference renderer." };
       const gpu = traceFramesGpu(shot, traced.frames, parsed.spec, table.table);
       if (!gpu.ok) return gpu;
       return {
@@ -117,7 +119,7 @@ export class RenderPassRenderer {
         output: pack(trajectory, gpu.frames, traced.frames, hashes, table.table, parsed),
       };
     }
-    const frames = traced.frames.map((camera) => traceFrame(shot, camera, parsed.spec, table.table));
+    const frames = traced.frames.map((camera) => traceFrame(shot, camera, parsed.spec, table.table, request.includeSurfaceTracking));
     return { ok: true, output: pack(trajectory, frames, traced.frames, hashes, table.table, parsed) };
   }
 }
