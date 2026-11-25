@@ -117,6 +117,10 @@ try {
     assert.equal(launch.host, "pair");
     assert.equal(launch.searchParams.get("link"), connected.href);
     await phone.screenshot({ path: resolve(output, "phone-paired.png") });
+    await mobile.grantPermissions(["clipboard-read", "clipboard-write"], { origin: connected.origin });
+    await phone.getByRole("button", { name: "Copy pairing link" }).click();
+    await phone.getByText("Link copied.", { exact: false }).waitFor();
+    assert.equal(await phone.evaluate(() => navigator.clipboard.readText()), connected.href);
     const headers = { Authorization: `Bearer ${connected.hash.slice(1)}`, "Content-Type": "application/json" };
     const takeUrl = `${connected.origin}/api/mobile-camera/take`;
     const clockResponse = await fetch(takeUrl, { headers });

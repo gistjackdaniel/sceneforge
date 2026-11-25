@@ -1,4 +1,4 @@
-import { MOBILE_CAMERA_API, mobilePairCodeSchema, mobilePairSettingsSchema, type MobilePairSettings } from "../domain/shot/mobileCaptureProtocol";
+import { MOBILE_CAMERA_API, MOBILE_CAMERA_PAGE, mobilePairCodeSchema, mobilePairSettingsSchema, type MobilePairSettings } from "../domain/shot/mobileCaptureProtocol";
 import type { MobileCameraSession } from "../domain/shot/mobileSession";
 import { secondsToFrame } from "../domain/timeline/timecode";
 
@@ -185,11 +185,22 @@ async function connect() {
     if (location.protocol !== "https:" || !/^[a-z0-9-]+\.trycloudflare\.com$/.test(location.hostname)) {
       return message("Use Connect phone with QR in the editor to pair SceneForge Camera on iPhone.");
     }
+    const pairingURL = new URL(MOBILE_CAMERA_PAGE, location.origin);
+    pairingURL.hash = code.data;
     const handoff = new URL("sceneforge-camera://pair");
-    handoff.searchParams.set("link", location.href);
+    handoff.searchParams.set("link", pairingURL.href);
     iosApp.href = handoff.href;
     iosApp.hidden = false;
-    return message("Open the installed SceneForge Camera app to record this take with ARKit.");
+    const copyLink = async () => {
+      try {
+        await navigator.clipboard.writeText(pairingURL.href);
+        message("Link copied. Open SceneForge Camera from the Home Screen and tap Paste.");
+      } catch {
+        message("Copy this page’s address from Safari. Open SceneForge Camera from the Home Screen and tap Paste.");
+      }
+    };
+    button("Copy pairing link", () => void copyLink());
+    return message("Install SceneForge Camera from Xcode to record on iPhone. If this button can’t open the installed app, copy the pairing link and tap Paste in the app.");
   }
   const xr = navigator.xr;
   if (!xr) return message(arSetup);

@@ -124,6 +124,8 @@ USB로 연결하려면 Chrome DevTools에서 휴대폰 포트 `4173`을 데스�
 2. **Signing & Capabilities**에서 팀을 선택한다. iPhone을 실행 대상으로 선택하고 **Run**을 눌러 SceneForge Camera를 설치한다. 필요하면 iPhone에서 개발자 모드를 켠다. [Apple 기기에서 앱 실행](https://developer.apple.com/documentation/xcode/running-your-app-in-simulator-or-on-a-device)
 3. 앱 설치 후 데스크톱 에디터에서 새 QR을 만들고 iPhone으로 스캔한다. 촬영 중에는 세로 화면을 기준으로 위치, 회전, 렌즈 투영값, 추적 상태를 테이크에 기록한다. [Apple ARCamera](https://developer.apple.com/documentation/arkit/arcamera)
 
+QR 페이지의 버튼으로 앱이 열리지 않으면 **Copy pairing link**를 누른다. iPhone 홈 화면에서 SceneForge Camera를 열고 **Paste**를 누른다. 홈 화면에서 앱을 열 수 없다면 Mac의 Xcode에서 iPhone을 실행 대상으로 선택해 앱을 설치하고 실행한다.
+
 추적이 끊기면 마지막 정상 포즈를 유지한다. 복구 직후 위치 점프는 추정 보정과 함께 저장한다. WebXR 추적 원점이 재설정되면 그 시점까지의 테이크를 전송한다.
 
 **Scene output → Export render passes**에서 선택된 테이크의 TAR를 받는다. `scene.json`은 샷 상태를, `camera.json`은 카메라 경로와 추적 이벤트를 담는다. `manifest.json`에서 해상도, 패스 순서, 인스턴스 ID 표를 확인한다. 바이너리 패스는 little-endian이며 프레임, 행, 열, 채널 순서로 저장된다. 표면 추적 패스에는 픽셀마다 프록시 파트 번호와 파트 로컬 좌표가 있다. 내보내기는 레퍼런스 프록시 지오메트리를 렌더링한다.

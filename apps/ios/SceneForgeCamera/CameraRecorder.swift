@@ -45,13 +45,21 @@ final class CameraRecorder: NSObject, ObservableObject, ARSessionDelegate {
     }()
 
     func open(_ url: URL) {
+        connect(PhoneLink(handoffURL: url))
+    }
+
+    func paste(_ text: String) {
+        connect(PhoneLink(pairingURL: text))
+    }
+
+    private func connect(_ link: PhoneLink?) {
         switch state {
         case .recording, .startingCamera, .sending: return
         default: break
         }
         connecting?.cancel()
-        guard let link = PhoneLink(url) else {
-            state = .problem("This link is invalid. Scan a new QR code from SceneForge.")
+        guard let link else {
+            state = .problem("Scan a new QR in the editor and copy the full pairing link.")
             return
         }
         state = .connecting

@@ -31,7 +31,8 @@ struct SceneForgeCameraApp: App {
     @ViewBuilder private var content: some View {
         switch recorder.state {
         case .unpaired:
-            Text("Scan the editor’s phone camera QR code, then tap Open SceneForge Camera.")
+            Text("Scan the editor’s QR code, then open this app from the QR page or paste the pairing link below.")
+            pasteLink
         case .connecting:
             ProgressView("Connecting to the editor…")
         case .ready(let pairing, let note):
@@ -50,7 +51,15 @@ struct SceneForgeCameraApp: App {
             action("Retry send") { recorder.send(upload) }
         case .sent(let message), .problem(let message):
             Text(message)
+            pasteLink
         }
+    }
+
+    private var pasteLink: some View {
+        PasteButton(payloadType: String.self) { items in
+            if let link = items.first { recorder.paste(link) }
+        }
+        .accessibilityHint("Connect using the pairing link from the SceneForge QR page.")
     }
 
     private func action(_ title: String, run: @escaping () -> Void) -> some View {

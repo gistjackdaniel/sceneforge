@@ -14,6 +14,7 @@
       button, #camera-native { width: 100%; min-height: 48px; border: 0; border-radius: 8px; font: inherit; font-weight: 650; color: #102017; background: #a0efbf; }
       button:disabled { opacity: .55; }
       #camera-native:not([hidden]) { display: grid; place-items: center; text-decoration: none; }
+      #camera-native:not([hidden]) + button { margin-top: 8px; border: 1px solid #426352; background: transparent; color: #edf4ee; }
     </style>
   </head>
   <body>
@@ -21,8 +22,8 @@
       <section>
         <h1>SceneForge phone camera</h1>
         <p id="camera-status" role="status">Connecting to the editor…</p>
-        <button id="camera-action" hidden disabled>Start AR</button>
         <a id="camera-native" hidden>Open SceneForge Camera</a>
+        <button id="camera-action" hidden disabled>Start AR</button>
       </section>
     </main>
     <script type="module" src="/src/mobile-camera/main.ts"></script>

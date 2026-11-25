@@ -4,12 +4,17 @@ struct PhoneLink {
     let endpoint: URL
     let code: String
 
-    init?(_ url: URL) {
+    init?(handoffURL url: URL) {
         guard let launch = URLComponents(url: url, resolvingAgainstBaseURL: false),
               launch.scheme == "sceneforge-camera", launch.host == "pair", launch.path.isEmpty,
               launch.user == nil, launch.password == nil, launch.port == nil, launch.fragment == nil,
               let query = launch.queryItems, query.count == 1, query[0].name == "link",
-              let link = query[0].value, let phone = URLComponents(string: link),
+              let link = query[0].value else { return nil }
+        self.init(pairingURL: link)
+    }
+
+    init?(pairingURL text: String) {
+        guard let phone = URLComponents(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
               phone.scheme == "https", phone.user == nil, phone.password == nil, phone.port == nil,
               let host = phone.host, host.range(of: #"^[a-z0-9-]+\.trycloudflare\.com$"#, options: .regularExpression) != nil,
               phone.percentEncodedPath == "/mobile-camera.html", phone.query == nil,
