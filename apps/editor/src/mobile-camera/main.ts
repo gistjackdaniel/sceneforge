@@ -1,20 +1,32 @@
 import { MOBILE_CAMERA_API, MOBILE_CAMERA_PAGE, mobilePairCodeSchema, mobilePairSettingsSchema, type MobilePairSettings } from "../domain/shot/mobileCaptureProtocol";
 import type { MobileCameraSession } from "../domain/shot/mobileSession";
-import { secondsToFrame } from "../domain/timeline/timecode";
+import { recordMarkerTake } from "./markerCapture";
+import { createPhoneTakeRecorder } from "./takeRecorder";
 
-type Sample = MobileCameraSession["frames"][number];
 type Intrinsics = NonNullable<MobileCameraSession["intrinsics"]>;
 
 const overlayElement = document.querySelector("#camera-overlay");
 const status = document.querySelector("#camera-status");
 const actionElement = document.querySelector("#camera-action");
 const nativeLink = document.querySelector("#camera-native");
-if (!(overlayElement instanceof HTMLElement) || !(status instanceof HTMLElement) || !(actionElement instanceof HTMLButtonElement) || !(nativeLink instanceof HTMLAnchorElement)) {
+const nativeOptionsElement = document.querySelector("#camera-native-options");
+const copyElement = document.querySelector("#camera-copy");
+const previewElement = document.querySelector("#camera-preview");
+const widthLabelElement = document.querySelector("#marker-width-label");
+const widthInputElement = document.querySelector("#marker-width");
+if (!(overlayElement instanceof HTMLElement) || !(status instanceof HTMLElement) || !(actionElement instanceof HTMLButtonElement)
+  || !(nativeLink instanceof HTMLAnchorElement) || !(nativeOptionsElement instanceof HTMLDetailsElement) || !(copyElement instanceof HTMLButtonElement)
+  || !(previewElement instanceof HTMLVideoElement) || !(widthLabelElement instanceof HTMLLabelElement) || !(widthInputElement instanceof HTMLInputElement)) {
   throw new Error("Phone camera controls are missing.");
 }
 const overlay = overlayElement;
 const action = actionElement;
 const iosApp = nativeLink;
+const nativeOptions = nativeOptionsElement;
+const copyButton = copyElement;
+const preview = previewElement;
+const widthLabel = widthLabelElement;
+const widthInput = widthInputElement;
 
 const message = (text: string) => { if (status.textContent !== text) status.textContent = text; };
 const button = (label: string, run?: () => void) => {
@@ -53,6 +65,27 @@ const viewIntrinsics = (view: XRView, viewport: XRViewport): Intrinsics => {
   };
 };
 
+async function uploadTake(take: MobileCameraSession, authorization: string, reset = false) {
+  button("Sending take…");
+  message(reset ? "Tracking origin reset. Sending the recorded portion…" : "Sending the take to the editor…");
+  try {
+    const response = await fetch(route, {
+      method: "POST", headers: { Authorization: authorization, "Content-Type": "application/json" }, body: JSON.stringify(take),
+    });
+    if (response.status === 404) {
+      message("This pairing ended. Open a new phone link from the editor.");
+      button("Pairing ended");
+      return;
+    }
+    if (!response.ok) throw new Error(`Upload failed (${response.status}).`);
+    button("Take sent");
+    message(reset ? "Partial take sent. The tracking origin reset during recording." : "Take sent. Play the selected take in SceneForge.");
+  } catch (error) {
+    message(error instanceof Error ? error.message : "Couldn't send the take.");
+    button("Retry send", () => void uploadTake(take, authorization, reset));
+  }
+}
+
 async function start(xr: XRSystem, settings: MobilePairSettings, authorization: string) {
   button("Starting AR…");
   let session: XRSession | undefined;
@@ -64,57 +97,29 @@ async function start(xr: XRSystem, settings: MobilePairSettings, authorization: 
     session.updateRenderState({ baseLayer: layer });
     const space = await session.requestReferenceSpace("local");
     const active = session;
-    const frames = new Map<number, Sample>();
+    const take = createPhoneTakeRecorder(settings);
     let intrinsics: Intrinsics | undefined;
-    let originNs: number | undefined;
-    let lastSample: Sample | undefined;
+    let started = false;
     let reset = false;
     let ending = false;
 
-    const frameAt = (timestampNs: number, origin: number) => secondsToFrame((timestampNs - origin) / 1e9, settings.fps);
-    const markTrackingGap = (sample: Sample, origin: number) => {
-      const missingAt = frameAt(sample.timestampNs, origin) + 1;
-      if (missingAt < settings.durationFrames) {
-        frames.set(missingAt, { ...sample, timestampNs: origin + Math.round(missingAt * 1e9 / settings.fps), trackingState: "lost" });
-      }
-    };
     const stop = () => {
       if (ending) return;
       ending = true;
       button("Finishing…");
       void active.end();
     };
-    const upload = async () => {
-      button("Sending take…");
-      message(reset ? "Tracking origin reset. Sending the recorded portion…" : "Sending the take to the editor…");
-      const body: MobileCameraSession = { framework: "webxr", frames: [...frames.values()], intrinsics };
-      try {
-        const response = await fetch(route, {
-          method: "POST", headers: { Authorization: authorization, "Content-Type": "application/json" }, body: JSON.stringify(body),
-        });
-        if (response.status === 404) {
-          message("This pairing ended. Open a new phone link from the editor.");
-          button("Pairing ended");
-          return;
-        }
-        if (!response.ok) throw new Error(`Upload failed (${response.status}).`);
-        button("Take sent");
-        message(reset ? "Partial take sent. The tracking origin reset during recording." : "Take sent. Play the selected take in SceneForge.");
-      } catch (error) {
-        message(error instanceof Error ? error.message : "Couldn't send the take.");
-        button("Retry send", () => void upload());
-      }
-    };
     active.addEventListener("end", () => {
-      if (frames.size > 0) void upload();
+      const frames = take.frames();
+      if (frames.length) void uploadTake({ framework: "webxr", frames, intrinsics }, authorization, reset);
       else {
         message("No 6DoF pose was captured. Aim at a well-lit, textured area and try again.");
         button("Start AR", () => void start(xr, settings, authorization));
       }
     }, { once: true });
     space.addEventListener("reset", () => {
-      if (originNs !== undefined && lastSample && !ending) {
-        markTrackingGap(lastSample, originNs);
+      if (started && !ending) {
+        take.markGap();
         reset = true;
         stop();
       }
@@ -128,24 +133,17 @@ async function start(xr: XRSystem, settings: MobilePairSettings, authorization: 
       const viewer = frame.getViewerPose(space);
       const view = viewer?.views[0];
       const tracked = view && viewer?.emulatedPosition === false;
-      const timestampNs = Math.round(timestampMs * 1e6);
-      if (originNs === undefined && tracked) {
-        originNs = timestampNs;
+      if (!started && tracked) {
+        started = true;
         const viewport = layer.getViewport(view);
         if (viewport && viewport.width > 0 && viewport.height > 0) intrinsics = viewIntrinsics(view, viewport);
       }
-      if (originNs !== undefined) {
-        const frameIndex = frameAt(timestampNs, originNs);
-        if (lastSample && timestampNs - lastSample.timestampNs > Math.max(150, 2000 / settings.fps) * 1e6) {
-          markTrackingGap(lastSample, originNs);
-        }
-        if (frameIndex >= settings.durationFrames) return stop();
-        const pose = view ? { kind: "matrix" as const, transform: Array.from(view.transform.matrix) } : lastSample?.pose;
-        if (pose) {
-          lastSample = { timestampNs, pose, trackingState: tracked ? "tracked" : view ? "emulated" : "lost" };
-          if (frameIndex !== 0 || !frames.has(0)) frames.set(frameIndex, lastSample);
-        }
-        message(`${tracked ? "Recording" : "Tracking limited"} · ${((timestampNs - originNs) / 1e9).toFixed(1)} s`);
+      const update = take.observe(timestampMs, view
+        ? { trackingState: tracked ? "tracked" : "emulated", pose: { kind: "matrix", transform: Array.from(view.transform.matrix) } }
+        : { trackingState: "lost" });
+      if (update.kind === "complete") return stop();
+      if (update.kind === "recording") {
+        message(`${tracked ? "Recording" : "Tracking limited"} · ${update.seconds.toFixed(1)} s`);
       }
       active.requestAnimationFrame(capture);
     };
@@ -159,9 +157,55 @@ async function start(xr: XRSystem, settings: MobilePairSettings, authorization: 
   }
 }
 
+function offerMarkerCamera(settings: MobilePairSettings, authorization: string, instruction =
+  "Open Show tracking marker in the editor. Measure the black square and enter its width below.") {
+  message(instruction);
+  widthLabel.hidden = false;
+  nativeOptions.hidden = !iosApp.hasAttribute("href");
+  button("Start camera", () => {
+    if (!widthInput.reportValidity()) return;
+    const edgeMeters = widthInput.valueAsNumber / 100;
+    widthLabel.hidden = true;
+    nativeOptions.hidden = true;
+    message("Allow Safari to use the rear camera.");
+    button("Starting camera…");
+    void recordMarkerTake({
+      edgeMeters, preview, settings, onStatus: message,
+      onReady: (stop) => button("Stop and send", stop),
+    }).then((take) => {
+      if (take) return uploadTake(take, authorization);
+      offerMarkerCamera(settings, authorization, "No marker pose was captured. Keep all four corners visible and start again.");
+    }).catch((error: unknown) => {
+      const permissionDenied = error instanceof DOMException && error.name === "NotAllowedError";
+      offerMarkerCamera(settings, authorization, permissionDenied
+        ? "Allow camera access for this site in Safari, then tap Start camera again."
+        : "Couldn't start the rear camera. Close other apps using it and try again in Safari.");
+    });
+  });
+}
+
+function configureNativeApp(pairCode: string) {
+  if (location.protocol !== "https:" || !/^[a-z0-9-]+\.trycloudflare\.com$/.test(location.hostname)) return;
+  const pairingURL = new URL(MOBILE_CAMERA_PAGE, location.origin);
+  pairingURL.hash = pairCode;
+  const handoff = new URL("sceneforge-camera://pair");
+  handoff.searchParams.set("link", pairingURL.href);
+  iosApp.href = handoff.href;
+  nativeOptions.hidden = false;
+  copyButton.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(pairingURL.href);
+      message("Link copied. Open SceneForge Camera from the Home Screen and tap Paste.");
+    } catch {
+      message("Copy this page’s address from Safari. Open SceneForge Camera from the Home Screen and tap Paste.");
+    }
+  };
+}
+
 async function connect() {
   action.hidden = true;
-  iosApp.hidden = true;
+  widthLabel.hidden = true;
+  nativeOptions.hidden = true;
   if (!code.success) return message("Scan a new code from Camera trajectory → Connect phone with QR in the editor.");
   if (!window.isSecureContext) return message("Open a new HTTPS QR link from the editor.");
   message("Connecting to the editor…");
@@ -182,25 +226,9 @@ async function connect() {
     window.clearTimeout(timeout);
   }
   if (isIOS) {
-    if (location.protocol !== "https:" || !/^[a-z0-9-]+\.trycloudflare\.com$/.test(location.hostname)) {
-      return message("Use Connect phone with QR in the editor to pair SceneForge Camera on iPhone.");
-    }
-    const pairingURL = new URL(MOBILE_CAMERA_PAGE, location.origin);
-    pairingURL.hash = code.data;
-    const handoff = new URL("sceneforge-camera://pair");
-    handoff.searchParams.set("link", pairingURL.href);
-    iosApp.href = handoff.href;
-    iosApp.hidden = false;
-    const copyLink = async () => {
-      try {
-        await navigator.clipboard.writeText(pairingURL.href);
-        message("Link copied. Open SceneForge Camera from the Home Screen and tap Paste.");
-      } catch {
-        message("Copy this page’s address from Safari. Open SceneForge Camera from the Home Screen and tap Paste.");
-      }
-    };
-    button("Copy pairing link", () => void copyLink());
-    return message("Install SceneForge Camera from Xcode to record on iPhone. If this button can’t open the installed app, copy the pairing link and tap Paste in the app.");
+    configureNativeApp(code.data);
+    if (!navigator.mediaDevices?.getUserMedia) return message("Open this QR link directly in Safari to use the camera.");
+    return offerMarkerCamera(settings, authorization);
   }
   const xr = navigator.xr;
   if (!xr) return message(arSetup);

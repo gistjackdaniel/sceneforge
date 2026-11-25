@@ -52,7 +52,7 @@ const mobilePoseSchema = z.discriminatedUnion("kind", [
  * Poses are camera-to-world in the device session frame. Timestamps are monotonic nanoseconds.
  */
 export const mobileCameraSessionSchema = z.object({
-  framework: z.enum(["arkit", "arcore", "webxr"]),
+  framework: z.enum(["arkit", "arcore", "webxr", "marker"]),
   cameraLocal: z.enum(["gl", "opencv"]).optional(),
   frames: z.array(z.object({
     timestampNs: z.number().int().nonnegative(),

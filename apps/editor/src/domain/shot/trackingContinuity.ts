@@ -284,7 +284,9 @@ export const cameraLayersFromSamples = (input: {
   referenceObservations?: readonly ReferenceObservation[];
 }): { trackingEvents: TrackingEvent[]; mapping: CameraMotionMapping } => {
   const loss = trackingEventsForLoss(input.samples);
-  const jump = estimateRelocalizationDrift(input.samples, input.calibration, input.jumpThresholdM ?? 0.02);
+  const jump = input.calibration.arFramework === "marker"
+    ? []
+    : estimateRelocalizationDrift(input.samples, input.calibration, input.jumpThresholdM ?? 0.02);
   const reference = input.referenceObservations
     ? estimateReferenceDrift({ calibration: input.calibration, observations: input.referenceObservations })
     : undefined;

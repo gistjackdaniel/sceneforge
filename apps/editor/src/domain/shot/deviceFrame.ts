@@ -15,7 +15,7 @@ export const SCENE_CAMERA_FRAME = {
 } as const;
 
 /**
- * ARKit, ARCore, and WebXR session worlds match the scene basis:
+ * ARKit, ARCore, WebXR, and the upright marker session match the scene basis:
  * right-handed, +Y up, meters. Their camera local frame is also GL (−Z look).
  * The basis change is therefore the identity. Origin, yaw, and scale belong
  * to world calibration, not to this map.
@@ -24,6 +24,7 @@ export const DEVICE_SESSION_FRAME = {
   arkit: { handedness: "right", upAxis: "+Y", unit: "meter", cameraLook: "-Z" },
   arcore: { handedness: "right", upAxis: "+Y", unit: "meter", cameraLook: "-Z" },
   webxr: { handedness: "right", upAxis: "+Y", unit: "meter", cameraLook: "-Z" },
+  marker: { handedness: "right", upAxis: "+Y", unit: "meter", cameraLook: "-Z" },
 } as const;
 
 export type DeviceFramework = keyof typeof DEVICE_SESSION_FRAME;

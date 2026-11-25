@@ -168,7 +168,7 @@ const intrinsicsSchema = z.object({
 
 const calibrationSchema = z.object({
   calibrationId: z.string().min(1),
-  arFramework: z.enum(["arkit", "arcore", "webxr", "viewport", "other"]),
+  arFramework: z.enum(["arkit", "arcore", "webxr", "marker", "viewport", "other"]),
   scale: z.number().positive(),
   rotation: quat,
   translation: vec3,

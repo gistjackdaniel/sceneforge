@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright-core");
 const origin = process.env.SCENEFORGE_ORIGIN || "http://localhost:4173";
-const ios = process.argv.includes("--ios");
+const marker = process.argv.includes("--marker");
+const ios = marker || process.argv.includes("--ios");
 const qr = ios || process.argv.includes("--qr");
 const output = resolve(process.env.SCENEFORGE_EVIDENCE_DIR || fileURLToPath(new URL("../../../.local/phase2", import.meta.url)));
 await mkdir(output, { recursive: true });
@@ -25,7 +26,7 @@ function unpackTar(archive) {
   return files;
 }
 
-const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH, headless: true, args: ["--enable-unsafe-swiftshader", "--use-angle=swiftshader"] });
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH, headless: true, args: ["--enable-unsafe-swiftshader", "--use-angle=swiftshader", "--disable-background-timer-throttling", "--disable-renderer-backgrounding"] });
 try {
   const desktop = await browser.newContext({ viewport: { width: 1496, height: 900 }, acceptDownloads: true });
   const editor = await desktop.newPage();
@@ -66,6 +67,53 @@ try {
     viewport: { width: 412, height: 800 }, isMobile: true, hasTouch: true,
     ...(ios ? { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1" } : {}),
   });
+  if (marker) {
+    await stage.getByRole("button", { name: "Show tracking marker" }).click();
+    const dialog = editor.getByRole("dialog", { name: "Tracking marker" });
+    const markerImage = await dialog.getByRole("img", { name: "Camera tracking marker" }).evaluate((canvas) => canvas.toDataURL().split(",")[1]);
+    await editor.screenshot({ path: resolve(output, "desktop-marker.png") });
+    await mobile.addInitScript(({ image }) => {
+      let requested = false;
+      Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: async () => {
+        if (!requested) {
+          requested = true;
+          throw new DOMException("User declined", "NotAllowedError");
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = 480;
+        canvas.height = 640;
+        canvas.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px";
+        document.body.append(canvas);
+        const context = canvas.getContext("2d");
+        const bytes = Uint8Array.from(atob(image), (character) => character.charCodeAt(0));
+        const tag = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+        const stream = canvas.captureStream(0);
+        const [track] = stream.getVideoTracks();
+        const started = performance.now();
+        const interval = setInterval(() => {
+          if (track.readyState === "ended") {
+            clearInterval(interval);
+            canvas.remove();
+            return;
+          }
+          const seconds = (performance.now() - started) / 1000;
+          const hidden = seconds >= 0.8 && seconds < 1.3 || seconds >= 1.8 && seconds < 2.3;
+          context.fillStyle = "#555";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          if (!hidden) {
+            context.save();
+            context.translate(215 + Math.min(seconds, 5) * 12, 275);
+            context.rotate(Math.min(seconds, 5) * 0.06);
+            const size = 160 + Math.min(seconds, 5) * 7.2;
+            context.drawImage(tag, -size / 2, -size / 2, size, size);
+            context.restore();
+          }
+          track.requestFrame();
+        }, 1_000 / 30);
+        return stream;
+      } });
+    }, { image: markerImage });
+  }
   if (!ios) await mobile.addInitScript(() => {
     class SimulatedSession extends EventTarget {
       index = 0;
@@ -110,7 +158,25 @@ try {
   const phone = await mobile.newPage();
   phone.on("pageerror", (error) => errors.push(error.message));
   await phone.goto(connected.href);
-  if (ios) {
+  if (marker) {
+    const desktopSession = await desktop.newCDPSession(editor);
+    await desktopSession.send("Page.setWebLifecycleState", { state: "frozen" });
+    await phone.bringToFront();
+    const start = phone.getByRole("button", { name: "Start camera" });
+    const width = phone.getByRole("spinbutton", { name: "Marker width (cm)" });
+    await width.fill("16");
+    await phone.screenshot({ path: resolve(output, "phone-paired.png") });
+    await start.click();
+    await phone.getByText("Allow camera access for this site in Safari, then tap Start camera again.").waitFor();
+    await start.click();
+    await phone.getByText(/^Recording/).waitFor();
+    await phone.screenshot({ path: resolve(output, "phone-recording.png") });
+    await phone.getByRole("button", { name: "Take sent" }).waitFor({ timeout: 25_000 });
+    assert(await phone.locator("#camera-preview").isHidden());
+    await desktopSession.send("Page.setWebLifecycleState", { state: "active" });
+    await editor.getByRole("dialog", { name: "Tracking marker" }).waitFor({ state: "hidden" });
+  } else if (ios) {
+    await phone.getByText("Use installed iPhone app", { exact: true }).click();
     const handoff = phone.getByRole("link", { name: "Open SceneForge Camera" });
     const launch = new URL(await handoff.getAttribute("href"));
     assert.equal(launch.protocol, "sceneforge-camera:");
@@ -140,7 +206,9 @@ try {
     const take = { framework: "arkit", cameraLocal: "gl", frames, intrinsics: { imageSize: [1080, 1920], fx: 810, fy: 1968, cx: 594, cy: 1056 } };
     assert.equal((await fetch(takeUrl, { method: "POST", headers, body: JSON.stringify(take) })).status, 204);
   } else {
-    await phone.getByText(/Paired · .* fps/).waitFor({ timeout: 10_000 });
+    await phone.getByText(/Paired · .* fps/).waitFor({ timeout: 10_000 }).catch(async (error) => {
+      throw new Error(`${await phone.locator("#camera-status").innerText()}: ${errors.join("; ")}`, { cause: error });
+    });
     await phone.screenshot({ path: resolve(output, "phone-paired.png") });
     const start = phone.getByRole("button", { name: "Start AR" });
     await start.click();
@@ -180,17 +248,26 @@ try {
   const shot = JSON.parse(files.get("scene.json"));
   const take = shot.camera.takes.find((take) => take.id === manifest.cameraId);
   assert.equal(take.name, "Phone camera");
-  assert.equal(take.calibration.arFramework, ios ? "arkit" : "webxr");
+  assert.equal(take.calibration.arFramework, marker ? "marker" : ios ? "arkit" : "webxr");
   assert.equal(manifest.fps, shot.time.fps);
   assert.equal(take.samples[0].timecode, "00:00:00:00");
   assert.equal(camera.trajectory.length, shot.time.durationFrames);
   assert.notDeepEqual(take.samples[0].position, camera.trajectory[0].position);
   assert.notDeepEqual(camera.trajectory[0].position, camera.trajectory.at(-1).position);
-  assert.notEqual(camera.trajectory[0].intrinsics.cx, manifest.spec.width / 2);
-  assert.equal(camera.trackingEvents.filter((event) => event.kind === "tracking_lost").length, 2);
+  if (marker) assert.notDeepEqual(camera.trajectory[0].rotation, camera.trajectory.at(-1).rotation);
+  if (marker) assert.equal(camera.trajectory[0].intrinsics.cx, manifest.spec.width / 2);
+  else assert.notEqual(camera.trajectory[0].intrinsics.cx, manifest.spec.width / 2);
+  const losses = camera.trackingEvents.filter((event) => event.kind === "tracking_lost");
+  if (marker) {
+    assert(losses.length >= 2, "Both marker occlusions should produce tracking loss");
+    assert(camera.trackingEvents.some((event) => event.kind === "tracking_recovered"));
+    for (const event of losses) {
+      assert.deepEqual(camera.trajectory[event.frame].position, camera.trajectory[event.frame - 1].position);
+    }
+  } else assert.equal(losses.length, 2);
   const corrections = camera.trackingEvents.filter((event) => event.kind === "drift_correction");
-  assert.equal(corrections.length, 2);
-  assert(Math.abs(corrections[1].correction.translation[2]) > Math.abs(corrections[0].correction.translation[2]));
+  assert.equal(corrections.length, marker ? 0 : 2);
+  if (!marker) assert(Math.abs(corrections[1].correction.translation[2]) > Math.abs(corrections[0].correction.translation[2]));
   const pixels = manifest.spec.width * manifest.spec.height * camera.trajectory.length;
   const bytesPerPixel = { rgb: 3, depth: 4, normal: 12, world_position: 12, instance_id: 4, surface_tracking: 16 };
   for (const [pass, bytes] of Object.entries(bytesPerPixel)) {
@@ -200,12 +277,13 @@ try {
   }
   assert.deepEqual(errors, []);
   const summary = {
-    device: ios ? "iPhone browser handoff and synthetic ARKit poses" : "Simulated WebXR poses in Android-sized Chromium viewport",
+    device: marker ? "Camera marker frames in Chromium with iPhone user agent"
+      : ios ? "iPhone browser handoff and synthetic ARKit poses" : "Simulated WebXR poses in Android-sized Chromium viewport",
     pairing: qr ? "QR over Cloudflare HTTPS" : "USB localhost",
     cameraTake: take.id,
     fps: manifest.fps,
     frames: camera.trajectory.length,
-    trackingLosses: 2,
+    trackingLosses: losses.length,
     driftCorrections: corrections.length,
     passes: Object.keys(bytesPerPixel),
     archiveBytes: restored.length,

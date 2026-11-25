@@ -7,13 +7,14 @@ import { setTimeout as pause } from "node:timers/promises";
 import { build } from "vite";
 import { z } from "zod";
 import { MOBILE_CAMERA_API, MOBILE_CAMERA_PAGE } from "../src/domain/shot/mobileCaptureProtocol";
+import { arucoModule } from "./arucoModule";
 
 const phoneScript = "/mobile-camera.js";
 const dnsAnswerSchema = z.object({ Status: z.literal(0), Answer: z.array(z.object({ type: z.number() })) });
 const phoneHeaders = {
   "Cache-Control": "no-store",
-  "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
-  "Permissions-Policy": "xr-spatial-tracking=(self)",
+  "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'",
+  "Permissions-Policy": "camera=(self), xr-spatial-tracking=(self)",
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
 };
@@ -24,6 +25,7 @@ async function bundlePhone(root: string) {
     configFile: false,
     envFile: false,
     root,
+    plugins: [arucoModule()],
     logLevel: "error",
     build: {
       write: false,

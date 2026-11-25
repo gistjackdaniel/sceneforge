@@ -56,7 +56,7 @@ export const mirrorsSamples = (input: {
   && input.calibration.scale === 1;
 
 const trackingStateSchema = z.enum(["normal", "limited", "not_available"]);
-const frameworkSchema = z.enum(["arkit", "arcore", "webxr", "viewport", "other"]);
+const frameworkSchema = z.enum(["arkit", "arcore", "webxr", "marker", "viewport", "other"]);
 const methodSchema = z.enum(["manual_anchor", "marker", "plane_fit", "identity"]);
 const eventKindSchema = z.enum(["tracking_lost", "tracking_recovered", "relocalized", "drift_correction"]);
 

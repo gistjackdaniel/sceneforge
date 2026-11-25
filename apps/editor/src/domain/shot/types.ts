@@ -183,7 +183,7 @@ export type CameraIntrinsics = {
  */
 export type DeviceCalibration = {
   calibrationId: string;
-  arFramework: "arkit" | "arcore" | "webxr" | "viewport" | "other";
+  arFramework: "arkit" | "arcore" | "webxr" | "marker" | "viewport" | "other";
   scale: number;
   rotation: Quat;
   translation: Vec3;

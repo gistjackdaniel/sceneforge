@@ -1,7 +1,8 @@
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useId, useMemo, useRef, useState } from "react";
 import qrcode from "qrcode-generator";
 import { mobileCameraTakeCommand } from "../../application/services/mobileCameraTake";
 import { MOBILE_CAMERA_API, MOBILE_CAMERA_PAGE, mobilePairSchema, type MobilePair, type MobilePairTransport } from "../../domain/shot/mobileCaptureProtocol";
+import { drawTrackingMarker } from "../../domain/shot/mobileMarker";
 import type { Shot, ShotCommand } from "../../domain/shot";
 
 const route = `${MOBILE_CAMERA_API}/pair`;
@@ -18,6 +19,9 @@ export function PhoneCameraControls({ shot, disabled, onTake }: {
   const [connection, setConnection] = useState<Connection>({ kind: "idle" });
   const [notice, setNotice] = useState("");
   const startRequest = useRef<AbortController | undefined>(undefined);
+  const markerDialog = useRef<HTMLDialogElement>(null);
+  const markerCanvas = useRef<HTMLCanvasElement>(null);
+  const markerTitleId = useId();
   const pair = connection.kind === "waiting" ? connection.pair : undefined;
   const phone = useMemo(() => {
     if (!pair) return undefined;
@@ -109,8 +113,20 @@ export function PhoneCameraControls({ shot, disabled, onTake }: {
     {phone ? <>
       {phone.image && <img className="scene-phone-qr" src={phone.image} alt="Phone camera pairing QR code" />}
       <p className="scene-note">{phone.image
-        ? "Scan with your phone’s camera. Open Chrome on Android or SceneForge Camera on iPhone. Keep this panel open."
+        ? "Scan with your phone’s camera. Open Chrome on Android or Safari on iPhone. Keep this panel open."
         : "Open the link in Android Chrome using USB port forwarding. Keep this panel open."}</p>
+      {phone.image && <>
+        <button onClick={() => {
+          if (markerCanvas.current) drawTrackingMarker(markerCanvas.current);
+          markerDialog.current?.showModal();
+        }}>Show tracking marker</button>
+        <dialog ref={markerDialog} className="scene-marker-dialog" aria-labelledby={markerTitleId}>
+          <h2 id={markerTitleId}>Tracking marker</h2>
+          <p>Measure the width of the black square in centimeters. Enter that width in Safari and keep the marker in view as you move the phone.</p>
+          <canvas ref={markerCanvas} width={600} height={600} role="img" aria-label="Camera tracking marker" />
+          <form method="dialog"><button>Close marker</button></form>
+        </dialog>
+      </>}
       <label>Phone link<input readOnly value={phone.url} onFocus={(event) => event.target.select()} /></label>
       <button onClick={cancel}>Cancel pairing</button>
     </> : connection.kind === "linking" ? <>
