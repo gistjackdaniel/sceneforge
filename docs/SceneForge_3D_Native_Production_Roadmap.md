@@ -2,7 +2,7 @@
 title: "SceneForge — 3D-Native Generative Production 최소 기능 PRD"
 version: "0.2"
 status: "현재 기준 / 최소 기능 PRD"
-updated: "2026-11-17"
+updated: "2026-11-24"
 source: "2026-10-29~30 SceneForge 아키텍처 및 경쟁 제품에 관한 대화"
 ---
 
@@ -279,13 +279,37 @@ flowchart TD
 
 ### 5.3 연구 참고점
 
-- **DAR (2026):** animated mesh로부터 **tracking + world position + normal**의 neural 4D G-buffer를 주입하는 4D renderer 연구. 직접적인 B→C 설계 비교의 출발점. [참고 3]
+- **DAR (2026-07):** animated mesh로부터 **tracking + world position + normal**의 neural 4D G-buffer를 주입하는 4D renderer 연구. 직접적인 B→C 설계 비교의 출발점. [참고 3]
+  - 별도 백본이 아니라 조건 주입 방법이다. Wan2.2-Fun-5B-Control-Camera의 카메라 어댑터를 Plücker 24채널에서 24+9채널로 넓히고 LoRA(rank 256)를 붙인다. 480×832 고정.
+  - 저자 합성 벤치마크 68클립에서 LoRA 버전 PSNR 23.22, Wan2.2-Depth 21.68. world position 대신 depth를 넣으면 1.26–1.55 dB 떨어진다. H1의 직접 근거다.
+  - 한계: identity는 첫 프레임 참조 하나에 의존하고, 200프레임 이상이나 긴 가림에서 깜빡임이 생긴다. 재질 채널이 없다. 코드·가중치 공개는 미확인이고 논문은 CC BY-NC-SA.
 - **4Director (2026):** rigid object mesh와 trajectory를 scene에 유지하지만 생성 모델에는 depth video를 활용하는 접근. scene control과 appearance preservation을 분리해서 살펴볼 사례. [참고 4]
 - **TRON (2026):** 3D Gaussian/PBR/조명 제어와 neural renderer를 결합한 연구. material/lighting control 연구 트랙에 적합. [참고 5]
 - **DiffusionRenderer (CVPR 2025):** geometry/material/lighting 관련 렌더 조건과 video diffusion을 연계한 연구. [참고 6]
 - **DanceTogether! (2025):** 복수 인물 identity와 각 pose stream의 결합을 다루는 연구. 연구 H4의 비교 참고점. [참고 9]
+- **RGBX-Next (NVIDIA, 2026-08):** Wan2.1 14B 전체 학습으로 albedo/normal/depth/roughness/metallic/transparency와 조명 버퍼에서 RGB를 만든다. DiffusionRenderer(Cosmos판)·VACE보다 좋다고 보고. 참조 이미지와 world position은 없고 17프레임에 약 400초(A100). 재질·조명 채널 설계의 참고점. [참고 10]
+- **NeuralSRender (2026-10):** Wan2.2-TI2V-5B + LoRA(rank 32)로 G-buffer 5채널에서 RGB를 만든다. 24GB GPU로 학습 가능하고 FVD에서 Cosmos-Transfer2.5보다 좋다. 주행 영상 전용이지만 코드·가중치가 공개돼 5B G-buffer LoRA 재현의 출발 코드로 쓸 수 있다. [참고 11]
+- **AlayaRenderer-Flash (2026-07):** G-buffer→RGB 렌더러를 4-step 증류와 스트리밍으로 832×448, 31.5 FPS(H200 1장)까지 올렸다. 생성 렌더의 준실시간 프리뷰 가능성. [참고 12]
+- **UniMoCa (2026-08):** Wan2.2 I2V에 identity 없는 다인 인체 proxy 렌더와 카메라 마커를 넣는다. 2인 상호작용과 카메라를 함께 제어하는 비교 대상. [참고 13]
+- **WorldCast (2026-10):** Wan2.1-I2V-14B에 포인트클라우드 렌더, Plücker, 캐릭터 앞·뒤·좌·우 참조 메모리를 넣는다. 큰 각도 orbit에서 identity를 유지한다. H2 실험과 DAR의 첫 프레임 의존을 보완할 후보. [참고 14]
+- **UniCaMo (Qualcomm, 2026-10):** Wan2.1-I2V-14B에 3D point track과 6DoF 카메라를 넣는다. 물체·카메라 동시 제어 참고. [참고 15]
+- **MeshToken (2026-06):** SMPL 메시를 렌더하지 않고 토큰으로 직접 넣는다. 실험군 C(direct 3D features)의 비교 대상. [참고 16]
 
-위 연구들은 **서로 다른 문제 설정**을 가지고 있으며 어느 하나가 SceneForge의 전체 요구조건을 이미 해결했다는 뜻은 아니다.
+위 연구들은 **서로 다른 문제 설정**을 가지고 있으며 어느 하나가 SceneForge의 전체 요구조건을 이미 해결했다는 뜻은 아니다. 2026-11-24 기준으로 DAR와 같은 문제 설정(animated mesh + camera + 참조 이미지 → 영상)에서 DAR와 직접 비교해 앞선 연구는 찾지 못했다.
+
+### 5.4 Video backbone 후보 (2026-11-24 확인)
+
+위 G-buffer 렌더러 연구는 대부분 Wan 2.1/2.2 위에 있다. 백본은 성능보다 **한국에서 fine-tuning과 상업 사용이 가능한 라이선스**가 먼저 걸린다.
+
+| 후보 | 라이선스 | 판단 | 메모 |
+|---|---|---|---|
+| **Wan 2.2 (5B / A14B)** | Apache 2.0 | 시작점 | 공식 오픈 가중치 최신판. DAR·NeuralSRender가 5B를 쓴다. Wan 2.7은 API만 확인되고 가중치 공개는 미확인. [참고 19] |
+| **Cosmos 3 (Nano 16B / Super 64B)** | OpenMDW-1.1 | 확장 후보 | 2026-05-31 공개. transfer(조건 영상 → 영상) 내장, 상업 사용 가능. Edge 4B는 video-to-video transfer 미지원. G-buffer 렌더러 참고 코드가 적다. [참고 17] |
+| **LTX-2.5 (22B)** | LTX-2.x Community License | 보류 | 연 매출 1천만 달러 이하 무료. |
+| **MiniMax H3 (33B)** | MiniMax H3 Community License | 제외 | 적용 지역에서 한국·미국·EU·영국을 뺀다. 이 모델 기반인 AnyGameRenderer도 같은 이유로 제외. [참고 18] |
+| **HunyuanVideo 1.5** | Tencent Hunyuan Community License | 제외 | 이전 Hunyuan 라이선스는 한국·EU·영국을 뺀다. 1.5 원문은 재확인 필요. |
+
+**[설계 제안]** Wan2.2-5B에서 DAR 레시피(어댑터 확장 + LoRA)를 재현해 실험군 B의 기준선으로 쓴다. 저자 기준 LoRA 학습은 H100 2장에서 약 36시간이다. 기준선이 서면 같은 조건 인터페이스로 Wan2.2-A14B 또는 Cosmos 3 Nano로 키운다. 재질 변경이 필요하면 RGBX-Next식 재질 채널을, 가림이나 orbit 뒤 identity가 무너지면 WorldCast식 다시점 참조 메모리를 H2 실험으로 더한다. 480×832가 해상도 목표에 못 미치면 확장 단계에서 다시 정한다.
 
 ---
 
@@ -390,7 +414,7 @@ flowchart TD
 
 - Canonical representation으로 OpenUSD 계열을 사용할지, 더 가벼운 scene graph와 병행할지.
 - MVP preview를 Blender/Unreal 중 어디에 구현할지.
-- Video backbone을 무엇으로 할지, fine-tuning 가능한 라이선스/환경이 확보되는지.
+- Video backbone을 무엇으로 할지, fine-tuning 가능한 라이선스/환경이 확보되는지. 후보와 라이선스 제약은 §5.4에 있고, 현재 제안은 Wan2.2-5B + DAR 레시피로 시작하는 것이다.
 - G-buffer만으로 충분한지, direct 3D feature tokens 또는 surface memory가 필수인지.
 - object별 hard-lock 적용 범위와 compositing 방법.
 - 생성 영상의 시간 길이, 레이턴시, 해상도 목표를 어디에 둘지.
@@ -420,7 +444,7 @@ SceneForge의 첫 핵심 데모는 다음을 모두 보여줄 때 성공으로 �
 
 ---
 
-## 11. 검증한 외부 참고 자료 (2026-10-30 확인)
+## 11. 검증한 외부 참고 자료 (2026-10-30 확인, 10번 이후 2026-11-24 추가)
 
 다음은 **대화의 기술 방향을 보완하기 위해 확인한 외부 자료**다. 제품 기능과 논문 성능은 각 자료의 발표 당시 조건에 한정된다.
 
@@ -443,6 +467,26 @@ SceneForge의 첫 핵심 데모는 다음을 모두 보여줄 때 성공으로 �
    https://dev.epicgames.com/documentation/ko-kr/unreal-engine/controlling-a-virtual-camera-actor-using-live-link-in-unreal-engine
 9. **DanceTogether! — Identity-Preserving Multi-Person Interactive Video Generation** (2025).  
    https://arxiv.org/abs/2505.18078
+10. **RGBX-Next — Towards Realistic Generative Rendering from G-Buffers** (NVIDIA, 2026-08): Wan2.1 14B, 재질·조명 G-buffer → RGB.  
+   https://arxiv.org/abs/2608.13929
+11. **NeuralSRender — G-Buffer Guided Video Diffusion for Sim-to-Real Rendering** (2026-10): Wan2.2-TI2V-5B LoRA, 코드·가중치 공개.  
+   https://arxiv.org/abs/2610.29200
+12. **Generative World Renderer at the Speed of Play** (2026-07): AlayaRenderer-Flash, G-buffer 렌더러 31.5 FPS.  
+   https://huggingface.co/papers/2607.18703
+13. **UniMoCa — Unifying Motion and Camera Controls as Visual Proxies for Faithful Human Video Generation** (2026-08).  
+   https://arxiv.org/abs/2608.01944
+14. **WorldCast — World-Consistent Character Video Generation with Large-Angle Camera Control** (2026-10).  
+   https://arxiv.org/abs/2610.33135
+15. **UniCaMo — Unified Camera and Motion Control for Video Diffusion Models** (Qualcomm, 2026-10).  
+   https://arxiv.org/abs/2611.00810
+16. **MeshToken — Towards 3D-Aware Video Diffusion Models: Render-Free Human Motion Control with Mesh Tokenization** (2026-06).  
+   https://arxiv.org/abs/2606.02000
+17. **Cosmos 3 기술 보고서** (NVIDIA, 2026-05-31): OpenMDW-1.1, Nano/Super 가중치 공개.  
+   https://research.nvidia.com/labs/cosmos-lab/cosmos3/technical-report.pdf
+18. **MiniMax H3 라이선스 Q&A**: 적용 지역에서 한국·미국·EU·영국 제외.  
+   https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/QA-about-License.md
+19. **Wan 오픈 가중치는 2.2가 최신** (2026-07): Wan-Video 공식 저장소 기준.  
+   https://howaiworks.ai/alibaba-wan-open-weights-stopped-at-2-2/
 
 ---
 
@@ -456,6 +500,8 @@ SceneForge의 첫 핵심 데모는 다음을 모두 보여줄 때 성공으로 �
 | 2026-10-30 | **아키텍처 제안** | Editable scene state + deterministic renderer + 3D-aware generative renderer + compositing | 제어 가능성과 사실감의 분리 |
 | 2026-10-30 | **실험 필요** | G-buffer vs direct 3D features vs hybrid를 비교 | 가장 효율적인 생성 모델 인터페이스 결정 |
 | 2026-10-30 | **실험 필요** | USD/렌더 엔진/video backbone/하드락 정책 결정 | 기존 툴 재사용과 제작 호환성 확보 |
+| 2026-11-24 | **설계 제안** | Video backbone은 Wan2.2-5B + DAR 레시피로 시작하고 Wan2.2-A14B 또는 Cosmos 3로 확장 | DAR와 직접 비교해 앞선 연구 없음. Apache 2.0. §5.4 |
+| 2026-11-24 | **설계 제안** | 라이선스에서 한국을 빼는 모델(MiniMax H3, HunyuanVideo)은 백본 후보에서 제외 | 한국에서 fine-tuning·상업 사용 불가 |
 
 ---
 
