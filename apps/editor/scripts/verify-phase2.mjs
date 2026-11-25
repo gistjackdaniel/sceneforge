@@ -93,9 +93,14 @@ try {
         }, 1);
       }
     }
+    let requested = false;
     Object.defineProperty(navigator, "xr", { value: {
-      isSessionSupported: async (mode) => mode === "immersive-ar",
-      requestSession: async () => new SimulatedSession(),
+      isSessionSupported: () => new Promise(() => {}),
+      requestSession: async () => {
+        if (requested) return new SimulatedSession();
+        requested = true;
+        throw new DOMException("User declined", "NotAllowedError");
+      },
     } });
     window.XRWebGLLayer = class {
       framebuffer = null;
@@ -131,9 +136,12 @@ try {
     const take = { framework: "arkit", cameraLocal: "gl", frames, intrinsics: { imageSize: [1080, 1920], fx: 810, fy: 1968, cx: 594, cy: 1056 } };
     assert.equal((await fetch(takeUrl, { method: "POST", headers, body: JSON.stringify(take) })).status, 204);
   } else {
-    await phone.getByText(/Paired · .* fps/).waitFor();
+    await phone.getByText(/Paired · .* fps/).waitFor({ timeout: 10_000 });
     await phone.screenshot({ path: resolve(output, "phone-paired.png") });
-    await phone.getByRole("button", { name: "Start AR" }).click();
+    const start = phone.getByRole("button", { name: "Start AR" });
+    await start.click();
+    await phone.getByText("Allow camera and AR access in Chrome, then tap Start AR again.").waitFor();
+    await start.click();
     await phone.getByRole("button", { name: "Take sent" }).waitFor({ timeout: 25_000 });
   }
   await stage.getByText("Phone take saved. The shot camera is selected.").waitFor();

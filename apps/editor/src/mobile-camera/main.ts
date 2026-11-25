@@ -21,11 +21,25 @@ const button = (label: string, run?: () => void) => {
   action.textContent = label;
   action.disabled = !run;
   action.onclick = run ?? null;
+  action.hidden = false;
 };
 
 const route = `${MOBILE_CAMERA_API}/take`;
 const code = mobilePairCodeSchema.safeParse(location.hash.slice(1));
 const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+const arSetup = "Open this link in Chrome on an ARCore-capable Android phone with Google Play Services for AR enabled.";
+
+const startupMessage = (error: unknown): string => {
+  if (error instanceof DOMException) {
+    if (error.name === "SecurityError" || error.name === "NotAllowedError") {
+      return "Allow camera and AR access in Chrome, then tap Start AR again.";
+    }
+    if (error.name === "NotSupportedError") {
+      return "Chrome couldn't start AR. Check camera permissions and update Google Play Services for AR on an ARCore-capable phone.";
+    }
+  }
+  return error instanceof Error ? error.message : "Couldn't start AR.";
+};
 
 const viewIntrinsics = (view: XRView, viewport: XRViewport): Intrinsics => {
   const projection = view.projectionMatrix;
@@ -140,20 +154,34 @@ async function start(xr: XRSystem, settings: MobilePairSettings, authorization: 
     active.requestAnimationFrame(capture);
   } catch (error) {
     await session?.end().catch(() => undefined);
-    message(error instanceof Error ? error.message : "Couldn't start AR.");
+    message(startupMessage(error));
     button("Start AR", () => void start(xr, settings, authorization));
   }
 }
 
 async function connect() {
-  if (!code.success) return message("Open the phone link from SceneForge's Camera trajectory panel.");
+  action.hidden = true;
+  iosApp.hidden = true;
+  if (!code.success) return message("Scan a new code from Camera trajectory → Connect phone with QR in the editor.");
+  if (!window.isSecureContext) return message("Open a new HTTPS QR link from the editor.");
+  message("Connecting to the editor…");
   const authorization = `Bearer ${code.data}`;
-  const response = await fetch(route, { headers: { Authorization: authorization } });
-  if (response.status === 404) return message("This pairing ended. Open a new phone link from the editor.");
-  if (!response.ok) throw new Error("Couldn't reach the editor.");
-  const settings = mobilePairSettingsSchema.parse(await response.json());
+  const connection = new AbortController();
+  const timeout = window.setTimeout(() => connection.abort(), 12_000);
+  let settings: MobilePairSettings;
+  try {
+    const response = await fetch(route, { headers: { Authorization: authorization }, signal: connection.signal });
+    if (response.status === 404) return message("This pairing ended. Keep the editor's Camera trajectory panel open and scan a new QR.");
+    if (!response.ok) throw new Error("Couldn't reach the editor.");
+    settings = mobilePairSettingsSchema.parse(await response.json());
+  } catch {
+    message("Couldn't reach the editor. Keep its Camera trajectory panel open and retry, or scan a new QR.");
+    button("Retry connection", () => void connect());
+    return;
+  } finally {
+    window.clearTimeout(timeout);
+  }
   if (isIOS) {
-    action.hidden = true;
     if (location.protocol !== "https:" || !/^[a-z0-9-]+\.trycloudflare\.com$/.test(location.hostname)) {
       return message("Use Connect phone with QR in the editor to pair SceneForge Camera on iPhone.");
     }
@@ -164,11 +192,9 @@ async function connect() {
     return message("Open the installed SceneForge Camera app to record this take with ARKit.");
   }
   const xr = navigator.xr;
-  if (!window.isSecureContext || !xr || !await xr.isSessionSupported("immersive-ar")) {
-    return message("Open the QR link in Chrome on an ARCore-capable Android phone with Google Play Services for AR enabled.");
-  }
+  if (!xr) return message(arSetup);
   message(`Paired · ${settings.durationFrames} frames at ${settings.fps} fps. Start AR to record.`);
   button("Start AR", () => void start(xr, settings, authorization));
 }
 
-void connect().catch((error: unknown) => message(error instanceof Error ? error.message : "Couldn't reach the editor."));
+void connect();

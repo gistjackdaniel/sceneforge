@@ -111,10 +111,10 @@ async function waitForPhonePage(origin: string, signal: AbortSignal) {
 }
 
 export const createMobileCameraRelay = (root: string) => {
-  let bundle: ReturnType<typeof bundlePhone> | undefined;
+  let bundling: ReturnType<typeof bundlePhone> | undefined;
   return async (handleTake: RequestListener, signal: AbortSignal, onDisconnect: () => void): Promise<string> => {
-    bundle ??= bundlePhone(root).catch((error: unknown) => { bundle = undefined; throw error; });
-    const { html, script } = await bundle;
+    bundling ??= bundlePhone(root).finally(() => { bundling = undefined; });
+    const { html, script } = await bundling;
     signal.throwIfAborted();
     const server = createServer((request, response) => {
       const path = request.url?.split("?")[0];
