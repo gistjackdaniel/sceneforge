@@ -1,6 +1,6 @@
 # Local Photo to 3D setup
 
-The editor starts two local Python processes. Pixal3D creates the textured mesh from the photo. Make-It-Animatable skins it with a Mixamo bone hierarchy, and the three.ws rig library transfers ICT-FaceKit expressions onto the head. The resulting GLB retains the mesh's PBR maps and can be driven with Kimodo body motion and webcam expression weights.
+The editor starts two local Python processes. Pixal3D creates the textured mesh from the photo. Make-It-Animatable skins it with a Mixamo bone hierarchy. The rig stage then fits the ICT-FaceKit expression template to the reconstructed face and writes the rigged GLB with the three.ws rig library. The resulting GLB retains the mesh's PBR maps and can be driven with Kimodo body motion and webcam expression weights.
 
 ## Prepare the runtimes
 
@@ -27,6 +27,6 @@ Keep the editor on Windows and build both Python environments inside a WSL2 dist
 
 RTX 50-series GPUs (sm_120) need PyTorch built for CUDA 12.8 or newer in the Pixal3D environment, for example `torch==2.7.1` from the `cu128` index. Build its CUDA extensions with `TORCH_CUDA_ARCH_LIST=12.0` and `NATTEN_CUDA_ARCH=12.0`. With about 32 GB of RAM in WSL, set `MAX_JOBS=4`, because the o-voxel build runs out of memory at higher parallelism. The rig worker's PyTorch 2.1.2 has no sm_120 kernels, so set `PHOTO_AVATAR_RIG_CPU=1` on these GPUs.
 
-Use a straight-on full-body photo with the head, hands, and feet visible and the limbs clear of the torso. The model estimates geometry for surfaces hidden by the input view. Expression quality depends on the reconstructed head and its match to the face template. A local inference job uses temporary files, removed when the job exits. The editor receives a GLB of up to 64 MB.
+Use a straight-on full-body photo with the head, hands, and feet visible and the limbs clear of the torso. Where an arm rests against the body, the reconstruction joins the two surfaces. The rig stage gives each side its own weights and removes the triangles that still join them, which can leave small holes there. The model estimates geometry for surfaces hidden by the input view. Expression quality depends on the reconstructed head and its match to the face template. A local inference job uses temporary files, removed when the job exits. The editor receives a GLB of up to 64 MB.
 
 Pixal3D code and checkpoints are MIT. Make-It-Animatable code is MIT and the checkpoint repository is Apache-2.0. The three.ws library is Apache-2.0 and ICT-FaceKit Light is MIT. The models and source assets that these projects depend on retain their own terms, including Mixamo's gated files. [Pixal3D notice](https://github.com/TencentARC/Pixal3D/blob/master/NOTICE) · [Make-It-Animatable weights](https://huggingface.co/jasongzy/Make-It-Animatable) · [three.ws license](https://github.com/nirholas/three.ws/blob/main/LICENSE)
