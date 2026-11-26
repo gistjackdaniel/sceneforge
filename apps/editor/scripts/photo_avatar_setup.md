@@ -48,3 +48,97 @@ MODEL_SERVER_URL=http://127.0.0.1:4180
 ```
 
 The local editor forwards photo avatar requests and Kimodo generation to that address. It copies each generated Kimodo clip into its local `.local/poses/clips` cache after checking the clip's hash, so saved shots still load while the tunnel is down. While the tunnel is down, new generation requests fail with a message to check the SSH tunnel.
+
+### Run the model server in Docker
+
+Use these steps when the GPU machine runs every job in a Docker container. The container holds Node, the editor, and the Python environments, because the editor starts each Python stage by its path. The image holds only the toolchain. The repository and the runtimes are bind mounts:
+
+- `~/sceneforge` on the host is `/workspace/sceneforge` in the container.
+- `~/sceneforge-runtimes` on the host is `/opt/runtimes` in the container. It holds the checkouts, the conda environments, the Hugging Face cache, the Kimodo checkpoints, and the container's home folder.
+
+The container runs as your host user, so every file it writes stays yours. The steps assume an x86_64 host, and `<gpu>` is the index of the GPU that you may use.
+
+1. Install Docker and the NVIDIA Container Toolkit on the host. [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+2. Run `nvidia-smi` on the host and read **CUDA Version**. The default image uses CUDA 12.8, which needs driver 570 or newer. RTX 50-series GPUs need CUDA 12.8. With an older driver, add `--build-arg CUDA_IMAGE=nvidia/cuda:12.4.1-devel-ubuntu22.04` to the build command, or pick another `-devel-ubuntu22.04` tag that the driver supports. To build on an image that you already use on the machine, pass its name as `CUDA_IMAGE`. That image needs `apt-get` and `nvcc`, and the build leaves it unchanged.
+3. Clone this repository to `~/sceneforge`, and create the runtime folder:
+
+	```sh
+	mkdir -p ~/sceneforge-runtimes/home
+	```
+
+4. Build the image from the repository root:
+
+	```sh
+	docker build -f apps/editor/docker/model-server.Dockerfile -t sceneforge-models apps/editor/docker
+	```
+
+5. Open a shell in a one-time setup container:
+
+	```sh
+	docker run --rm -it --gpus '"device=<gpu>"' --user "$(id -u):$(id -g)" \
+		-v "$HOME/sceneforge:/workspace/sceneforge" -v "$HOME/sceneforge-runtimes:/opt/runtimes" \
+		sceneforge-models bash
+	```
+
+6. In that shell, install the editor packages with `npm ci`. The shell starts in `/workspace/sceneforge/apps/editor`.
+7. Create one conda environment for each Python stage. Use Python 3.11 for the rig environment. For Pixal3D and Kimodo, use the Python version that the TRELLIS.2 and Kimodo install guides name. [Kimodo install](https://research.nvidia.com/labs/sil/projects/kimodo/docs/getting_started/quick_start.html)
+
+	```sh
+	conda create -y -p /opt/runtimes/envs/rig python=3.11
+	conda create -y -p /opt/runtimes/envs/pixal3d python=<version>
+	conda create -y -p /opt/runtimes/envs/kimodo python=<version>
+	```
+
+8. Activate an environment with `source /opt/miniforge/bin/activate /opt/runtimes/envs/<name>` before you install its packages. Install Kimodo in `/opt/runtimes/envs/kimodo`.
+9. Follow steps 2 through 5 of [Prepare the runtimes](#prepare-the-runtimes). Put each checkout and `arkit_template.npz` under `/opt/runtimes`. Skip the WSL2 setup. On RTX 50-series GPUs, still apply its CUDA 12.8 build settings and `PHOTO_AVATAR_RIG_CPU=1`.
+10. Leave the setup shell with `exit`.
+
+Write `.env.local` at the repository root on the host. Use the paths that the container sees, and don't set `MODEL_SERVER_URL`:
+
+```dotenv
+KIMODO_PYTHON=/opt/runtimes/envs/kimodo/bin/python
+CHECKPOINT_DIR=/opt/runtimes/kimodo-checkpoints
+TEXT_ENCODER_DEVICE=cpu
+HF_TOKEN=<token>
+PHOTO_AVATAR_PIXAL3D_DIR=/opt/runtimes/Pixal3D
+PHOTO_AVATAR_PIXAL3D_PYTHON=/opt/runtimes/envs/pixal3d/bin/python
+PHOTO_AVATAR_RIG_WORKER_DIR=/opt/runtimes/three.ws/workers/rig
+PHOTO_AVATAR_RIG_PYTHON=/opt/runtimes/envs/rig/bin/python
+PHOTO_AVATAR_MIA_DIR=/opt/runtimes/Make-It-Animatable
+PHOTO_AVATAR_ARKIT_TEMPLATE=/opt/runtimes/arkit_template.npz
+```
+
+Start the model server in the background. In the container the editor listens on all interfaces. The `-p` flag publishes it only on the host's loopback address, which is the address that the SSH tunnel above connects to.
+
+```sh
+docker run -d --name sceneforge-models --restart unless-stopped --gpus '"device=<gpu>"' --user "$(id -u):$(id -g)" \
+	-p 127.0.0.1:4173:4173 \
+	-v "$HOME/sceneforge:/workspace/sceneforge" -v "$HOME/sceneforge-runtimes:/opt/runtimes" \
+	sceneforge-models
+```
+
+Check that the container sees the GPU, and that the editor finds all six photo avatar paths:
+
+```sh
+docker exec sceneforge-models nvidia-smi
+curl -s http://127.0.0.1:4173/api/photo-avatar
+```
+
+The second command prints `{"available":true}` when the six paths resolve. If it prints `{"available":false}`, check each path with `docker exec sceneforge-models ls <path>`. Restart the container with `docker restart sceneforge-models` after you change `.env.local`. Then connect from this machine with the tunnel and the `MODEL_SERVER_URL` line above.
+
+To update the model server, run these commands on the host in `~/sceneforge`:
+
+```sh
+git pull --ff-only
+docker restart sceneforge-models
+```
+
+When `apps/editor/package-lock.json` changed, reinstall the packages while the server is stopped. `npm ci` deletes `node_modules` first, so a running editor can crash during the install and restart into a half-installed folder.
+
+```sh
+docker stop sceneforge-models
+docker run --rm --user "$(id -u):$(id -g)" \
+	-v "$HOME/sceneforge:/workspace/sceneforge" -v "$HOME/sceneforge-runtimes:/opt/runtimes" \
+	sceneforge-models npm ci
+docker start sceneforge-models
+```
