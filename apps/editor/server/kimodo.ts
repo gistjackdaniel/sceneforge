@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { loadEnv, type Plugin } from "vite";
+import { loadEnv, type Connect, type Plugin } from "vite";
 import { somaGenerationRequestSchema, somaMotionSchema, type SomaClipReference } from "../src/domain/sceneAuthoring/somaMotion";
 import type { z } from "zod";
 
@@ -12,6 +12,7 @@ type Request = z.infer<typeof somaGenerationRequestSchema>;
 
 const MAX_REQUEST_BYTES = 8192;
 const GENERATION_TIMEOUT_MS = 600_000;
+const CLIP_FETCH_TIMEOUT_MS = 60_000;
 const CLIP_PATH = /^\/api\/kimodo\/clips\/([a-f0-9]{64})\.json$/;
 
 function respond(response: ServerResponse, status: number, body: unknown): void {
@@ -62,8 +63,28 @@ function defaultPython(): string {
   return installed && existsSync(installed) ? installed : "python";
 }
 
-/** Run the local Kimodo provider and serve immutable, content-addressed SOMA clips. */
-export function kimodoMotionPlugin(editorRoot: string, mode: string): Plugin {
+/** Fetch a clip from the model server and keep it only when its bytes hash to its name. */
+async function fetchRemoteClip(modelServer: URL, pathname: string, sha256: string, cacheDirectory: string): Promise<Buffer> {
+  const response = await fetch(new URL(pathname, modelServer), { signal: AbortSignal.timeout(CLIP_FETCH_TIMEOUT_MS) });
+  if (!response.ok) throw new Error(`Model server answered ${response.status}.`);
+  const payload = Buffer.from(await response.arrayBuffer());
+  if (createHash("sha256").update(payload).digest("hex") !== sha256) throw new Error("Model server clip does not match its hash.");
+  await mkdir(cacheDirectory, { recursive: true });
+  const temporary = join(cacheDirectory, `.fetch-${randomUUID()}.json`);
+  try {
+    await writeFile(temporary, payload);
+    await rename(temporary, join(cacheDirectory, `${sha256}.json`));
+  } finally {
+    await rm(temporary, { force: true });
+  }
+  return payload;
+}
+
+/**
+ * Serve immutable, content-addressed SOMA clips and run the local Kimodo provider.
+ * With a model server, generation is proxied there and clips missing here are copied from it.
+ */
+export function kimodoMotionPlugin(editorRoot: string, mode: string, modelServer?: URL): Plugin {
   const repoRoot = join(editorRoot, "../..");
   const config = loadEnv(mode, repoRoot, ["KIMODO_PYTHON", "CHECKPOINT_DIR", "TEXT_ENCODER_DEVICE", "HF_TOKEN"]);
   const cacheDirectory = join(repoRoot, ".local", "poses", "clips");
@@ -78,20 +99,30 @@ export function kimodoMotionPlugin(editorRoot: string, mode: string): Plugin {
   };
   let busy = false;
 
-  const handle = async (request: IncomingMessage, response: ServerResponse, next: () => void) => {
+  const serveClip = async (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     const pathname = request.url?.split("?", 1)[0] ?? "";
     const clip = CLIP_PATH.exec(pathname);
-    if (request.method === "GET" && clip) {
+    if (request.method !== "GET" || !clip) return next();
+    let payload: Buffer;
+    try {
+      payload = await readFile(join(cacheDirectory, `${clip[1]}.json`));
+    } catch (error) {
+      const code = error instanceof Error && "code" in error ? error.code : undefined;
+      if (code !== "ENOENT") return respond(response, 500, { error: "Couldn't read this motion clip." });
+      if (!modelServer) return respond(response, 404, { error: "Couldn't read this motion clip." });
       try {
-        const payload = await readFile(join(cacheDirectory, `${clip[1]}.json`));
-        response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "public, max-age=31536000, immutable" });
-        response.end(payload);
-      } catch (error) {
-        const code = error instanceof Error && "code" in error ? error.code : undefined;
-        respond(response, code === "ENOENT" ? 404 : 500, { error: "Couldn't read this motion clip." });
+        payload = await fetchRemoteClip(modelServer, pathname, clip[1], cacheDirectory);
+      } catch (remoteError) {
+        console.error("Kimodo clip fetch failed", remoteError instanceof Error ? remoteError.message : remoteError);
+        return respond(response, 502, { error: "Couldn't copy this motion clip from the model server." });
       }
-      return;
     }
+    response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "public, max-age=31536000, immutable" });
+    response.end(payload);
+  };
+
+  const generate = async (request: IncomingMessage, response: ServerResponse, next: () => void) => {
+    const pathname = request.url?.split("?", 1)[0] ?? "";
     if (pathname !== "/api/kimodo/generate") return next();
     if (request.method !== "POST") return respond(response, 405, { error: "Use POST to generate motion." });
     if (request.headers["sec-fetch-site"] && request.headers["sec-fetch-site"] !== "same-origin") {
@@ -139,9 +170,13 @@ export function kimodoMotionPlugin(editorRoot: string, mode: string): Plugin {
     }
   };
 
+  const register = (middlewares: Connect.Server) => {
+    middlewares.use(serveClip);
+    if (!modelServer) middlewares.use(generate);
+  };
   return {
     name: "sceneforge-kimodo",
-    configureServer(server) { server.middlewares.use(handle); },
-    configurePreviewServer(server) { server.middlewares.use(handle); },
+    configureServer(server) { register(server.middlewares); },
+    configurePreviewServer(server) { register(server.middlewares); },
   };
 }
