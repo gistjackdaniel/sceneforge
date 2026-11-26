@@ -4,7 +4,7 @@ The editor starts two local Python processes. Pixal3D creates the textured mesh 
 
 ## Prepare the runtimes
 
-1. Run the editor and both Python environments on the same machine. Use Linux or WSL2 with a CUDA-capable NVIDIA GPU for Pixal3D. Pixal3D reports about 10–12 GB of VRAM peak usage for low-VRAM inference. Its TRELLIS.2 dependency maintains its own OS and CUDA support matrix. [Pixal3D](https://github.com/TencentARC/Pixal3D#installation) · [TRELLIS.2](https://github.com/microsoft/TRELLIS.2#-installation)
+1. Run the editor and both Python environments on the same machine, or see [Run the models on another machine](#run-the-models-on-another-machine). Use Linux or WSL2 with a CUDA-capable NVIDIA GPU for Pixal3D. Pixal3D reports about 10–12 GB of VRAM peak usage for low-VRAM inference. Its TRELLIS.2 dependency maintains its own OS and CUDA support matrix. [Pixal3D](https://github.com/TencentARC/Pixal3D#installation) · [TRELLIS.2](https://github.com/microsoft/TRELLIS.2#-installation)
 2. Set up a Python environment for Pixal3D using its TRELLIS.2, `requirements.txt`, NATTEN and utils3d installation steps. Clone Pixal3D's TRELLIS.2-based default branch. Install MoGe at `b942f00bdc2a2a23ebb474fbe034d487e6dcceec`, because MoGe 3.0 requires a newer trimesh than Pixal3D pins. The editor runs Hugging Face components from their local cache, so run the editor's mesh stage once with network access to populate it: `ATTN_BACKEND=sdpa python apps/editor/scripts/photo_avatar_mesh.py --pixal-dir /path/to/Pixal3D --image photo.png --output /tmp/mesh.glb`. The mesh stage removes the background with the MIT [BiRefNet](https://huggingface.co/ZhengPeng7/BiRefNet) weights instead of the gated, non-commercial RMBG-2.0 model that Pixal3D's `pipeline.json` names.
 3. Create a separate Python 3.11 environment for the three.ws rig worker. Use the PyTorch and Python dependency versions in the worker Dockerfile and requirements file as the reference. If the rig's PyTorch wheel lacks CUDA support for your GPU, set `PHOTO_AVATAR_RIG_CPU=1` to run the rig stage on CPU. [Rig runtime](https://github.com/nirholas/three.ws/blob/main/workers/rig/Dockerfile) · [Rig dependencies](https://github.com/nirholas/three.ws/blob/main/workers/rig/requirements.txt)
 4. Clone Make-It-Animatable and check out `d60cc7e01ff8da46448e458dbf450e8967b34e77`, the revision used by the three.ws worker. Copy `output/best/new` and `data` from the Hugging Face model repository with their real Git LFS contents. After accepting access conditions for the Hugging Face Mixamo dataset, download `bones.fbx` and `bones_vroid.fbx` into `data/Mixamo/` within the Make-It-Animatable checkout. [Source](https://github.com/jasongzy/Make-It-Animatable) · [Weights and demo data](https://huggingface.co/jasongzy/Make-It-Animatable/tree/main) · [Mixamo files](https://huggingface.co/datasets/jasongzy/Mixamo)
@@ -30,3 +30,21 @@ RTX 50-series GPUs (sm_120) need PyTorch built for CUDA 12.8 or newer in the Pix
 Use a straight-on full-body photo with the head, hands, and feet visible and the limbs clear of the torso. Where an arm rests against the body, the reconstruction joins the two surfaces. The rig stage gives each side its own weights and removes the triangles that still join them, which can leave small holes there. The model estimates geometry for surfaces hidden by the input view. Expression quality depends on the reconstructed head and its match to the face template. A local inference job uses temporary files, removed when the job exits. The editor receives a GLB of up to 64 MB.
 
 Pixal3D code and checkpoints are MIT. Make-It-Animatable code is MIT and the checkpoint repository is Apache-2.0. The three.ws library is Apache-2.0 and ICT-FaceKit Light is MIT. The models and source assets that these projects depend on retain their own terms, including Mixamo's gated files. [Pixal3D notice](https://github.com/TencentARC/Pixal3D/blob/master/NOTICE) · [Make-It-Animatable weights](https://huggingface.co/jasongzy/Make-It-Animatable) · [three.ws license](https://github.com/nirholas/three.ws/blob/main/LICENSE)
+
+## Run the models on another machine
+
+Keep the editor on this machine and run Kimodo and the photo avatar stages on a GPU machine. Clone this repository on the GPU machine, and put the Kimodo settings and the six `PHOTO_AVATAR_*` paths in its own `.env.local`. Don't set `MODEL_SERVER_URL` there. Start its editor in `apps/editor` with `npm run dev -- --host 127.0.0.1`. The flag binds the IPv4 address that the tunnel connects to, because `localhost` can resolve to `::1` on Linux.
+
+Forward a local port to it over SSH and leave the command running. A photo avatar job sends no data for up to 20 minutes, so the keepalive option stops an idle network link from closing the tunnel.
+
+```sh
+ssh -N -o ServerAliveInterval=30 -L 4180:127.0.0.1:4173 <lab-host>
+```
+
+Then add this line to `.env.local` on this machine and restart the editor:
+
+```dotenv
+MODEL_SERVER_URL=http://127.0.0.1:4180
+```
+
+The local editor forwards photo avatar requests and Kimodo generation to that address. It copies each generated Kimodo clip into its local `.local/poses/clips` cache after checking the clip's hash, so saved shots still load while the tunnel is down. While the tunnel is down, new generation requests fail with a message to check the SSH tunnel.
