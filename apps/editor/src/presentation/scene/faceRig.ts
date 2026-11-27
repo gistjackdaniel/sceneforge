@@ -1,4 +1,5 @@
 import type { Mesh, Object3D } from "three";
+import type { UpperBodyAims } from "./upperBody";
 
 const pairedChannels = [
   "browDown", "browOuterUp", "cheekSquint", "eyeBlink", "eyeLookDown", "eyeLookIn",
@@ -15,9 +16,11 @@ const normalizeName = (name: string) =>
   name.replace(/^.*[.:|]/, "").replace(/[^a-z0-9]/gi, "").toLowerCase();
 const names = new Map(channels.map((channel) => [normalizeName(channel), channel]));
 
+/** The latest webcam frame for one actor: its expression weights and, when upper-body capture is on, its arm and torso directions. */
 export interface LiveFaceFrame {
   subjectId: string;
   weights: Readonly<Record<string, number>>;
+  body?: UpperBodyAims;
 }
 
 interface FaceBinding {

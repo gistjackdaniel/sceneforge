@@ -7,9 +7,11 @@ import type { OutputAspectPreset } from "../../domain/rendering";
 import { PHASE1_ACTORS, PHASE1_MOTIONS, PHASE1_SHOT_ID } from "../../domain/sceneAuthoring/phase1Demo";
 import { compareMotionEdit, reviewMotionState, type MotionReviewState } from "../../domain/sceneAuthoring/reviewMotionEdit";
 import type { SomaMotion } from "../../domain/sceneAuthoring/somaMotion";
+import { draftFromSource, draftRequest, draftWindow, emptyDraft, placementAt, setDraftWindow, setSegmentPrompt } from "../../domain/sceneAuthoring/kimodoDraft";
 import { motionConditionGraph, motionSpanAt, type MotionSource } from "../../domain/shot/motionConditions";
 import { prepareModelInput } from "../../domain/shot";
-import type { Shot, ShotCommand } from "../../domain/shot/types";
+import type { PosedSubject, Shot, ShotCommand } from "../../domain/shot/types";
+import type { KimodoEditor } from "../../panels/stage/KimodoTimeline";
 import { resolveShotWorldRevision } from "../../domain/worlds/importedShotWorld";
 import type { WorldAsset } from "../../domain/worlds/types";
 import { WebcamFaceControl } from "./faceControl";
@@ -28,6 +30,9 @@ interface SceneShotControlsProps {
   support: ReadonlyMap<string, ActorSupport>;
   liveFace: RefObject<LiveFaceFrame | null>;
   selectedId: string;
+  /** The prompts and waypoints being directed for the selected actor; the timeline edits the same draft. */
+  kimodo?: KimodoEditor;
+  onKimodo: (editor: KimodoEditor) => void;
   onCommand: (command: DomainCommand) => void;
   onPause: () => void;
   onClose: () => void;
@@ -63,14 +68,11 @@ export const useShotMotion = (shot: Shot | undefined) => {
   return { graph, clips, clipError, allClips };
 };
 
-export const SceneShotControls = ({ shot, world, aspect, frame, active, ready, motion, support, liveFace, selectedId, onCommand, onPause, onClose }: SceneShotControlsProps) => {
+export const SceneShotControls = ({ shot, world, aspect, frame, active, ready, motion, support, liveFace, selectedId, kimodo, onKimodo, onCommand, onPause, onClose }: SceneShotControlsProps) => {
   const demo = shot.id === PHASE1_SHOT_ID;
-  const actors = shot.subjects.filter((item) => item.kind === "human" && item.representation === "mesh");
+  const actors = shot.subjects.filter((item): item is PosedSubject => item.kind === "human" && item.representation === "mesh");
   const [selected, setSelected] = useState(demo ? PHASE1_ACTORS.b : "");
   const actor = actors.find((item) => item.id === selected) ?? actors[0];
-  const [start, setStart] = useState(0);
-  const [end, setEnd] = useState(shot.time.durationFrames);
-  const [prompt, setPrompt] = useState("");
   const [worldUrl, setWorldUrl] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -87,6 +89,22 @@ export const SceneShotControls = ({ shot, world, aspect, frame, active, ready, m
 
   useEffect(() => () => request.current?.abort(), []);
   useEffect(() => { if (support.has(selectedId)) setSelected(selectedId); }, [selectedId, support.has(selectedId)]);
+  // A newly chosen actor starts from the prompts and waypoints of the motion it plays, or from an empty draft.
+  useEffect(() => {
+    if (!actor || kimodo?.subjectId === actor.id) return;
+    const spans = graph?.spans.filter((span) => span.subjectId === actor.id) ?? [];
+    const span = motionSpanAt(graph, actor.id, frame) ?? spans[spans.length - 1];
+    const draft = span && graph
+      ? draftFromSource(graph.sources[span.sourceId], span, placementAt(actor, span.startFrame))
+      : emptyDraft(0, shot.time.durationFrames);
+    onKimodo({ subjectId: actor.id, draft, segment: 0 });
+  }, [actor?.id, kimodo?.subjectId, graph]);
+
+  const editor = kimodo?.subjectId === actor?.id ? kimodo : undefined;
+  const range = editor && draftWindow(editor.draft);
+  const segment = editor?.draft.segments[editor.segment];
+  const built = editor && actor ? draftRequest(editor.draft, placementAt(actor, range?.startFrame ?? 0)) : undefined;
+  const blocker = built && "blocker" in built ? built.blocker : undefined;
 
   const run = async (message: string, work: (signal: AbortSignal) => Promise<void>) => {
     const controller = new AbortController();
@@ -135,22 +153,26 @@ export const SceneShotControls = ({ shot, world, aspect, frame, active, ready, m
         </div>}
         <form className="production-generation" onSubmit={(event) => {
           event.preventDefault();
-          if (!actor || !actorSupport?.body) return;
-          const duration = (end - start) / shot.time.fps;
+          if (!actor || !actorSupport?.body || !built || "blocker" in built) return;
           void run("Kimodo 모션 생성 중", async (signal) => {
-            const source = await generateKimodoMotion(prompt, Math.max(0.5, duration), signal);
-            if (!signal.aborted) changeMotion(actor.id, source, start, end);
+            const source = await generateKimodoMotion(built.request, signal);
+            if (!signal.aborted) changeMotion(actor.id, source, built.startFrame, built.endFrame);
           });
         }}>
-          <label>Kimodo 지시<input value={prompt} onChange={(event) => setPrompt(event.target.value)} maxLength={500} placeholder="A person turns and waves" required /></label>
+          <label>Kimodo 지시<input value={segment?.prompt ?? ""} maxLength={500} placeholder="A person turns and waves" required disabled={!editor}
+            onChange={(event) => editor && onKimodo({ ...editor, draft: setSegmentPrompt(editor.draft, editor.segment, event.target.value) })} /></label>
+          {editor && editor.draft.segments.length > 1 && <small>타임라인에서 고른 프롬프트 {editor.segment + 1}/{editor.draft.segments.length}를 고칩니다.</small>}
           <div className="production-row">
-            <label>시작 프레임<input type="number" min={0} max={shot.time.durationFrames - 1} value={start} onChange={(event) => setStart(Number(event.target.value))} /></label>
-            <label>끝 프레임 미포함<input type="number" min={start + 1} max={shot.time.durationFrames} value={end} onChange={(event) => setEnd(Number(event.target.value))} /></label>
+            <label>시작 프레임<input type="number" min={0} max={shot.time.durationFrames - 1} value={range?.startFrame ?? 0} disabled={!editor}
+              onChange={(event) => editor && range && onKimodo({ ...editor, draft: setDraftWindow(editor.draft, Number(event.target.value), range.endFrame) })} /></label>
+            <label>끝 프레임 미포함<input type="number" min={(range?.startFrame ?? 0) + 1} max={shot.time.durationFrames} value={range?.endFrame ?? shot.time.durationFrames} disabled={!editor}
+              onChange={(event) => editor && range && onKimodo({ ...editor, draft: setDraftWindow(editor.draft, range.startFrame, Number(event.target.value)) })} /></label>
           </div>
-          <button type="submit" disabled={!actor || actor.locked || !actorSupport?.body || !prompt.trim() || end <= start || (end - start) / shot.time.fps > 10 || Boolean(busy)}>모션 생성 및 적용</button>
+          {editor && editor.draft.waypoints.length > 0 && <small>웨이포인트 {editor.draft.waypoints.length}개를 따라 걷습니다.</small>}
+          <button type="submit" title={blocker} disabled={!actor || actor.locked || !actorSupport?.body || !built || Boolean(blocker) || Boolean(busy)}>모션 생성 및 적용</button>
           {actor && ready && actorSupport && !actorSupport.body && <small>이 액터에서 SOMA에 대응되는 몸통 본을 찾지 못했습니다.</small>}
         </form>
-        {active && actor && <WebcamFaceControl subjectId={actor.id} available={Boolean(actorSupport?.face)} liveFace={liveFace} />}
+        {active && actor && <WebcamFaceControl subjectId={actor.id} available={Boolean(actorSupport?.face)} bodyAvailable={Boolean(actorSupport?.body)} liveFace={liveFace} />}
       </div>
       <div className="production-section">
         <label>샷 모션 버전<select aria-label="샷 모션 버전" value={shot.headRevisionId ?? ""} onChange={(event) => shotCommand({ type: "REVERT_SHOT_REVISION", shotId: shot.id, revisionId: event.target.value })}>

@@ -20,6 +20,7 @@ import {
   parsePly,
 } from "../../infrastructure/renderers/viewport";
 import type { WorldAsset } from "../../domain/worlds/types";
+import type { Vec3 } from "../../domain/sceneAuthoring/math";
 import type { ViewportTool, ViewportWorkspace, CameraVizState } from "../../state/editorStore";
 import type { CameraKeyframe } from "../../domain/graph/cameraPath";
 import { EULER_ORDER } from "../../domain/shot/euler";
@@ -96,6 +97,7 @@ interface StageSceneApi {
   lookAtLine: THREE.Line;
   playheadMarker: THREE.Mesh;
   keyframeGroup: THREE.Group;
+  kimodoGroup: THREE.Group;
   stageFloor: THREE.Object3D;
   grid: THREE.Object3D;
   dragging: boolean;
@@ -158,6 +160,10 @@ interface StageViewportProps {
   captureSignal?: number;
   focusSignal?: number;
   resetSignal?: number;
+  /** Kimodo waypoints and the generated root path of the actor being directed, in shot metres. */
+  kimodoOverlay?: { waypoints: ReadonlyArray<{ frame: number; position: Vec3 }>; path: readonly Vec3[] };
+  /** Set while placing waypoints: a click on the ground reports its point instead of selecting. */
+  onGroundPick?: (point: Vec3) => void;
 }
 
 const disposeObject = (object: THREE.Object3D) => object.traverse((child) => {
@@ -329,6 +335,8 @@ export const StageViewport = ({
   captureSignal = 0,
   focusSignal = 0,
   resetSignal = 0,
+  kimodoOverlay,
+  onGroundPick,
 }: StageViewportProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef(showCameraPreview);
@@ -347,6 +355,8 @@ export const StageViewport = ({
   const liveFaceRef = useRef(liveFace);
   const onActorSupportRef = useRef(onActorSupport);
   const cameraLockedRef = useRef(cameraLocked);
+  const groundPickRef = useRef(onGroundPick);
+  groundPickRef.current = onGroundPick;
   onTransformCommitRef.current = onTransformCommit;
   onSelectionChangeRef.current = onSelectionChange;
   onLoadStateChangeRef.current = onLoadStateChange;
@@ -454,6 +464,8 @@ export const StageViewport = ({
 
     const keyframeGroup = new THREE.Group();
     scene.add(keyframeGroup);
+    const kimodoGroup = new THREE.Group();
+    scene.add(kimodoGroup);
 
     const objects = new Map<string, THREE.Object3D>([["shot-camera", shotCamera]]);
     const objectKinds = new Map<string, "actor" | "prop" | "light" | "camera">([["shot-camera", "camera"]]);
@@ -521,6 +533,7 @@ export const StageViewport = ({
       lookAtLine,
       playheadMarker,
       keyframeGroup,
+      kimodoGroup,
       stageFloor: floor,
       grid,
       dragging: false,
@@ -534,8 +547,28 @@ export const StageViewport = ({
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
+    // While waypoints are being placed, a click (not an orbit drag) lands on the ground plane.
+    const ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    let groundPress: { x: number; y: number } | null = null;
+    const pressGround = (event: PointerEvent) => {
+      groundPress = groundPickRef.current && event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
+    };
+    const releaseGround = (event: PointerEvent) => {
+      const onPick = groundPickRef.current;
+      const press = groundPress;
+      groundPress = null;
+      if (!onPick || !press || Math.hypot(event.clientX - press.x, event.clientY - press.y) > 5) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.ray.intersectPlane(ground, new THREE.Vector3());
+      if (hit) onPick([hit.x, 0, hit.z]);
+    };
+    renderer.domElement.addEventListener("pointerdown", pressGround);
+    renderer.domElement.addEventListener("pointerup", releaseGround);
+
     const pickObject = (event: PointerEvent) => {
-      if (readOnlyRef.current || api.dragging || workspaceRef.current === "record" || toolRef.current === "navigate" || event.button !== 0) {
+      if (groundPickRef.current || readOnlyRef.current || api.dragging || workspaceRef.current === "record" || toolRef.current === "navigate" || event.button !== 0) {
         return;
       }
       const rect = renderer.domElement.getBoundingClientRect();
@@ -808,7 +841,7 @@ export const StageViewport = ({
       if (previewRef.current && workspaceRef.current === "build") {
         const previewWidth = Math.min(280, size.x * 0.32);
         const previewHeight = previewWidth / outputAspectRef.current;
-        const helpers = [shotBody, frustumHelper, pathLine, lookAtLine, playheadMarker, keyframeGroup, transform.getHelper(), grid,
+        const helpers = [shotBody, frustumHelper, pathLine, lookAtLine, playheadMarker, keyframeGroup, kimodoGroup, transform.getHelper(), grid,
           ...Array.from(objects.values()).filter((object) => object.userData.marker)];
         const visibility = helpers.map((helper) => helper.visible);
         helpers.forEach((helper) => { helper.visible = false; });
@@ -846,6 +879,8 @@ export const StageViewport = ({
       window.removeEventListener("blur", onBlur);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener("pointerdown", pickObject);
+      renderer.domElement.removeEventListener("pointerdown", pressGround);
+      renderer.domElement.removeEventListener("pointerup", releaseGround);
       renderer.domElement.removeEventListener("contextmenu", onContextMenu);
       renderer.domElement.removeEventListener("pointerdown", onPointerDownLook);
       renderer.domElement.removeEventListener("pointerup", onPointerUpLook);
@@ -1112,6 +1147,56 @@ export const StageViewport = ({
       ]);
     }
   }, [keyframes, playheadFrame, cameraViz, pathSamples, pathColors, lookAtTargetId, workspace, cameraPose]);
+
+  useEffect(() => {
+    const api = sceneApiRef.current;
+    if (!api) return;
+    const group = api.kimodoGroup;
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Sprite)) return;
+      if (!(child instanceof THREE.Sprite)) child.geometry.dispose();
+      const material = child.material as THREE.Material & { map?: THREE.Texture | null };
+      material.map?.dispose();
+      material.dispose();
+    });
+    group.clear();
+    for (const point of kimodoOverlay?.waypoints ?? []) {
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.12, 0.2, 32),
+        new THREE.MeshBasicMaterial({ color: 0x8b5cf6, side: THREE.DoubleSide, depthTest: false, transparent: true, opacity: 0.9 }),
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(point.position[0], 0.02, point.position[2]);
+      ring.renderOrder = 10;
+      group.add(ring);
+      const canvas = document.createElement("canvas");
+      canvas.width = 256;
+      canvas.height = 64;
+      const context = canvas.getContext("2d");
+      if (context) {
+        context.fillStyle = "rgba(255,255,255,0.88)";
+        context.fillRect(0, 8, 256, 48);
+        context.fillStyle = "#1f1b2e";
+        context.font = "600 30px sans-serif";
+        context.textBaseline = "middle";
+        context.fillText(`2D Root @ ${point.frame}`, 12, 33);
+      }
+      const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }));
+      label.scale.set(0.64, 0.16, 1);
+      label.position.set(point.position[0], 0.32, point.position[2]);
+      label.renderOrder = 11;
+      group.add(label);
+    }
+    const path = kimodoOverlay?.path ?? [];
+    if (path.length > 1) {
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(path.map(([x, , z]) => new THREE.Vector3(x, 0.03, z))),
+        new THREE.LineBasicMaterial({ color: 0xef4444, depthTest: false }),
+      );
+      line.renderOrder = 9;
+      group.add(line);
+    }
+  }, [kimodoOverlay]);
 
   useEffect(() => {
     const api = sceneApiRef.current;

@@ -1,0 +1,18 @@
+.kimodo-timeline { display: grid; gap: 6px; padding: 8px 12px 10px; border-top: 1px solid var(--scene-border); background: #171c1a; color: #d2dbd5; font-size: 11px; }
+.kimodo-timeline-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kimodo-timeline-tools button[aria-pressed="true"] { background: #6d4fd8; color: #fff; border-color: #8b5cf6; }
+.kimodo-timeline-tools small { color: #a9b9b0; }
+.kimodo-timeline-grid { display: grid; grid-template-columns: 64px minmax(0, 1fr); row-gap: 4px; align-items: center; }
+.kimodo-track-label { color: #a9b9b0; font: 10px ui-monospace, monospace; text-align: right; padding-right: 8px; }
+.kimodo-ruler, .kimodo-track { position: relative; height: 26px; border-radius: 4px; background: #202725; touch-action: none; user-select: none; }
+.kimodo-ruler { height: 18px; background: transparent; cursor: pointer; }
+.kimodo-tick { position: absolute; top: 0; transform: translateX(-50%); font: 9px ui-monospace, monospace; color: #8c9b93; }
+.kimodo-playhead { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: #4f8cff; pointer-events: none; }
+.kimodo-prompt { position: absolute; top: 2px; bottom: 2px; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 4px; overflow: hidden; border: 1px solid #5d7f96; border-radius: 4px; background: #3f6178; color: #eef5fa; cursor: pointer; }
+.kimodo-prompt.is-selected { border-color: #9fd0ff; box-shadow: 0 0 0 1px #9fd0ff inset; }
+.kimodo-prompt-length { flex: none; padding: 1px 5px; border-radius: 8px; background: #2a4152; font: 9px ui-monospace, monospace; }
+.kimodo-prompt-text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.kimodo-prompt-text.is-empty { color: #b7c9d6; font-style: italic; }
+.kimodo-prompt input { flex: 1; min-width: 0; padding: 2px 4px; font-size: 11px; }
+.kimodo-prompt-edge { position: absolute; top: 0; right: 0; bottom: 0; width: 7px; cursor: ew-resize; background: rgba(255, 255, 255, 0.18); }
+.kimodo-timeline .kimodo-waypoint { position: absolute; top: 50%; display: block; width: 12px; height: 12px; min-height: 0; margin: -6px 0 0 -6px; padding: 0; border: 2px solid #f2eafe; border-radius: 50%; background: #8b5cf6; cursor: ew-resize; }

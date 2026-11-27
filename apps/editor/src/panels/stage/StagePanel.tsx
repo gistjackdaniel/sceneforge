@@ -41,6 +41,9 @@ import { SceneShotControls, useShotMotion } from "../../presentation/scene/Scene
 import type { LiveFaceFrame } from "../../presentation/scene/faceRig";
 import { PHASE1_ACTORS, PHASE1_SHOT_ID } from "../../domain/sceneAuthoring/phase1Demo";
 import { sampleTimelineMotion } from "../../domain/sceneAuthoring/sampleTimelineMotion";
+import { addWaypoint, draftWindow, placementAt } from "../../domain/sceneAuthoring/kimodoDraft";
+import type { Vec3 } from "../../domain/sceneAuthoring/math";
+import { KimodoTimeline, type KimodoEditor } from "./KimodoTimeline";
 import { resolveShotWorldRevision } from "../../domain/worlds/importedShotWorld";
 import { gltfRiggedActorCommand, rigImportAlreadyApplied } from "../../application/commands/gltfRiggedActor";
 import { rigWarningsForActors } from "../../presentation/viewport/skinnedMeshBones";
@@ -83,6 +86,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [showHelp, setShowHelp] = useState(false);
   const demo = shot?.id === PHASE1_SHOT_ID;
   const [showShotControls, setShowShotControls] = useState(demo);
+  const [kimodo, setKimodo] = useState<KimodoEditor>();
+  const [waypointMode, setWaypointMode] = useState(false);
   const [sceneCameraView, setSceneCameraView] = useState(demo);
   const [actorSupport, setActorSupport] = useState<ReadonlyMap<string, { body: boolean; face: boolean }>>(() => new Map());
   const liveFace = useRef<LiveFaceFrame | null>(null);
@@ -193,6 +198,32 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   })), [objects, draft]);
   const selected = sceneObjects.find((object) => object.id === selectedId);
   const canEdit = Boolean(shot && clip && !previewOnly);
+  const directing = !recording && showShotControls && canEdit;
+  const kimodoActor = shot?.subjects.find((subject) => subject.id === kimodo?.subjectId && subject.kind === "human");
+  // The directed actor's root over the motion span under the playhead, or over its latest span.
+  const kimodoPath = useMemo(() => {
+    if (!directing || !shot || !motion.graph || kimodoActor?.kind !== "human") return [];
+    const spans = motion.graph.spans.filter((span) => span.subjectId === kimodoActor.id);
+    const span = spans.find((item) => frame >= item.startFrame && frame < item.endFrame) ?? spans[spans.length - 1];
+    if (!span) return [];
+    const path: Vec3[] = [];
+    for (let at = span.startFrame; at < span.endFrame; at += 1) {
+      const pose = sampleTimelineMotion(shot, kimodoActor, at, motion.graph, motion.clips);
+      if (pose.source) path.push(pose.position);
+    }
+    return path;
+  }, [directing, shot, motion.graph, motion.clips, kimodoActor, frame]);
+  const kimodoOverlay = useMemo(() => directing && kimodo ? {
+    waypoints: kimodo.draft.waypoints.map((point) => ({ frame: point.frame, position: [point.x, 0, point.z] as Vec3 })),
+    path: kimodoPath,
+  } : undefined, [directing, kimodo, kimodoPath]);
+  const placeWaypoint = useCallback((point: Vec3) => {
+    if (kimodoActor?.kind !== "human") return;
+    setKimodo((editor) => editor && {
+      ...editor,
+      draft: addWaypoint(editor.draft, placementAt(kimodoActor, draftWindow(editor.draft).startFrame), { x: point[0], z: point[2] }, duration),
+    });
+  }, [kimodoActor, duration]);
   const cameraView = sceneShotCamera || recording && !freeView && selectedId === "camera";
   const sceneControlsReady = (!world || load.state === "ready") && (!demo || [PHASE1_ACTORS.a, PHASE1_ACTORS.b].every((id) => actorSupport.get(id)?.body));
   const pinnedWorld = !previewOnly && shot?.environment?.revisionId ? resolveShotWorldRevision(world, shot.environment.revisionId) : undefined;
@@ -593,6 +624,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
     <div className="scene-stage-area">
       <div className={`scene-stage-canvas ${cameraView ? "is-camera-view" : ""}`} style={{ "--scene-aspect": outputAspectRatio(ui.outputAspect) } as React.CSSProperties}>
         <StageViewport world={world} worldName={worldName} previewPlan={previewPlan} fallbackImageUri={fallbackImageUri}
+          kimodoOverlay={kimodoOverlay} onGroundPick={directing && waypointMode && kimodoActor ? placeWaypoint : undefined}
           overlays={ui.viewportOverlays} tool={ui.viewportTool} workspace={cameraView ? "record" : "build"}
           actorMotion={actorMotion} liveFace={liveFace} onActorSupport={reportActorSupport} cameraLocked={sceneShotCamera || cameraView && playing && !takeRecording}
           outputAspect={outputAspectRatio(ui.outputAspect)} outputAspectLabel={ui.outputAspect}
@@ -752,6 +784,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
     </div>
     {shot && canEdit && <SceneShotControls key={shot.id} shot={shot} world={world} aspect={ui.outputAspect} frame={frame}
       active={!recording && showShotControls} ready={sceneControlsReady} motion={motion} support={actorSupport} liveFace={liveFace} selectedId={selectedId}
+      kimodo={kimodo} onKimodo={setKimodo}
       onCommand={(command) => dispatch({ type: "agent-execute-commands", commands: [command] })}
       onPause={() => setPlaying(false)} onClose={() => setShowShotControls(false)} />}
     </div>
@@ -760,6 +793,9 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       <input type="range" min={0} max={duration - 1} value={frame} aria-label="샷 프레임" onChange={(event) => { setPlaying(false); scrub(Number(event.target.value)); }} />
       <output>{frame} / {duration - 1}f</output>
     </div>}
+    {directing && kimodo && kimodoActor && fps !== undefined && <KimodoTimeline editor={kimodo} duration={duration} fps={fps} frame={frame}
+      disabled={kimodoActor.locked || playing} waypointMode={waypointMode} onWaypointMode={setWaypointMode} onChange={setKimodo}
+      onScrub={(value) => { setPlaying(false); scrub(value); }} onPlay={() => setPlaying((value) => !value)} />}
     {recording && fps !== undefined && <SceneTimeline
       tracks={tracks}
       activeId={selectedId}

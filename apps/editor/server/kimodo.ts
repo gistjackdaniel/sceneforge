@@ -38,12 +38,12 @@ async function readRequest(request: IncomingMessage): Promise<Request | undefine
   }
 }
 
-function runGenerator(python: string, script: string, file: string, request: Request, cwd: string,
+function runGenerator(python: string, script: string, file: string, requestFile: string, cwd: string,
   env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     signal.throwIfAborted();
-    const child = spawn(python, [script, file, `--prompt=${request.prompt}`, `--seconds=${request.seconds}`,
-      `--seed=${request.seed}`], { cwd, env, signal, shell: false, stdio: "ignore", windowsHide: true });
+    const child = spawn(python, [script, file, "--request", requestFile],
+      { cwd, env, signal, shell: false, stdio: "ignore", windowsHide: true });
     let failure: Error | undefined;
     child.once("error", (error) => { failure = error; });
     child.on("close", (code, reason) => {
@@ -140,17 +140,21 @@ export function kimodoMotionPlugin(editorRoot: string, mode: string, modelServer
     let temporary: string | undefined;
     try {
       const input = await readRequest(request);
-      if (!input) return respond(response, 400, { error: "Enter a motion prompt between 0.5 and 10 seconds." });
+      if (!input) return respond(response, 400, { error: "Enter prompts that fit in ten seconds, each at least half a second long." });
       await mkdir(cacheDirectory, { recursive: true });
       temporary = await mkdtemp(join(cacheDirectory, ".job-"));
       const output = join(temporary, "motion.json");
-      await runGenerator(python, script, output, input, repoRoot, env, controller.signal);
+      const requestFile = join(temporary, "request.json");
+      await writeFile(requestFile, JSON.stringify(input));
+      await runGenerator(python, script, output, requestFile, repoRoot, env, controller.signal);
       controller.signal.throwIfAborted();
       const payload = await readFile(output);
-      const { model, prompt, seed, fps, frames } = somaMotionSchema.parse(JSON.parse(payload.toString("utf8")));
+      const { model, prompt, seed, fps, segments, waypoints, frames } = somaMotionSchema.parse(JSON.parse(payload.toString("utf8")));
       const sha256 = createHash("sha256").update(payload).digest("hex");
       await rename(output, join(cacheDirectory, `${sha256}.json`));
-      const reference: SomaClipReference = { uri: `/api/kimodo/clips/${sha256}.json`, sha256, model, prompt, seed, fps, frameCount: frames.length };
+      const reference: SomaClipReference = {
+        uri: `/api/kimodo/clips/${sha256}.json`, sha256, model, prompt, seed, fps, segments, waypoints, frameCount: frames.length,
+      };
       respond(response, 200, reference);
     } catch (error) {
       const code = error instanceof Error && "code" in error ? error.code : undefined;
