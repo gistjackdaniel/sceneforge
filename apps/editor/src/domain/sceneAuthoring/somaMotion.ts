@@ -3,6 +3,8 @@ import { quatSchema, vec3Schema } from "./contract";
 import { addVec3, lerpVec3, quatMul, quatRotate, quatSlerp, type Quat, type Vec3 } from "./math";
 
 export const KIMODO_SOMA_MODEL = "Kimodo-SOMA-RP-ArdyRep-v1.2";
+/** ARDY's SOMA model in Kimodo's representation, recorded while steering an actor live. */
+export const ARDY_SOMA_MODEL = "ARDY-SOMA-RP-30FPS-KimodoRep-Horizon60";
 export const KIMODO_FPS = 30;
 /** Kimodo generates at most ten seconds, and a prompt needs at least half a second. */
 export const KIMODO_MAX_FRAMES = 300;
@@ -37,7 +39,7 @@ export const somaGenerationRequestSchema = z.strictObject({
   seed: seedSchema,
 }).refine(recipeIsPlayable, "Prompts must fit in ten seconds, with waypoints in increasing frames inside them.");
 
-const somaFrameSchema = z.object({
+export const somaFrameSchema = z.object({
   rootPosition: vec3Schema,
   rootRotation: quatSchema,
   rootHeading: z.number().min(-Math.PI - 1e-6).max(Math.PI + 1e-6),
@@ -49,7 +51,7 @@ const somaFrameSchema = z.object({
 
 /** How a clip was generated. Clips from before the timeline record only `prompt`, the whole of their one segment. */
 const provenanceSchema = z.object({
-  model: z.literal(KIMODO_SOMA_MODEL),
+  model: z.enum([KIMODO_SOMA_MODEL, ARDY_SOMA_MODEL]),
   prompt: z.string().trim().min(1).max(MAX_SEGMENTS * 503),
   seed: seedSchema,
   fps: z.literal(KIMODO_FPS),

@@ -44,6 +44,8 @@ import { sampleTimelineMotion } from "../../domain/sceneAuthoring/sampleTimeline
 import { addWaypoint, draftWindow, placementAt } from "../../domain/sceneAuthoring/kimodoDraft";
 import type { Vec3 } from "../../domain/sceneAuthoring/math";
 import { KimodoTimeline, type KimodoEditor } from "./KimodoTimeline";
+import { useArdyLive, type LiveMotion } from "./useArdyLive";
+import { KIMODO_FPS } from "../../domain/sceneAuthoring/somaMotion";
 import { resolveShotWorldRevision } from "../../domain/worlds/importedShotWorld";
 import { gltfRiggedActorCommand, rigImportAlreadyApplied } from "../../application/commands/gltfRiggedActor";
 import { rigWarningsForActors } from "../../presentation/viewport/skinnedMeshBones";
@@ -88,6 +90,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const [showShotControls, setShowShotControls] = useState(demo);
   const [kimodo, setKimodo] = useState<KimodoEditor>();
   const [waypointMode, setWaypointMode] = useState(false);
+  const liveMotion = useRef<LiveMotion | null>(null);
+  const ardy = useArdyLive(liveMotion);
   const [sceneCameraView, setSceneCameraView] = useState(demo);
   const [actorSupport, setActorSupport] = useState<ReadonlyMap<string, { body: boolean; face: boolean }>>(() => new Map());
   const liveFace = useRef<LiveFaceFrame | null>(null);
@@ -200,6 +204,8 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
   const canEdit = Boolean(shot && clip && !previewOnly);
   const directing = !recording && showShotControls && canEdit;
   const kimodoActor = shot?.subjects.find((subject) => subject.id === kimodo?.subjectId && subject.kind === "human");
+  // Steering belongs to the actor the timeline directs; leaving it, or directing another actor, ends steering.
+  useEffect(() => { void ardy.stop(false); }, [directing, kimodo?.subjectId]);
   // The directed actor's root over the motion span under the playhead, or over its latest span.
   const kimodoPath = useMemo(() => {
     if (!directing || !shot || !motion.graph || kimodoActor?.kind !== "human") return [];
@@ -626,7 +632,7 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
         <StageViewport world={world} worldName={worldName} previewPlan={previewPlan} fallbackImageUri={fallbackImageUri}
           kimodoOverlay={kimodoOverlay} onGroundPick={directing && waypointMode && kimodoActor ? placeWaypoint : undefined}
           overlays={ui.viewportOverlays} tool={ui.viewportTool} workspace={cameraView ? "record" : "build"}
-          actorMotion={actorMotion} liveFace={liveFace} onActorSupport={reportActorSupport} cameraLocked={sceneShotCamera || cameraView && playing && !takeRecording}
+          actorMotion={actorMotion} liveMotion={liveMotion} liveFace={liveFace} onActorSupport={reportActorSupport} cameraLocked={sceneShotCamera || cameraView && playing && !takeRecording}
           outputAspect={outputAspectRatio(ui.outputAspect)} outputAspectLabel={ui.outputAspect}
           cameraViz={recording ? ui.cameraViz : { frustum: false, path: false, lookAtLine: false, keyframeMarkers: false }}
           cameraPose={takeRecording ? undefined : cameraPose} sceneObjects={sceneObjects} selectedId={selectedId === "camera" ? undefined : selectedId}
@@ -793,9 +799,30 @@ export const StagePanel = ({ alwaysActive = false }: { compact?: boolean; always
       <input type="range" min={0} max={duration - 1} value={frame} aria-label="샷 프레임" onChange={(event) => { setPlaying(false); scrub(Number(event.target.value)); }} />
       <output>{frame} / {duration - 1}f</output>
     </div>}
-    {directing && kimodo && kimodoActor && fps !== undefined && <KimodoTimeline editor={kimodo} duration={duration} fps={fps} frame={frame}
-      disabled={kimodoActor.locked || playing} waypointMode={waypointMode} onWaypointMode={setWaypointMode} onChange={setKimodo}
-      onScrub={(value) => { setPlaying(false); scrub(value); }} onPlay={() => setPlaying((value) => !value)} />}
+    {directing && shot && kimodo && kimodoActor?.kind === "human" && fps !== undefined && <KimodoTimeline editor={kimodo} duration={duration} fps={fps} frame={frame}
+      disabled={kimodoActor.locked || playing || ardy.status.kind !== "off" && ardy.status.kind !== "error"} waypointMode={waypointMode}
+      onWaypointMode={setWaypointMode} onChange={setKimodo}
+      onScrub={(value) => { setPlaying(false); scrub(value); }} onPlay={() => setPlaying((value) => !value)}
+      live={{
+        status: ardy.status,
+        steering: ardy.steering,
+        onStart: () => {
+          setPlaying(false);
+          setWaypointMode(false);
+          void ardy.start(kimodoActor, frame, kimodo.draft.segments[kimodo.segment]?.prompt ?? "", ((duration - frame) / fps) * KIMODO_FPS);
+        },
+        onSteer: ardy.steer,
+        onDiscard: () => void ardy.stop(false),
+        onSave: () => void ardy.stop(true).then((saved) => {
+          if (!saved) return;
+          const endFrame = saved.startFrame + Math.round((saved.frames / KIMODO_FPS) * fps);
+          dispatch({
+            type: "agent-execute-commands",
+            commands: [{ type: "SHOT", command: { type: "SET_TIMELINE_MOTION", shotId: shot.id, edits: [{ subjectId: saved.subjectId, source: saved.source, startFrame: saved.startFrame, endFrame }] } }],
+            logMessage: "ARDY 실시간 모션을 샷에 저장했습니다.",
+          });
+        }),
+      }} />}
     {recording && fps !== undefined && <SceneTimeline
       tracks={tracks}
       activeId={selectedId}

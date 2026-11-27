@@ -37,6 +37,14 @@ function insideWsl(path: string): string {
   return drive ? `/mnt/${drive[1].toLowerCase()}/${drive[2].replace(/\\/g, '/')}` : path;
 }
 
+/** The command that runs `python` with `args` in `cwd`, through wsl.exe when the Python lives in a WSL share. */
+export function wslInvocation(python: string, args: string[], cwd: string): { command: string; argv: string[]; inWsl: boolean } {
+  const distro = wslShare.exec(python)?.[1];
+  return distro
+    ? { command: 'wsl.exe', argv: ['-d', distro, '--cd', insideWsl(cwd), '--exec', insideWsl(python), ...args.map(insideWsl)], inWsl: true }
+    : { command: python, argv: args, inWsl: false };
+}
+
 function runStage(
   stage: string,
   python: string,
@@ -58,18 +66,15 @@ function runStage(
     PYTHONDONTWRITEBYTECODE: '1',
     TRANSFORMERS_OFFLINE: '1',
   };
-  const distro = wslShare.exec(python)?.[1];
   const wslEnv = [process.env.WSLENV, ...Object.keys(stageEnv), 'TMPDIR/p'].filter(Boolean).join(':');
-  const [command, argv]: [string, string[]] = distro
-    ? ['wsl.exe', ['-d', distro, '--cd', insideWsl(cwd), '--exec', insideWsl(python), ...args.map(insideWsl)]]
-    : [python, args];
+  const { command, argv, inWsl } = wslInvocation(python, args, cwd);
   return new Promise((resolveStage, reject) => {
     const child = spawn(command, argv, {
-      cwd: distro ? undefined : cwd,
+      cwd: inWsl ? undefined : cwd,
       env: {
         ...process.env,
         ...stageEnv,
-        ...(distro ? { WSLENV: wslEnv } : {}),
+        ...(inWsl ? { WSLENV: wslEnv } : {}),
         TEMP: workDir,
         TMP: workDir,
         TMPDIR: workDir,

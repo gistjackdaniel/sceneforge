@@ -2,6 +2,7 @@ import { defineConfig, loadEnv, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import type { ServerResponse } from "node:http";
+import { ardyPlugin } from "./server/ardy";
 import { kimodoMotionPlugin } from "./server/kimodo";
 import { photoAvatarPlugin } from "./server/photoAvatar";
 import { mobileCameraPlugin } from "./server/mobileCamera";
@@ -42,7 +43,7 @@ export default defineConfig(({ mode }) => {
   const proxy = modelServer && modelServerProxy(modelServer);
   return {
     plugins: [
-      react(), arucoModule(), kimodoMotionPlugin(editorRoot, mode, modelServer),
+      react(), arucoModule(), kimodoMotionPlugin(editorRoot, mode, modelServer), ardyPlugin(editorRoot, mode),
       ...(modelServer ? [] : [photoAvatarPlugin(editorRoot, mode)]), mobileCameraPlugin(editorRoot),
     ],
     optimizeDeps: { exclude: ["js-aruco2"] },

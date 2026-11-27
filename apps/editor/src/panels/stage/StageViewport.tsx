@@ -164,6 +164,8 @@ interface StageViewportProps {
   kimodoOverlay?: { waypoints: ReadonlyArray<{ frame: number; position: Vec3 }>; path: readonly Vec3[] };
   /** Set while placing waypoints: a click on the ground reports its point instead of selecting. */
   onGroundPick?: (point: Vec3) => void;
+  /** The pose of an actor steered live, read every animation frame without re-rendering the panel. */
+  liveMotion?: RefObject<{ subjectId: string; pose: ViewportActorMotion } | null>;
 }
 
 const disposeObject = (object: THREE.Object3D) => object.traverse((child) => {
@@ -337,6 +339,7 @@ export const StageViewport = ({
   resetSignal = 0,
   kimodoOverlay,
   onGroundPick,
+  liveMotion,
 }: StageViewportProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef(showCameraPreview);
@@ -357,6 +360,8 @@ export const StageViewport = ({
   const cameraLockedRef = useRef(cameraLocked);
   const groundPickRef = useRef(onGroundPick);
   groundPickRef.current = onGroundPick;
+  const liveMotionRef = useRef(liveMotion);
+  liveMotionRef.current = liveMotion;
   onTransformCommitRef.current = onTransformCommit;
   onSelectionChangeRef.current = onSelectionChange;
   onLoadStateChangeRef.current = onLoadStateChange;
@@ -830,8 +835,9 @@ export const StageViewport = ({
       }
       if (!api.dragging) {
         const expression = liveFaceRef.current?.current ?? null;
+        const steered = liveMotionRef.current?.current;
         for (const [id, binding] of api.actorBindings) {
-          binding.update(id, actorMotionRef.current?.get(id), expression);
+          binding.update(id, steered?.subjectId === id ? steered.pose : actorMotionRef.current?.get(id), expression);
         }
       }
       const size = renderer.getSize(new THREE.Vector2());

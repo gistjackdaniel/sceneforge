@@ -2,10 +2,24 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import {
   addSegment, removeSegment, removeWaypoint, resizeSegment, retimeWaypoint, setSegmentPrompt, type KimodoDraft,
 } from "../../domain/sceneAuthoring/kimodoDraft";
+import { KIMODO_FPS } from "../../domain/sceneAuthoring/somaMotion";
+import type { ArdyStatus, SteerKey, Steering } from "./useArdyLive";
 import "./kimodoTimeline.css";
 
 /** The Kimodo prompts and waypoints being directed for one actor, and the prompt the form edits. */
 export type KimodoEditor = { subjectId: string; draft: KimodoDraft; segment: number };
+
+/** ARDY live steering of the same actor, controlled from the timeline's tools and the arrow keys. */
+export type LiveSteering = {
+  status: ArdyStatus;
+  steering: Steering;
+  onStart: () => void;
+  onSave: () => void;
+  onDiscard: () => void;
+  onSteer: (key: SteerKey) => void;
+};
+
+const arrows: Record<string, SteerKey> = { ArrowUp: "faster", ArrowDown: "slower", ArrowLeft: "left", ArrowRight: "right" };
 
 interface KimodoTimelineProps {
   editor: KimodoEditor;
@@ -18,6 +32,7 @@ interface KimodoTimelineProps {
   onChange: (editor: KimodoEditor) => void;
   onScrub: (frame: number) => void;
   onPlay: () => void;
+  live: LiveSteering;
 }
 
 const typing = (target: EventTarget | null) =>
@@ -28,12 +43,12 @@ const typing = (target: EventTarget | null) =>
  * drag its right edge to resize it, and right-click it to delete it. Waypoints come from clicking the ground in
  * waypoint mode (P); drag one to retime it and right-click it to delete it. Space plays and the arrow keys step.
  */
-export const KimodoTimeline = ({ editor, duration, fps, frame, disabled, waypointMode, onWaypointMode, onChange, onScrub, onPlay }: KimodoTimelineProps) => {
+export const KimodoTimeline = ({ editor, duration, fps, frame, disabled, waypointMode, onWaypointMode, onChange, onScrub, onPlay, live }: KimodoTimelineProps) => {
   const ruler = useRef<HTMLDivElement>(null);
   const latest = useRef(editor);
   latest.current = editor;
-  const keys = useRef({ frame, disabled, waypointMode, onWaypointMode, onScrub, onPlay });
-  keys.current = { frame, disabled, waypointMode, onWaypointMode, onScrub, onPlay };
+  const keys = useRef({ frame, disabled, waypointMode, onWaypointMode, onScrub, onPlay, live });
+  keys.current = { frame, disabled, waypointMode, onWaypointMode, onScrub, onPlay, live };
   const [editing, setEditing] = useState<number>();
   const { draft } = editor;
   const at = (value: number) => `${(value / duration) * 100}%`;
@@ -56,11 +71,15 @@ export const KimodoTimeline = ({ editor, duration, fps, frame, disabled, waypoin
   };
 
   // Kimodo's keys: P places waypoints, Space plays or pauses, and the arrow keys step one frame.
+  // While ARDY steers the actor, the arrow keys set its speed and direction instead, as in ARDY's demo.
   useEffect(() => {
     const press = (event: KeyboardEvent) => {
       const current = keys.current;
       if (typing(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
-      if (event.key === " ") {
+      if (current.live.status.kind === "live" && arrows[event.key]) {
+        event.preventDefault();
+        current.live.onSteer(arrows[event.key]);
+      } else if (event.key === " ") {
         event.preventDefault();
         if (!event.repeat) current.onPlay();
       } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
@@ -83,6 +102,19 @@ export const KimodoTimeline = ({ editor, duration, fps, frame, disabled, waypoin
       <button type="button" aria-pressed={waypointMode} disabled={disabled} onClick={() => onWaypointMode(!waypointMode)}>웨이포인트 모드 (P)</button>
       <button type="button" disabled={disabled || draft.waypoints.length === 0} onClick={() => update({ ...draft, waypoints: [] })}>웨이포인트 지우기</button>
       {waypointMode && <small>바닥을 클릭하면 액터가 걸어갈 지점이 걷는 속도에 맞춘 프레임에 추가됩니다.</small>}
+      {live.status.kind === "live" ? <>
+        <button type="button" onClick={live.onSave}>샷에 저장하고 끝내기</button>
+        <button type="button" onClick={live.onDiscard}>실시간 조종 끝내기</button>
+        <small role="status">
+          ARDY 조종 중 · 속도 {live.steering.speed.toFixed(1)} m/s · 방향 {Math.round((live.steering.angle * 180) / Math.PI)}° · ↑/↓ 속도, ←/→ 방향
+          · 저장하면 마지막 {(live.status.keep / KIMODO_FPS).toFixed(1)}초가 샷에 들어갑니다
+        </small>
+      </> : <>
+        <button type="button" disabled={disabled || live.status.kind === "starting" || live.status.kind === "saving"} onClick={live.onStart}>실시간 조종 (ARDY)</button>
+        {live.status.kind === "starting" && <small role="status">ARDY를 준비하는 중입니다. 처음에는 텍스트 인코더를 불러오느라 1~2분 걸립니다.</small>}
+        {live.status.kind === "saving" && <small role="status">실시간 모션을 샷에 저장하는 중입니다.</small>}
+        {live.status.kind === "error" && <small role="alert">{live.status.message}</small>}
+      </>}
     </div>
     <div className="kimodo-timeline-grid">
       <span className="kimodo-track-label" />
