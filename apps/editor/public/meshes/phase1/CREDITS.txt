@@ -1,0 +1,7 @@
+actor-a.glb and actor-b.glb are CC0 derivatives of the Quaternius Ultimate
+Animated Characters models Casual Female and Casual Male. The Phase 0 source
+files and original attribution are documented in ../phase0/CREDITS.txt.
+
+SceneForge adds a woven fabric image texture, mouth geometry, and expression
+morphs for jaw opening, unilateral smiles, blinks, and eyebrow raises.
+Rebuild both files from apps/editor with node scripts/build-face-rigs.mjs.

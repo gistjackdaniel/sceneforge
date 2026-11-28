@@ -1,0 +1,42 @@
+{
+  "photo": "nasa-portrait.jpg",
+  "body": "male",
+  "generationSeconds": 0.8,
+  "actorId": "actor-24680ea6-03a9-4fe2-881a-bce3661ad021",
+  "webcamExpression": {
+    "changed": 1283,
+    "box": [
+      457,
+      56,
+      971,
+      349
+    ]
+  },
+  "webcamOffRestores": {
+    "changed": 2,
+    "box": [
+      768,
+      56,
+      971,
+      451
+    ]
+  },
+  "kimodoSeconds": 29.3,
+  "kimodoMotion": {
+    "changed": 23178,
+    "box": [
+      457,
+      0,
+      668,
+      486
+    ]
+  },
+  "kimodoPrompt": "A person raises both arms above the head",
+  "persistedAfterReload": true,
+  "webcamAvailableAfterReload": true,
+  "reloadMatchesMotion": {
+    "changed": 0,
+    "box": null
+  },
+  "pageErrors": []
+}

@@ -1,0 +1,51 @@
+name: iPhone camera build
+
+on:
+  push:
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios-camera.yml'
+  pull_request:
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios-camera.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify iPhone pairing URL handling
+        run: |
+          swiftc -parse-as-library apps/ios/SceneForgeCamera/PhoneTake.swift apps/ios/verification/PhonePairingCheck.swift -o "$RUNNER_TEMP/verify-phone-pairing"
+          "$RUNNER_TEMP/verify-phone-pairing"
+      - name: Build SceneForge Camera for the iOS simulator
+        run: >-
+          xcodebuild
+          -project apps/ios/SceneForgeCamera.xcodeproj
+          -scheme SceneForgeCamera
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/sceneforge-ios"
+          CODE_SIGNING_ALLOWED=NO
+          build
+      - name: Open the camera app through its URL scheme
+        run: |
+          device=$(xcrun simctl list devices available --json | jq -er '[.devices[][] | select(.name | startswith("iPhone")) | .udid][0]')
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          if xcrun simctl openurl "$device" 'sceneforge-camera://pair?link=invalid'; then
+            echo 'iOS opened the scheme before its app was installed.'
+            exit 1
+          fi
+          xcrun simctl install "$device" "$RUNNER_TEMP/sceneforge-ios/Build/Products/Debug-iphonesimulator/SceneForgeCamera.app"
+          xcrun simctl openurl "$device" 'sceneforge-camera://pair?link=invalid'
+          sleep 3
+          xcrun simctl io "$device" screenshot "$RUNNER_TEMP/sceneforge-ios.png"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-camera-simulator
+          path: ${{ runner.temp }}/sceneforge-ios.png

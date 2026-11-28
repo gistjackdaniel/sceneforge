@@ -4,6 +4,9 @@ node_modules/
 # Local toolchain (portable Node install)
 .tools/
 
+# Local model checkpoints. Never commit weights.
+.local/
+
 # Build
 dist/
 dist-electron/
@@ -21,3 +24,6 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Local decision trails
+.audit/

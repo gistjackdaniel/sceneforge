@@ -1,4 +1,17 @@
 export type { ClipSourceType, ClipVariant, Sequence, TimelineClip } from "./types";
+export { shotFpsForClip } from "./shotClock";
+export {
+  TimelineClockError,
+  frameContainingSeconds,
+  frameToSeconds,
+  frameToTimecode,
+  isPositiveIntegerFps,
+  sampleTimeToShotFrame,
+  secondsToFrame,
+  shotLocalFrame,
+  timecodeToFrame,
+  type RecordedSampleTime,
+} from "./timecode";
 export {
   DEFAULT_CLIP_FPS,
   clipDurationFrames,

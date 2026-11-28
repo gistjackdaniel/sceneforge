@@ -14,6 +14,43 @@ export const emptyCommandBusState = (): CommandBusState => ({
   events: [],
 });
 
+const textPoseSubject = (command: DomainCommand): { shotId: string; subjectId: string } | undefined => {
+  if (command.type !== "SHOT") return undefined;
+  const shotCommand = command.command;
+  if (shotCommand.type === "SET_TEXT_POSE") return { shotId: shotCommand.shotId, subjectId: shotCommand.subjectId };
+  if (shotCommand.type === "REPLACE_SUBJECT") return { shotId: shotCommand.shotId, subjectId: shotCommand.subject.id };
+  return undefined;
+};
+
+/**
+ * A burst of text-pose edits is one undo step.
+ * A pose key stores a different inverse, so the next sentence starts a new step.
+ */
+export const shouldCoalesceTextPose = (
+  command: DomainCommand,
+  topInverse: DomainCommand | undefined,
+  currentMotion: "unset" | "text" | "explicit" | undefined,
+): boolean => {
+  if (command.type !== "SHOT" || command.command.type !== "SET_TEXT_POSE" || !topInverse) return false;
+  const incoming = textPoseSubject(command);
+  const previous = textPoseSubject(topInverse);
+  if (!incoming || !previous || incoming.shotId !== previous.shotId || incoming.subjectId !== previous.subjectId) return false;
+  if (topInverse.type === "SHOT" && topInverse.command.type === "SET_TEXT_POSE") return true;
+  return topInverse.type === "SHOT"
+    && topInverse.command.type === "REPLACE_SUBJECT"
+    && topInverse.command.subject.kind !== "light"
+    && topInverse.command.subject.motion.channel === "explicit"
+    && currentMotion === "text";
+};
+
+const motionChannel = (project: Project, command: DomainCommand): "unset" | "text" | "explicit" | undefined => {
+  if (command.type !== "SHOT") return undefined;
+  const shotCommand = command.command;
+  if (shotCommand.type !== "SET_TEXT_POSE") return undefined;
+  const subject = project.shots?.[shotCommand.shotId]?.subjects.find((item) => item.id === shotCommand.subjectId);
+  return subject && subject.kind !== "light" ? subject.motion.channel : undefined;
+};
+
 export interface ExecuteResult {
   project: Project;
   bus: CommandBusState;
@@ -33,7 +70,8 @@ export const executeCommand = (
   if (!result.ok) {
     return { project, bus, result };
   }
-  const undoStack = result.inverse ? [...bus.undoStack, result.inverse] : bus.undoStack;
+  const coalesce = shouldCoalesceTextPose(command, bus.undoStack[bus.undoStack.length - 1], motionChannel(project, command));
+  const undoStack = !result.inverse || coalesce ? bus.undoStack : [...bus.undoStack, result.inverse];
   return {
     project: nextProject,
     bus: {

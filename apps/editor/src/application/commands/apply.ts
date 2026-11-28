@@ -9,8 +9,29 @@ import { createClipVariant, setActiveVariant } from "../../domain/timeline/varia
 import { linkWorldToClip } from "../services/worldLinking";
 import { applyCameraRigToProject } from "../services/cameraCraft";
 import type { CommandResult, DomainCommand, DomainEvent } from "./types";
+import { smplxTrackSchema, upsertSmplxKeyframe, removeSmplxKeyframe, setJointAxisAngleAtFrame, type SmplxTrack } from "../../domain/performance/poseTrack";
+import { posePreset, applyHandPreset } from "../../domain/performance/presets";
+import { performancePlanNodeIdForClip, performancePlanFromNode } from "../../domain/performance";
+import { createEmptyClipDraft, type ClipDraft } from "../../domain/generation/clipDraft";
 import { cameraPathParamsFromNode, deleteCameraKeyframe, keyframeAtExactFrame, upsertCameraKeyframe } from "../../domain/graph/cameraPath";
 import { lensNodeIdForClip, lensParamsFromNode } from "../../domain/graph/lens";
+import { applyShotCommand } from "../../domain/shot";
+import {
+  changeContactEffector,
+  HANDSHAKE_SHOT_ID,
+  installInteractionScene,
+  setInteractionOverrides,
+  uninstallInteractionScene,
+} from "../../domain/sceneAuthoring";
+import { ActionGraphSchema } from "../../domain/speech2motion/actionGraph";
+import { applyImportRiggedActor, applyRestoreSceneState } from "./importRiggedActor";
+import { createPhase1DemoShot, PHASE1_SHOT_ID, PHASE1_WORLD_ID } from "../../domain/sceneAuthoring/phase1Demo";
+import { PHASE1_CLASSROOM_WORLD, importedShotWorldSchema, registerShotWorld, resolveShotWorldRevision, shotWorldRevisionId } from "../../domain/worlds/importedShotWorld";
+import { createPersistentIdFactory, ID_PREFIX, persistentIdSchema } from "../../domain/worlds/ids";
+import type { WorldAsset } from "../../domain/worlds/types";
+import type { SceneState } from "../../domain/worlds/sceneState";
+import { mergeShotSubjects } from "../../domain/project/sceneLink";
+import { migrateWorldToSceneState } from "../../domain/worlds/migrateInstances";
 
 const event = (type: DomainEvent["type"], payload: Record<string, unknown>, timestamp: string): DomainEvent => ({
   type,
@@ -18,9 +39,24 @@ const event = (type: DomainEvent["type"], payload: Record<string, unknown>, time
   payload,
 });
 
+const fallbackSmplxTrack = (parameters: Record<string, unknown>): SmplxTrack => {
+  const actorElementId = typeof parameters.actorElementId === "string" && parameters.actorElementId.length > 0
+    ? parameters.actorElementId
+    : "actor";
+  return { actorElementId, interpolation: "slerp", keyframes: [] };
+};
+
 export interface ApplyCommandContext {
   timestamp: string;
 }
+
+/** The clip id locates the shot. Drafts are stored under Shot.id. */
+const shotForClip = (project: Project, clipId: string) => project.shots?.[clipId];
+
+const withDraft = (project: Project, shotId: string, draft: ClipDraft): Project => ({
+  ...project,
+  clipDrafts: { ...(project.clipDrafts ?? {}), [shotId]: draft },
+});
 
 /**
  * Apply a domain command to a project. Returns inverse for undo.
@@ -38,6 +74,243 @@ export const applyCommand = (
   });
 
   switch (command.type) {
+    case "ADD_POSE_KEYFRAME": {
+      const node = project.nodes[command.nodeId];
+      if (!node || node.kind !== "ActorPoseNode") {
+        return fail("ActorPoseNode not found.");
+      }
+      const parsed = smplxTrackSchema.safeParse(node.parameters);
+      const track = parsed.success
+        ? parsed.data
+        : fallbackSmplxTrack(node.parameters);
+      const previous = track.keyframes;
+      const nextTrack = upsertSmplxKeyframe(track, { frame: command.frame, pose: command.pose });
+      const patched = {
+        ...node,
+        parameters: { ...node.parameters, keyframes: nextTrack.keyframes },
+        params: { ...node.params, keyframes: nextTrack.keyframes },
+        updatedAt: timestamp,
+      };
+      patched.contentHash = computeNodeContentHash(patched);
+      const withNode: Project = { ...project, nodes: { ...project.nodes, [node.id]: patched } };
+      // Ensure a motion_capture PerformanceSource exists for this actor in the same clip.
+      const clipId = project.dependencyMap.clipsByNodeId[node.id]?.[0];
+      let withPlan: Project = withNode;
+      if (clipId) {
+        const planId = performancePlanNodeIdForClip(clipId);
+        const plan = withNode.nodes[planId];
+        if (plan && plan.kind === "PerformancePlanNode") {
+          const planParams = performancePlanFromNode(plan.parameters);
+          const label = `Authored pose · ${track.actorElementId}`;
+          const exists = planParams.sources.some((s) => s.type === "motion_capture" && (s.assetId === track.actorElementId || s.label === label));
+          if (!exists) {
+            const nextSources = [
+              ...planParams.sources,
+              { id: `authored-${track.actorElementId}`, type: "motion_capture", label, assetId: track.actorElementId, enabled: true },
+            ];
+            const updatedPlan = {
+              ...plan,
+              parameters: { ...plan.parameters, sources: nextSources },
+              params: { ...plan.params, sources: nextSources },
+              updatedAt: timestamp,
+            };
+            updatedPlan.contentHash = computeNodeContentHash(updatedPlan);
+            withPlan = { ...withNode, nodes: { ...withNode.nodes, [plan.id]: updatedPlan } };
+          }
+        }
+      }
+      const { nodes, result: dirty } = applyDirtyEventToNodes(
+        { nodes: withPlan.nodes, references: withPlan.references, clipGraphs: withPlan.clipGraphs, dependencyMap: withPlan.dependencyMap },
+        { sourceNodeId: node.id, reason: "params_changed", timestamp },
+      );
+      return {
+        project: { ...withPlan, nodes },
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UPDATE_NODE_PARAMS",
+            nodeId: node.id,
+            patch: { keyframes: previous },
+            previous: { keyframes: nextTrack.keyframes },
+          },
+          events: [
+            event("NodeParamsChanged", { nodeId: node.id, keyframe: command.frame }, timestamp),
+            event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
+          ],
+        },
+      };
+    }
+    case "REMOVE_POSE_KEYFRAME": {
+      const node = project.nodes[command.nodeId];
+      if (!node || node.kind !== "ActorPoseNode") {
+        return fail("ActorPoseNode not found.");
+      }
+      const parsed = smplxTrackSchema.safeParse(node.parameters);
+      const track = parsed.success
+        ? parsed.data
+        : fallbackSmplxTrack(node.parameters);
+      const previous = track.keyframes;
+      const nextTrack = removeSmplxKeyframe(track, command.frame);
+      const patched = {
+        ...node,
+        parameters: { ...node.parameters, keyframes: nextTrack.keyframes },
+        params: { ...node.params, keyframes: nextTrack.keyframes },
+        updatedAt: timestamp,
+      };
+      patched.contentHash = computeNodeContentHash(patched);
+      const withNode: Project = { ...project, nodes: { ...project.nodes, [node.id]: patched } };
+      const { nodes, result: dirty } = applyDirtyEventToNodes(
+        { nodes: withNode.nodes, references: withNode.references, clipGraphs: withNode.clipGraphs, dependencyMap: withNode.dependencyMap },
+        { sourceNodeId: node.id, reason: "params_changed", timestamp },
+      );
+      return {
+        project: { ...withNode, nodes },
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UPDATE_NODE_PARAMS",
+            nodeId: node.id,
+            patch: { keyframes: previous },
+            previous: { keyframes: nextTrack.keyframes },
+          },
+          events: [
+            event("NodeParamsChanged", { nodeId: node.id, removeKeyframe: command.frame }, timestamp),
+            event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
+          ],
+        },
+      };
+    }
+    case "MOVE_POSE_KEYFRAME": {
+      const node = project.nodes[command.nodeId];
+      if (!node || node.kind !== "ActorPoseNode") {
+        return fail("ActorPoseNode not found.");
+      }
+      const parsed = smplxTrackSchema.safeParse(node.parameters);
+      const track = parsed.success
+        ? parsed.data
+        : fallbackSmplxTrack(node.parameters);
+      const previous = track.keyframes;
+      const moved = track.keyframes.find((k) => k.frame === command.from);
+      const without = removeSmplxKeyframe(track, command.from);
+      const nextTrack = moved ? { ...without, keyframes: [...without.keyframes, { ...moved, frame: command.to }].sort((a, b) => a.frame - b.frame) } : without;
+      const patched = {
+        ...node,
+        parameters: { ...node.parameters, keyframes: nextTrack.keyframes },
+        params: { ...node.params, keyframes: nextTrack.keyframes },
+        updatedAt: timestamp,
+      };
+      patched.contentHash = computeNodeContentHash(patched);
+      const withNode: Project = { ...project, nodes: { ...project.nodes, [node.id]: patched } };
+      const { nodes, result: dirty } = applyDirtyEventToNodes(
+        { nodes: withNode.nodes, references: withNode.references, clipGraphs: withNode.clipGraphs, dependencyMap: withNode.dependencyMap },
+        { sourceNodeId: node.id, reason: "params_changed", timestamp },
+      );
+      return {
+        project: { ...withNode, nodes },
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UPDATE_NODE_PARAMS",
+            nodeId: node.id,
+            patch: { keyframes: previous },
+            previous: { keyframes: nextTrack.keyframes },
+          },
+          events: [
+            event("NodeParamsChanged", { nodeId: node.id, moveKeyframe: { from: command.from, to: command.to } }, timestamp),
+            event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
+          ],
+        },
+      };
+    }
+    case "APPLY_POSE_PRESET": {
+      const node = project.nodes[command.nodeId];
+      if (!node || node.kind !== "ActorPoseNode") {
+        return fail("ActorPoseNode not found.");
+      }
+      const parsed = smplxTrackSchema.safeParse(node.parameters);
+      const track = parsed.success
+        ? parsed.data
+        : fallbackSmplxTrack(node.parameters);
+      const previous = track.keyframes;
+      let base = posePreset(command.presetId);
+      if (command.hand) {
+        base = applyHandPreset(base, command.hand.side, command.hand.preset);
+      }
+      const nextTrack = upsertSmplxKeyframe(track, { frame: command.frame, pose: base });
+      const patched = {
+        ...node,
+        parameters: { ...node.parameters, keyframes: nextTrack.keyframes },
+        params: { ...node.params, keyframes: nextTrack.keyframes },
+        updatedAt: timestamp,
+      };
+      patched.contentHash = computeNodeContentHash(patched);
+      const withNode: Project = { ...project, nodes: { ...project.nodes, [node.id]: patched } };
+      const { nodes, result: dirty } = applyDirtyEventToNodes(
+        { nodes: withNode.nodes, references: withNode.references, clipGraphs: withNode.clipGraphs, dependencyMap: withNode.dependencyMap },
+        { sourceNodeId: node.id, reason: "params_changed", timestamp },
+      );
+      return {
+        project: { ...withNode, nodes },
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UPDATE_NODE_PARAMS",
+            nodeId: node.id,
+            patch: { keyframes: previous },
+            previous: { keyframes: nextTrack.keyframes },
+          },
+          events: [
+            event("NodeParamsChanged", { nodeId: node.id, preset: command.presetId, frame: command.frame }, timestamp),
+            event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
+          ],
+        },
+      };
+    }
+    case "SET_JOINT_ROTATION": {
+      const node = project.nodes[command.nodeId];
+      if (!node || node.kind !== "ActorPoseNode") {
+        return fail("ActorPoseNode not found.");
+      }
+      const parsed = smplxTrackSchema.safeParse(node.parameters);
+      const track = parsed.success
+        ? parsed.data
+        : fallbackSmplxTrack(node.parameters);
+      const before = track.keyframes;
+      const { track: nextTrack } = setJointAxisAngleAtFrame(track, command.frame, command.target, command.axisAngle);
+      const patched = {
+        ...node,
+        parameters: { ...node.parameters, keyframes: nextTrack.keyframes },
+        params: { ...node.params, keyframes: nextTrack.keyframes },
+        updatedAt: timestamp,
+      };
+      patched.contentHash = computeNodeContentHash(patched);
+      const withNode: Project = { ...project, nodes: { ...project.nodes, [node.id]: patched } };
+      const { nodes, result: dirty } = applyDirtyEventToNodes(
+        { nodes: withNode.nodes, references: withNode.references, clipGraphs: withNode.clipGraphs, dependencyMap: withNode.dependencyMap },
+        { sourceNodeId: node.id, reason: "params_changed", timestamp },
+      );
+      return {
+        project: { ...withNode, nodes },
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UPDATE_NODE_PARAMS",
+            nodeId: node.id,
+            patch: { keyframes: before },
+            previous: { keyframes: nextTrack.keyframes },
+          },
+          events: [
+            event("NodeParamsChanged", { nodeId: node.id, joint: command.target, frame: command.frame }, timestamp),
+            event("NodeMarkedDirty", { dirtyNodeIds: dirty.dirtyNodeIds, affectedClipIds: dirty.affectedClipIds }, timestamp),
+          ],
+        },
+      };
+    }
     case "CREATE_NODE": {
       if (project.nodes[command.node.id]) {
         return fail("Node already exists.");
@@ -668,6 +941,191 @@ export const applyCommand = (
         },
       };
     }
+    // Generation ClipDraft commands
+    case "CREATE_CLIP_DRAFT": {
+      const clip = project.clips[command.clipId];
+      if (!clip) return fail("Clip not found.");
+      const shot = shotForClip(project, clip.id);
+      if (!shot) return fail("Shot not found.");
+      const existing = project.clipDrafts?.[shot.id];
+      if (existing) {
+        return {
+          project,
+          result: { ok: true, command, events: [] },
+        };
+      }
+      const draft = createEmptyClipDraft(shot, {
+        clipId: clip.id,
+        modelId: command.modelId,
+        prompt: command.restore?.prompt,
+        references: command.restore?.references,
+      });
+      return {
+        project: withDraft(project, shot.id, draft),
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "DISCARD_CLIP_DRAFT", clipId: clip.id },
+          events: [{ type: "NodeUiChanged", timestamp, payload: { clipId: clip.id, draftCreated: true } }],
+        },
+      };
+    }
+    case "UPDATE_CLIP_DRAFT": {
+      const shot = shotForClip(project, command.clipId);
+      if (!shot) return fail("Shot not found.");
+      const draft = project.clipDrafts?.[shot.id];
+      if (!draft) return fail("Draft not found.");
+      const previous = { ...draft };
+      const next = {
+        ...draft,
+        ...command.patch,
+        id: shot.id,
+        updatedAt: timestamp,
+        // Do not allow accidental mutation of completed lock via patch:
+        completed: draft.completed,
+      };
+      return {
+        project: withDraft(project, shot.id, next),
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "UPDATE_CLIP_DRAFT", clipId: command.clipId, patch: previous },
+          events: [{ type: "NodeUiChanged", timestamp, payload: { clipId: command.clipId, draftUpdated: true } }],
+        },
+      };
+    }
+    case "DISCARD_CLIP_DRAFT": {
+      const shot = shotForClip(project, command.clipId);
+      if (!shot || !project.clipDrafts?.[shot.id]) {
+        return { project, result: { ok: true, command, events: [] } };
+      }
+      const drafts = { ...(project.clipDrafts ?? {}) };
+      const previous = drafts[shot.id];
+      delete drafts[shot.id];
+      return {
+        project: { ...project, clipDrafts: drafts },
+        result: {
+          ok: true,
+          command,
+          inverse: previous
+            ? {
+                type: "CREATE_CLIP_DRAFT",
+                clipId: command.clipId,
+                modelId: previous.modelId,
+                restore: {
+                  prompt: previous.prompt,
+                  references: previous.references.map((reference) => ({ ...reference })),
+                },
+              }
+            : undefined,
+          events: [{ type: "NodeUiChanged", timestamp, payload: { clipId: command.clipId, draftDiscarded: true } }],
+        },
+      };
+    }
+    case "ADD_DRAFT_REFERENCE": {
+      const shot = shotForClip(project, command.clipId);
+      if (!shot) return fail("Shot not found.");
+      const draft = project.clipDrafts?.[shot.id];
+      if (!draft) return fail("Draft not found.");
+      const exists = draft.references.find((r) => r.id === command.reference.id);
+      const next = {
+        ...draft,
+        references: exists
+          ? draft.references.map((r) => (r.id === command.reference.id ? command.reference : r))
+          : [...draft.references, command.reference],
+        updatedAt: timestamp,
+      };
+      return {
+        project: withDraft(project, shot.id, next),
+        result: {
+          ok: true,
+          command,
+          inverse: exists ? { type: "UPDATE_CLIP_DRAFT", clipId: command.clipId, patch: { references: draft.references } } : { type: "REMOVE_DRAFT_REFERENCE", clipId: command.clipId, referenceId: command.reference.id },
+          events: [{ type: "NodeUiChanged", timestamp, payload: { clipId: command.clipId, referenceAdded: command.reference.id } }],
+        },
+      };
+    }
+    case "REMOVE_DRAFT_REFERENCE": {
+      const shot = shotForClip(project, command.clipId);
+      if (!shot) return fail("Shot not found.");
+      const draft = project.clipDrafts?.[shot.id];
+      if (!draft) return fail("Draft not found.");
+      const before = draft.references;
+      const next = {
+        ...draft,
+        references: draft.references.filter((r) => r.id !== command.referenceId),
+        updatedAt: timestamp,
+      };
+      return {
+        project: withDraft(project, shot.id, next),
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "UPDATE_CLIP_DRAFT", clipId: command.clipId, patch: { references: before } },
+          events: [{ type: "NodeUiChanged", timestamp, payload: { clipId: command.clipId, referenceRemoved: command.referenceId } }],
+        },
+      };
+    }
+    case "SET_DRAFT_IMAGE_MODE": {
+      const shot = shotForClip(project, command.clipId);
+      if (!shot) return fail("Shot not found.");
+      const draft = project.clipDrafts?.[shot.id];
+      if (!draft) return fail("Draft not found.");
+      const refs = draft.references.slice();
+      const index = refs.findIndex((r) => r.id === command.referenceId && r.kind === "image");
+      if (index < 0) return fail("Image reference not found.");
+      const previous = refs[index].imageMode ?? "reference";
+      refs[index] = { ...refs[index], imageMode: command.mode };
+      const next = { ...draft, references: refs, updatedAt: timestamp };
+      return {
+        project: withDraft(project, shot.id, next),
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "SET_DRAFT_IMAGE_MODE", clipId: command.clipId, referenceId: command.referenceId, mode: previous },
+          events: [{ type: "NodeUiChanged", timestamp, payload: { clipId: command.clipId, referenceId: command.referenceId, imageMode: command.mode } }],
+        },
+      };
+    }
+    case "SET_DRAFT_IMAGE_GUIDANCE": {
+      const shot = shotForClip(project, command.clipId);
+      if (!shot) return fail("Shot not found.");
+      const draft = project.clipDrafts?.[shot.id];
+      if (!draft) return fail("Draft not found.");
+      const refs = draft.references.slice();
+      const index = refs.findIndex((r) => r.id === command.referenceId && r.kind === "image");
+      if (index < 0) return fail("Image reference not found.");
+      const bounded = Math.max(0, Math.min(1, command.guidance));
+      const previous = typeof refs[index].guidance === "number" ? refs[index].guidance! : 0.3;
+      refs[index] = { ...refs[index], guidance: bounded };
+      const next = { ...draft, references: refs, updatedAt: timestamp };
+      return {
+        project: withDraft(project, shot.id, next),
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "SET_DRAFT_IMAGE_GUIDANCE", clipId: command.clipId, referenceId: command.referenceId, guidance: previous },
+          events: [{ type: "NodeUiChanged", timestamp, payload: { clipId: command.clipId, referenceId: command.referenceId, guidance: bounded } }],
+        },
+      };
+    }
+    case "SET_DRAFT_MODEL": {
+      const shot = shotForClip(project, command.clipId);
+      if (!shot) return fail("Shot not found.");
+      const draft = project.clipDrafts?.[shot.id];
+      if (!draft) return fail("Draft not found.");
+      const previous = draft.modelId;
+      const next = { ...draft, modelId: command.modelId, updatedAt: timestamp };
+      return {
+        project: withDraft(project, shot.id, next),
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "SET_DRAFT_MODEL", clipId: command.clipId, modelId: previous },
+          events: [{ type: "NodeUiChanged", timestamp, payload: { clipId: command.clipId, modelId: command.modelId } }],
+        },
+      };
+    }
     case "APPLY_COMMANDS": {
       let nextProject: Project = project;
       const inverses: DomainCommand[] = [];
@@ -691,6 +1149,204 @@ export const applyCommand = (
           command,
           inverse: inverses.length ? { type: "APPLY_COMMANDS", commands: inverses.reverse(), logMessage: command.logMessage } : undefined,
           events,
+        },
+      };
+    }
+    case "IMPORT_RIGGED_ACTOR":
+      return applyImportRiggedActor(project, command, timestamp);
+    case "RESTORE_SCENE_STATE":
+      return applyRestoreSceneState(project, command);
+    case "SHOT": {
+      const current = project.shots?.[command.command.shotId];
+      if (!current) return fail("Shot not found.");
+      const edited = applyShotCommand(current, command.command, timestamp);
+      if (!edited.ok) return fail(edited.reason);
+      if (!edited.changed) {
+        return { project, result: { ok: true, command, events: [] } };
+      }
+      const assets = edited.asset && !project.assets[edited.asset.id]
+        ? { ...project.assets, [edited.asset.id]: edited.asset }
+        : project.assets;
+      return {
+        project: {
+          ...project,
+          assets,
+          shots: { ...project.shots, [edited.shot.id]: edited.shot },
+        },
+        result: {
+          ok: true,
+          command,
+          inverse: edited.inverse ? { type: "SHOT", command: edited.inverse } : undefined,
+          events: [event("ShotChanged", { shotId: edited.shot.id }, timestamp)],
+        },
+      };
+    }
+    case "INSTALL_PHASE1_DEMO":
+    case "REGISTER_SHOT_WORLD":
+    case "PIN_SHOT_WORLD":
+    case "RESTORE_SHOT_WORLD": {
+      const installing = command.type === "INSTALL_PHASE1_DEMO";
+      const shotId = installing ? PHASE1_SHOT_ID : command.shotId;
+      const previousShot = project.shots?.[shotId] ?? null;
+      let worldId = installing ? PHASE1_WORLD_ID : command.worldId;
+      if (!persistentIdSchema.safeParse(worldId).success) return fail("Invalid world id.");
+      if (command.type === "REGISTER_SHOT_WORLD" && project.worlds[worldId]) {
+        const pin = previousShot?.environment;
+        if (pin?.worldId !== worldId || !pin.revisionId || !resolveShotWorldRevision(project.worlds[worldId], pin.revisionId)) {
+          worldId = `world-${createPersistentIdFactory().mint(ID_PREFIX.asset)}`;
+        }
+      }
+      const previousWorld = project.worlds[worldId] ?? null;
+      const previousScene = project.sceneStates?.[worldId] ?? null;
+      let shot = previousShot;
+      let world: WorldAsset | null = previousWorld;
+      let scene: SceneState | null = previousScene;
+      if (installing) {
+        if (previousShot) return { project, result: { ok: true, command, events: [] } };
+        shot = createPhase1DemoShot(timestamp);
+        world = registerShotWorld(worldId, PHASE1_CLASSROOM_WORLD, timestamp, previousWorld ?? undefined);
+      } else if (command.type === "RESTORE_SHOT_WORLD") {
+        shot = command.shot;
+        world = command.world;
+        scene = command.scene;
+      } else {
+        if (!shot) return fail("Shot not found.");
+        let revisionId: string;
+        if (command.type === "REGISTER_SHOT_WORLD") {
+          const imported = importedShotWorldSchema.safeParse(command.imported);
+          if (!imported.success) return fail("Invalid imported background.");
+          world = registerShotWorld(worldId, imported.data, timestamp, previousWorld ?? undefined);
+          revisionId = shotWorldRevisionId(imported.data);
+        } else {
+          if (!world || !resolveShotWorldRevision(world, command.revisionId)) return fail("Background revision not found.");
+          revisionId = command.revisionId;
+        }
+        if (world === previousWorld && shot.environment?.worldId === worldId && shot.environment.revisionId === revisionId) {
+          return { project, result: { ok: true, command, events: [] } };
+        }
+        shot = { ...shot, environment: { worldId, revisionId } };
+      }
+      const shots = { ...project.shots };
+      const worlds = { ...project.worlds };
+      const sceneStates = { ...project.sceneStates };
+      if (shot) shots[shotId] = shot;
+      else delete shots[shotId];
+      if (world) worlds[worldId] = world;
+      else delete worlds[worldId];
+      if (world && shot && command.type !== "RESTORE_SHOT_WORLD") {
+        scene = mergeShotSubjects(scene ?? migrateWorldToSceneState(world), [shot], timestamp);
+      }
+      if (scene) sceneStates[worldId] = scene;
+      else delete sceneStates[worldId];
+      return {
+        project: { ...project, shots, worlds, sceneStates },
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "RESTORE_SHOT_WORLD", shotId, worldId, shot: previousShot, world: previousWorld, scene: previousScene },
+          events: [event("SceneAuthoringChanged", { shotId, worldId }, timestamp)],
+        },
+      };
+    }
+    case "INSTALL_INTERACTION_SCENE": {
+      const installed = installInteractionScene(project);
+      if (!installed.addedShot && !installed.addedPreview && installed.addedWorldIds.length === 0) {
+        return { project, result: { ok: true, command, events: [] } };
+      }
+      return {
+        project: installed.project,
+        result: {
+          ok: true,
+          command,
+          inverse: {
+            type: "UNINSTALL_INTERACTION_SCENE",
+            shotId: HANDSHAKE_SHOT_ID,
+            removeShot: installed.addedShot,
+            removePreview: installed.addedPreview,
+            worldIds: installed.addedWorldIds,
+          },
+          events: [event("SceneAuthoringChanged", { shotId: HANDSHAKE_SHOT_ID, op: "install" }, timestamp)],
+        },
+      };
+    }
+    case "UNINSTALL_INTERACTION_SCENE": {
+      return {
+        project: uninstallInteractionScene(
+          project,
+          command.shotId,
+          command.removeShot,
+          command.removePreview,
+          command.worldIds,
+        ),
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "INSTALL_INTERACTION_SCENE" },
+          events: [event("SceneAuthoringChanged", { shotId: command.shotId, op: "uninstall" }, timestamp)],
+        },
+      };
+    }
+    case "CHANGE_CONTACT_EFFECTOR": {
+      const edited = changeContactEffector(project, command);
+      if ("error" in edited) return fail(edited.error);
+      if (!edited.changed) return { project, result: { ok: true, command, events: [] } };
+      return {
+        project: edited.project,
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "SET_INTERACTION_OVERRIDES", shotId: command.shotId, overrides: edited.previous },
+          events: [event("SceneAuthoringChanged", { shotId: command.shotId, contactId: command.contactId }, timestamp)],
+        },
+      };
+    }
+    case "SET_INTERACTION_OVERRIDES": {
+      const edited = setInteractionOverrides(project, command.shotId, command.overrides);
+      if ("error" in edited) return fail(edited.error);
+      if (!edited.changed) return { project, result: { ok: true, command, events: [] } };
+      return {
+        project: edited.project,
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "SET_INTERACTION_OVERRIDES", shotId: command.shotId, overrides: edited.previous },
+          events: [event("SceneAuthoringChanged", { shotId: command.shotId, op: "overrides" }, timestamp)],
+        },
+      };
+    }
+    case "RECORD_SPEECH2MOTION": {
+      const current = project.shots?.[command.shotId];
+      if (!current) return fail("Shot not found.");
+      const previous = project.speech2motion?.[command.shotId] ?? null;
+      if (command.graph === null) {
+        if (!previous) return { project, result: { ok: true, command, events: [] } };
+        const rest = { ...(project.speech2motion ?? {}) };
+        delete rest[command.shotId];
+        const speech2motion = Object.keys(rest).length > 0 ? rest : undefined;
+        return {
+          project: speech2motion ? { ...project, speech2motion } : { ...project, speech2motion: undefined },
+          result: {
+            ok: true,
+            command,
+            inverse: { type: "RECORD_SPEECH2MOTION", shotId: command.shotId, graph: previous },
+            events: [event("Speech2MotionRecorded", { shotId: command.shotId, cleared: true }, timestamp)],
+          },
+        };
+      }
+      const parsed = ActionGraphSchema.safeParse(command.graph);
+      if (!parsed.success) return fail("Action graph does not match the v0.1 contract.");
+      if (parsed.data.status !== "ready") return fail("Only a ready action graph can be recorded.");
+      if (parsed.data.shot_id !== command.shotId) return fail("Action graph shot does not match the command.");
+      return {
+        project: {
+          ...project,
+          speech2motion: { ...project.speech2motion, [command.shotId]: parsed.data },
+        },
+        result: {
+          ok: true,
+          command,
+          inverse: { type: "RECORD_SPEECH2MOTION", shotId: command.shotId, graph: previous },
+          events: [event("Speech2MotionRecorded", { shotId: command.shotId, graphVersion: parsed.data.graph_version }, timestamp)],
         },
       };
     }

@@ -1,0 +1,15 @@
+Classroom by Christophe Seux. CC0 1.0 Universal.
+License https://creativecommons.org/publicdomain/zero/1.0/
+Original scene https://www.blender.org/download/demo-files/
+glTF conversion by ErfanMo77 https://github.com/ErfanMo77/gltf-research-scenes/tree/3ad81e0/scenes/classroom2
+
+SceneForge clears a section of the classroom for blocking. The derived GLB reduces the triangle count, embeds WebP textures, and adjusts the imported directional light for the editor viewport.
+
+Source GLB
+https://media.githubusercontent.com/media/ErfanMo77/gltf-research-scenes/3ad81e0/scenes/classroom2/gltf/classroom2.glb
+SHA-256 8e94a4abbc061f7453fc535bc6feaaaecc9b2797b33d5b62a9bd2b598a5208dc
+
+To rebuild from the repository root, save the source as .local/phase1-world/classroom2.glb and run the following commands.
+
+    npm install --prefix .local/phase1-world --no-save @gltf-transform/core@4.5.1 @gltf-transform/extensions@4.5.1 @gltf-transform/functions@4.5.1 meshoptimizer@1.0.1 ndarray-pixels@5.2.0 sharp@0.35.5
+    node apps/editor/scripts/prepare-phase1-world.mjs
